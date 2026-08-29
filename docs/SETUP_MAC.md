@@ -294,6 +294,14 @@ configuración, justamente para que un error de tipeo no alcance para saltearla.
 
 ## Problemas frecuentes
 
+**`No module named tct`**
+Quedó de una instalación hecha antes de que este paso se agregara al
+instalador. Con el entorno activado (`source .venv/bin/activate`), corré:
+```bash
+pip install -e . --no-deps
+```
+y volvé a intentar.
+
 **`Sorry, try again` al pedir la contraseña**
 Casi siempre es una de dos: pegaste varios comandos juntos y el segundo se
 consumió como contraseña, o escribiste bien pero no lo viste porque la

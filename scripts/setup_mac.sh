@@ -138,6 +138,25 @@ python -m pip install --quiet --upgrade pip
 info "Instalando todas las dependencias (puede tardar unos minutos)..."
 python -m pip install --quiet -r requirements-dev.txt
 
+# Esto es lo que registra el propio proyecto (el paquete `tct`) dentro del
+# entorno. Sin este paso, las dependencias de terceros quedan instaladas pero
+# `python -m tct` falla con "No module named tct": los tests igual pasan,
+# porque pytest agrega src/ al path solo para si mismo (ver pyproject.toml),
+# y eso puede esconder este problema en la verificacion de mas abajo si algun
+# dia se saca este paso sin querer.
+info "Registrando el comando 'tct'..."
+python -m pip install --quiet -e . --no-deps
+
+# Chequeo explicito e inmediato: si este paso falla en silencio, todo lo que
+# sigue (incluido "python -m tct check" mas abajo) se ejecuta con "|| true" y
+# el instalador terminaria mostrando igual "todo listo" con el comando roto.
+if ! python -c "import tct" >/dev/null 2>&1; then
+    error "El paquete 'tct' no quedo instalado."
+    echo "  Proba a mano, con el entorno activado:"
+    echo "      pip install -e . --no-deps"
+    exit 1
+fi
+
 # Motor de OCR. Es una dependencia de sistema, no de Python, asi que solo se
 # puede automatizar si el usuario ya tiene Homebrew. No es bloqueante: el OCR
 # viene apagado (ENABLE_OCR=false) y el resto del sistema no lo necesita.
