@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# SECRETOS - nada de esto puede llegar nunca a GitHub
+# ---------------------------------------------------------------------------
+.env
+.env.local
+.env.*
+!.env.example
+
+# Sesiones de Telethon. Este archivo ES una credencial: quien lo tenga entra
+# a la cuenta de Telegram sin telefono ni codigo.
+*.session
+*.session-journal
+
+# ---------------------------------------------------------------------------
+# Datos generados en cada maquina
+# ---------------------------------------------------------------------------
+data/*.jsonl
+data/*.json
+data/*.corrupt.json
+logs/
+*.log
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Sistema operativo / editores
+# ---------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+._*
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

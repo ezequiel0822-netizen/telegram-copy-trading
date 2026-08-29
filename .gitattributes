@@ -1,0 +1,18 @@
+# Normalizacion de finales de linea.
+#
+# El proyecto se desarrolla en Windows y se ejecuta en macOS. Sin esto, git
+# puede entregar los archivos con CRLF en el checkout, y entonces
+# `bash scripts/setup_mac.sh` falla en la Mac con un error confuso:
+#     /usr/bin/env: 'bash\r': No such file or directory
+#
+# `text=auto eol=lf` fuerza LF en el repositorio y en el checkout.
+* text=auto eol=lf
+
+# Los scripts de shell son los mas sensibles: LF siempre, sin excepcion.
+*.sh text eol=lf
+
+# Binarios: que git no los toque.
+*.png binary
+*.jpg binary
+*.pdf binary
+*.session binary

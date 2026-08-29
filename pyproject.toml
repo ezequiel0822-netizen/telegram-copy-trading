@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-copy-trading"
+version = "0.2.0"
+description = "Lee senales de trading de Telegram y las replica en paper trading y MT5 demo."
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "telethon>=1.36,<2.0",
+    "python-dotenv>=1.0,<2.0",
+    # Marcador imprescindible: este paquete solo tiene wheels win_amd64.
+    # Sin el, la instalacion aborta entera en macOS.
+    'MetaTrader5>=5.0.45,<6.0.0; sys_platform == "win32"',
+]
+
+[project.optional-dependencies]
+# pip install -e ".[metaapi]"  -> MT5 demo desde macOS
+metaapi = ["metaapi-cloud-sdk>=27.0,<30.0"]
+# pip install -e ".[ocr]"      -> requiere ademas: brew install tesseract
+ocr = ["pytesseract>=0.3.10,<1.0", "pillow>=10.0,<12.0"]
+dev = ["pytest>=8.0,<10.0"]
+
+[project.scripts]
+tct = "tct.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

@@ -1,0 +1,385 @@
+"""Broker MT5 nativo. SOLO Windows.
+
+No corre en la Mac y no puede: el paquete `MetaTrader5` solo publica wheels
+`win_amd64`. Se mantiene porque es el camino si el sistema termina en un VPS
+Windows, y porque `config.py` ya bloquea este modo fuera de Windows con un
+mensaje claro.
+
+La logica dificil (negociacion de filling mode, normalizacion de volumen,
+validacion de cuenta demo) esta portada de `app/brokers/mt5_demo_trader.py`
+de tradingalertaIA, que ya la tenia resuelta contra brokers reales.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+from tct.brokers.base import Broker, OrderResult
+from tct.brokers.symbol_map import to_broker_symbol
+from tct.signals.models import OrderType, Side
+
+logger = logging.getLogger(__name__)
+
+
+class MT5NativeBroker(Broker):
+    name = "mt5"
+
+    def __init__(self, settings) -> None:
+        self.settings = settings
+        self._mt5 = None
+        self._ready = False
+
+    # -- Ciclo de vida -----------------------------------------------------
+
+    async def connect(self) -> bool:
+        return await asyncio.to_thread(self._connect_sync)
+
+    def _connect_sync(self) -> bool:
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            logger.error(
+                "El paquete MetaTrader5 no esta instalado. Solo existe para Windows; "
+                "en macOS usa TRADING_MODE=PAPER_ONLY o PAPER_AND_METAAPI_DEMO."
+            )
+            return False
+
+        self._mt5 = mt5
+        kwargs: dict[str, Any] = {}
+        if self.settings.mt5_path:
+            kwargs["path"] = self.settings.mt5_path
+
+        if not mt5.initialize(**kwargs):
+            logger.error("mt5.initialize() fallo: %s", mt5.last_error())
+            return False
+
+        if self.settings.mt5_login and self.settings.mt5_password and self.settings.mt5_server:
+            try:
+                login = int(self.settings.mt5_login)
+            except ValueError:
+                logger.error("MT5_LOGIN tiene que ser numerico")
+                return False
+            if not mt5.login(
+                login, password=self.settings.mt5_password, server=self.settings.mt5_server
+            ):
+                logger.error("mt5.login() fallo: %s", mt5.last_error())
+                return False
+
+        account = mt5.account_info()
+        if account is None:
+            logger.error("No se pudo leer account_info() de MT5")
+            return False
+
+        ok, reason = self._ensure_demo(account._asdict())
+        if not ok:
+            logger.error("MT5: %s", reason)
+            return False
+
+        self._ready = True
+        logger.info("MT5 listo | servidor=%s balance=%s", account.server, account.balance)
+        return True
+
+    async def disconnect(self) -> None:
+        if self._mt5 is not None:
+            await asyncio.to_thread(self._mt5.shutdown)
+        self._ready = False
+
+    async def is_ready(self) -> bool:
+        return self._ready and self._mt5 is not None
+
+    def _ensure_demo(self, account: dict[str, Any]) -> tuple[bool, str]:
+        if self.settings.allow_live_trading:
+            return True, "ALLOW_LIVE_TRADING=true, chequeo de demo omitido"
+        if account.get("trade_allowed") is False:
+            return False, "La cuenta tiene trade_allowed=false"
+
+        demo_const = getattr(self._mt5, "ACCOUNT_TRADE_MODE_DEMO", None)
+        if demo_const is not None and account.get("trade_mode") == demo_const:
+            return True, "ok"
+
+        haystack = " ".join(
+            str(account.get(key) or "") for key in ("server", "company", "name")
+        ).upper()
+        if "DEMO" in haystack:
+            return True, "ok"
+
+        return False, "La cuenta no es demo. Se bloquea la ejecucion."
+
+    # -- Operaciones -------------------------------------------------------
+
+    async def open_order(
+        self,
+        *,
+        symbol: str,
+        side: Side,
+        order_type: OrderType,
+        lot: float,
+        entry: float | None,
+        stop_loss: float | None,
+        take_profit: float | None,
+    ) -> OrderResult:
+        if not await self.is_ready():
+            return OrderResult(False, "open", "MT5 no esta conectado", symbol=symbol)
+        return await asyncio.to_thread(
+            self._open_sync, symbol, side, order_type, lot, entry, stop_loss, take_profit
+        )
+
+    def _open_sync(
+        self,
+        symbol: str,
+        side: Side,
+        order_type: OrderType,
+        lot: float,
+        entry: float | None,
+        stop_loss: float | None,
+        take_profit: float | None,
+    ) -> OrderResult:
+        mt5 = self._mt5
+        broker_symbol = to_broker_symbol(symbol, self.settings.mt5_broker_profile)
+
+        info = self._ensure_symbol(broker_symbol)
+        if info is None:
+            return OrderResult(
+                False, "open", f"El broker no expone el simbolo {broker_symbol}", symbol=symbol
+            )
+
+        tick = mt5.symbol_info_tick(broker_symbol)
+        if tick is None:
+            return OrderResult(False, "open", f"Sin cotizacion para {broker_symbol}", symbol=symbol)
+
+        is_buy = side is Side.BUY
+        market_price = tick.ask if is_buy else tick.bid
+
+        volume = self._normalize_volume(info, lot)
+        if volume is None:
+            return OrderResult(
+                False, "open", f"Volumen {lot} fuera de los limites de {broker_symbol}", symbol=symbol
+            )
+
+        if order_type is OrderType.MARKET or entry is None:
+            action = mt5.TRADE_ACTION_DEAL
+            mt5_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+            price = market_price
+        else:
+            action = mt5.TRADE_ACTION_PENDING
+            price = entry
+            # LIMIT espera a que el precio vuelva; STOP a que rompa. Cual de
+            # los dos corresponde depende de si la entrada esta por encima o
+            # por debajo del mercado, no solo de lo que dijo el mensaje.
+            if order_type is OrderType.LIMIT:
+                mt5_type = mt5.ORDER_TYPE_BUY_LIMIT if is_buy else mt5.ORDER_TYPE_SELL_LIMIT
+            else:
+                mt5_type = mt5.ORDER_TYPE_BUY_STOP if is_buy else mt5.ORDER_TYPE_SELL_STOP
+
+        request = {
+            "action": action,
+            "symbol": broker_symbol,
+            "volume": volume,
+            "type": mt5_type,
+            "price": float(price),
+            "deviation": 20,
+            "magic": 20260829,
+            "comment": "tct-copy",
+            "type_time": mt5.ORDER_TIME_GTC,
+        }
+        if stop_loss is not None:
+            request["sl"] = float(stop_loss)
+        if take_profit is not None:
+            request["tp"] = float(take_profit)
+
+        # Los brokers no coinciden en que modo de llenado aceptan y devuelven
+        # 10030 (unsupported filling mode) sin decir cual sirve. Se prueban en
+        # orden hasta que uno pase.
+        last_result = None
+        for filling in self._filling_modes(info):
+            request["type_filling"] = filling
+            result = mt5.order_send(request)
+            last_result = result
+            if result is None:
+                continue
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                return OrderResult(
+                    ok=True,
+                    action="open",
+                    reason="orden ejecutada",
+                    ticket=int(result.order or result.deal or 0) or None,
+                    price=float(result.price or price),
+                    lot=volume,
+                    symbol=symbol,
+                    raw={"retcode": result.retcode, "comment": result.comment},
+                )
+            if result.retcode != getattr(mt5, "TRADE_RETCODE_INVALID_FILL", 10030):
+                break  # el rechazo no es por filling mode: no tiene sentido reintentar
+
+        reason = (
+            f"order_send rechazado: retcode={last_result.retcode} {last_result.comment}"
+            if last_result is not None
+            else f"order_send devolvio None: {mt5.last_error()}"
+        )
+        return OrderResult(False, "open", reason, symbol=symbol, lot=volume)
+
+    async def close_position(
+        self, *, ticket: int | None, symbol: str, fraction: float = 1.0
+    ) -> OrderResult:
+        if not await self.is_ready():
+            return OrderResult(False, "close", "MT5 no esta conectado", symbol=symbol)
+        if ticket is None:
+            return OrderResult(False, "close", "Falta el ticket de la posicion", symbol=symbol)
+        return await asyncio.to_thread(self._close_sync, ticket, symbol, fraction)
+
+    def _close_sync(self, ticket: int, symbol: str, fraction: float) -> OrderResult:
+        mt5 = self._mt5
+        action = "close" if fraction >= 1.0 else "partial_close"
+
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            return OrderResult(False, action, f"Posicion {ticket} inexistente", symbol=symbol)
+        position = positions[0]
+
+        info = self._ensure_symbol(position.symbol)
+        volume = position.volume if fraction >= 1.0 else self._normalize_volume(
+            info, position.volume * fraction
+        )
+        if not volume:
+            return OrderResult(False, action, "Volumen de cierre invalido", symbol=symbol)
+
+        tick = mt5.symbol_info_tick(position.symbol)
+        if tick is None:
+            return OrderResult(False, action, f"Sin cotizacion para {position.symbol}", symbol=symbol)
+
+        # Cerrar es abrir la operacion opuesta contra el mismo ticket.
+        is_long = position.type == mt5.POSITION_TYPE_BUY
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "position": ticket,
+            "symbol": position.symbol,
+            "volume": float(volume),
+            "type": mt5.ORDER_TYPE_SELL if is_long else mt5.ORDER_TYPE_BUY,
+            "price": tick.bid if is_long else tick.ask,
+            "deviation": 20,
+            "magic": 20260829,
+            "comment": "tct-close",
+        }
+
+        last_result = None
+        for filling in self._filling_modes(info):
+            request["type_filling"] = filling
+            result = mt5.order_send(request)
+            last_result = result
+            if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                return OrderResult(
+                    ok=True, action=action, reason="cierre ejecutado", ticket=ticket,
+                    price=float(result.price or 0) or None, lot=float(volume), symbol=symbol,
+                    raw={"retcode": result.retcode},
+                )
+            if result is not None and result.retcode != getattr(mt5, "TRADE_RETCODE_INVALID_FILL", 10030):
+                break
+
+        reason = (
+            f"cierre rechazado: retcode={last_result.retcode} {last_result.comment}"
+            if last_result is not None
+            else f"order_send devolvio None: {mt5.last_error()}"
+        )
+        return OrderResult(False, action, reason, ticket=ticket, symbol=symbol)
+
+    async def modify_stop_loss(
+        self, *, ticket: int | None, symbol: str, stop_loss: float
+    ) -> OrderResult:
+        if not await self.is_ready():
+            return OrderResult(False, "modify_sl", "MT5 no esta conectado", symbol=symbol)
+        if ticket is None:
+            return OrderResult(False, "modify_sl", "Falta el ticket de la posicion", symbol=symbol)
+        return await asyncio.to_thread(self._modify_sl_sync, ticket, symbol, stop_loss)
+
+    def _modify_sl_sync(self, ticket: int, symbol: str, stop_loss: float) -> OrderResult:
+        mt5 = self._mt5
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            return OrderResult(False, "modify_sl", f"Posicion {ticket} inexistente", symbol=symbol)
+        position = positions[0]
+
+        result = mt5.order_send({
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": ticket,
+            "symbol": position.symbol,
+            "sl": float(stop_loss),
+            "tp": float(position.tp or 0.0),  # conservar el TP vigente
+        })
+        if result is None:
+            return OrderResult(
+                False, "modify_sl", f"order_send devolvio None: {mt5.last_error()}",
+                ticket=ticket, symbol=symbol,
+            )
+        ok = result.retcode == mt5.TRADE_RETCODE_DONE
+        return OrderResult(
+            ok=ok, action="modify_sl",
+            reason="SL modificado" if ok else f"rechazado: retcode={result.retcode} {result.comment}",
+            ticket=ticket, price=stop_loss, symbol=symbol, raw={"retcode": result.retcode},
+        )
+
+    # -- Auxiliares (portados de tradingalertaIA) --------------------------
+
+    def _ensure_symbol(self, symbol: str):
+        """Devuelve symbol_info, activandolo en Market Watch si hace falta."""
+        mt5 = self._mt5
+        try:
+            info = mt5.symbol_info(symbol)
+        except Exception:
+            return None
+        if info is None:
+            return None
+        if not bool(getattr(info, "visible", True)):
+            try:
+                if not mt5.symbol_select(symbol, True):
+                    return None
+                info = mt5.symbol_info(symbol)
+            except Exception:
+                return None
+        return info
+
+    @staticmethod
+    def _normalize_volume(info: Any, lot: float) -> float | None:
+        """Ajusta el lote al paso del broker y verifica min/max."""
+        if info is None:
+            return None
+        step = float(getattr(info, "volume_step", 0.01) or 0.01)
+        minimum = float(getattr(info, "volume_min", 0.01) or 0.01)
+        maximum = float(getattr(info, "volume_max", 100.0) or 100.0)
+
+        steps = round(lot / step)
+        volume = round(steps * step, 8)
+        if volume < minimum:
+            volume = minimum
+        if volume > maximum:
+            return None
+        # Se redondea a la precision del paso: 0.01 -> 2 decimales.
+        precision = max(0, len(f"{step:.8f}".rstrip("0").split(".")[-1]))
+        return round(volume, precision)
+
+    def _filling_modes(self, info: Any) -> list[int]:
+        """Modos de llenado a probar, en orden de preferencia.
+
+        `symbol_info.filling_mode` viene como flags de capacidad del simbolo,
+        mientras que `order_send` espera un enum ORDER_FILLING_*. No son la
+        misma escala y confundirlos es la causa clasica del retcode 10030.
+        """
+        mt5 = self._mt5
+        mode = getattr(info, "filling_mode", None)
+        order_fok = getattr(mt5, "ORDER_FILLING_FOK", 0)
+        order_ioc = getattr(mt5, "ORDER_FILLING_IOC", 1)
+        order_return = getattr(mt5, "ORDER_FILLING_RETURN", 2)
+        symbol_fok = getattr(mt5, "SYMBOL_FILLING_FOK", 1)
+        symbol_ioc = getattr(mt5, "SYMBOL_FILLING_IOC", 2)
+
+        modes: list[int] = []
+        if isinstance(mode, int):
+            if mode & symbol_ioc:
+                modes.append(order_ioc)
+            if mode & symbol_fok:
+                modes.append(order_fok)
+        for fallback in (order_ioc, order_fok, order_return):
+            if fallback not in modes:
+                modes.append(fallback)
+        return modes

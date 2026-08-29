@@ -1,0 +1,8 @@
+# Puente MetaApi Cloud: permite operar una cuenta MT5 demo DESDE macOS.
+# Solo hace falta para TRADING_MODE=PAPER_AND_METAAPI_DEMO.
+#
+#   pip install -r requirements-metaapi.txt
+#
+# Va aparte porque arrastra bastante (socketio, httpx) y el modo papel no lo
+# necesita para nada.
+metaapi-cloud-sdk>=27.0,<30.0

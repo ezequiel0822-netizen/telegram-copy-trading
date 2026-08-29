@@ -1,0 +1,22 @@
+# Dependencias base. Esto es lo unico que hace falta para el modo PAPER_ONLY,
+# y funciona igual en macOS (Apple Silicon e Intel), Windows y Linux.
+#
+#   pip install -r requirements.txt
+
+# Lectura del grupo de Telegram con sesion de usuario.
+# Se capea en <2.0 porque Telethon 2.x cambia la API.
+telethon>=1.36,<2.0
+
+# Lectura del archivo .env.
+python-dotenv>=1.0,<2.0
+
+# ---------------------------------------------------------------------------
+# MetaTrader5: SOLO WINDOWS.
+#
+# El marcador `sys_platform == "win32"` es imprescindible y no es un detalle
+# de estilo. PyPI publica este paquete unicamente como wheels win_amd64 y sin
+# source distribution: sin el marcador, `pip install -r requirements.txt`
+# ABORTA en la Mac con "Could not find a version that satisfies the
+# requirement". Con el marcador, pip simplemente lo saltea.
+# ---------------------------------------------------------------------------
+MetaTrader5>=5.0.45,<6.0.0; sys_platform == "win32"

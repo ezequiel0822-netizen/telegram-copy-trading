@@ -1,0 +1,228 @@
+# Telegram Copy Trading
+
+Lee señales de trading de un grupo de Telegram, las convierte en operaciones
+estructuradas, las registra siempre como *paper trade*, y opcionalmente las
+ejecuta en una cuenta **MT5 demo**.
+
+Pensado para correr en **macOS (Apple Silicon)**, y también funciona en Windows
+y Linux.
+
+```
+Telegram  ->  parser  ->  control de riesgo  ->  paper trade  ->  broker (opcional)
+                                    |
+                                    +--> todo queda en data/events.jsonl
+```
+
+---
+
+## Lo primero que hay que saber: MetaTrader5 no existe para Mac
+
+El paquete `MetaTrader5` de PyPI publica **únicamente wheels `win_amd64`** y no
+tiene *source distribution*. En una Mac, `pip install MetaTrader5` no falla al
+ejecutarse: **falla al instalarse**, con `Could not find a version that
+satisfies the requirement`. Y el terminal MT5 para macOS es un envoltorio de
+Wine que la API de Python no alcanza.
+
+Por eso el `requirements.txt` lleva un marcador de plataforma:
+
+```
+MetaTrader5>=5.0.45,<6.0.0; sys_platform == "win32"
+```
+
+Con eso pip **saltea** el paquete en la Mac en lugar de abortar la instalación
+entera. **No borres ese marcador.**
+
+Consecuencia práctica: en la Mac, la lectura de Telegram, el parser y el paper
+trading funcionan **100% nativo**. Lo único que necesita un puente es la
+ejecución real en MT5, y para eso está el modo MetaApi.
+
+---
+
+## Modos de operación
+
+| `TRADING_MODE` | Qué hace | ¿Corre en Mac? |
+|---|---|---|
+| `PAPER_ONLY` | Registra operaciones simuladas. No manda nada a ningún broker. | Sí, sin nada extra |
+| `PAPER_AND_METAAPI_DEMO` | Registra **y** ejecuta en MT5 demo real vía MetaApi Cloud. | Sí, con `requirements-metaapi.txt` |
+| `PAPER_AND_MT5_DEMO` | Registra **y** ejecuta con el MT5 instalado localmente. | **No.** Solo Windows |
+| `LIVE` | Dinero real. Requiere además `ALLOW_LIVE_TRADING=true`. | Solo Windows |
+
+Empezá siempre en `PAPER_ONLY`.
+
+---
+
+## Instalación en la Mac
+
+```bash
+bash scripts/setup_mac.sh
+```
+
+El script busca Python 3.10+, crea un entorno virtual en `.venv`, instala las
+dependencias, prepara el `.env`, corre los tests y termina con un diagnóstico.
+
+Guía paso a paso, pensada para alguien que no programa: **[docs/SETUP_MAC.md](docs/SETUP_MAC.md)**
+
+### A mano
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+---
+
+## Comandos
+
+```bash
+python -m tct check     # diagnóstico: Python, dependencias, .env, plataforma
+python -m tct chats     # lista tus grupos de Telegram con sus IDs
+python -m tct test      # prueba el parser con un mensaje, sin tocar nada
+python -m tct status    # posiciones abiertas y estadísticas
+python -m tct run       # arranca el bot
+```
+
+`check` es el primero que hay que correr en una máquina nueva: dice qué falta
+antes de que falte.
+
+`test` sirve para pegar un mensaje real del grupo y ver exactamente qué
+entendió el parser:
+
+```bash
+python -m tct test "GOLD SELL LIMIT 2345-2347
+SL: 2355
+TP: 2335 / 2325 / 2315"
+```
+
+---
+
+## Qué entiende el parser
+
+**Aperturas** — símbolo, dirección, tipo de orden, entrada (o rango) y todos los TPs:
+
+```
+XAUUSD BUY              🔴 GOLD SELL LIMIT 2345-2347      **BUY NAS100 NOW**
+Entry 2345              SL: 2355                          Entry: 18,500
+SL 2335                 TP: 2335 / 2325 / 2315            Stop Loss: 18,400
+TP1 2355                                                  Take Profit 1: 18,700
+TP2 2365
+```
+
+Maneja emojis, markdown, `BUY LIMIT` / `SELL STOP` / `BUY NOW`, alias
+(`GOLD`→`XAUUSD`, `NAS`→`NAS100`, `DOW`→`US30`), comas de miles (`18,500`),
+coma decimal española (`2345,50`), rangos de entrada y mensajes editados.
+
+**Gestión** — `Close 50% XAUUSD`, `Close half`, `Move SL to BE`, `Cerrar todo`.
+
+**Descarte** — la charla del grupo (`Buenos días`, `Gracias maestro`) se ignora
+sin generar nada.
+
+---
+
+## Capas de seguridad
+
+Todas viven en [`src/tct/risk.py`](src/tct/risk.py) y son configurables desde
+el `.env`, tal como pide el CONTEXTO MAESTRO:
+
+- **Lista blanca** de símbolos (`ALLOWED_SYMBOLS`).
+- **Techo de lote** (`MAX_LOT`): si `DEFAULT_LOT` lo supera, el bot no arranca.
+- **SL y TP obligatorios** (`REQUIRE_STOP_LOSS`, `REQUIRE_TAKE_PROFIT`).
+- **Coherencia geométrica**: rechaza un BUY con el SL por encima de la entrada.
+  Eso no es una señal conservadora, es una señal rota.
+- **Tope de posiciones abiertas** y **una sola posición por símbolo**.
+- **Cupo diario** de señales (`MAX_SIGNALS_PER_DAY`).
+- **Solo cuentas demo**: la barrera real está en el ejecutor, no en la config.
+  `ALLOW_LIVE_TRADING=false` hace que se rechace cualquier cuenta que el broker
+  no reporte como demo.
+- **Dos llaves para dinero real**: `TRADING_MODE=LIVE` **y** `ALLOW_LIVE_TRADING=true`.
+
+Un mensaje ambiguo se registra como evento y **no ejecuta nada**.
+Un paper trade se escribe **siempre**, aunque el broker esté apagado o falle.
+
+---
+
+## Archivos que genera
+
+| Archivo | Contenido |
+|---|---|
+| `data/events.jsonl` | Todo lo que pasó: aceptadas, **rechazadas con su motivo**, ambiguas, errores |
+| `data/paper_trades.jsonl` | Operaciones simuladas: aperturas, cierres, parciales, movimientos de SL |
+| `data/state.json` | Posiciones abiertas y mensajes ya procesados (sobrevive a reinicios) |
+| `logs/tct.log` | Log de ejecución |
+
+Que se registren también los rechazos es lo que después permite contestar
+*"¿por qué el bot no tomó esta señal?"*.
+
+---
+
+## Estructura
+
+```
+src/tct/
+├── config.py           configuración y validación del .env
+├── engine.py           orquestador: parser -> riesgo -> paper -> broker
+├── risk.py             todas las capas de seguridad
+├── store.py            persistencia JSONL + estado
+├── cli.py              comandos
+├── signals/
+│   ├── models.py       SignalEvent, EventType, OrderType
+│   ├── parser.py       mensaje -> señal estructurada
+│   └── ocr.py          hook de OCR (apagado por defecto)
+├── brokers/
+│   ├── base.py         interfaz común + selector
+│   ├── paper.py        simulado (default, multiplataforma)
+│   ├── metaapi.py      MT5 demo desde macOS
+│   ├── mt5_native.py   MT5 local (solo Windows)
+│   └── symbol_map.py   traducción de símbolos por bróker
+└── telegram/
+    ├── reader.py       lectura del grupo con Telethon
+    └── notifier.py     avisos por Bot API
+```
+
+---
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+76 tests, sin red y sin credenciales. Cubren el parser (39 casos con mensajes
+reales), el ciclo completo del motor con el broker de papel, las capas de
+riesgo, la configuración y la persistencia.
+
+---
+
+## Qué se reutilizó de `tradingalertaIA`
+
+- La técnica del marcador `sys_platform` en `requirements.txt` — es exactamente
+  el fix del problema de instalación en Mac.
+- La arquitectura *soft-fail* (todo degrada en vez de reventar cuando falta un
+  SDK opcional), que resulta ideal para una máquina sin MT5.
+- De `app/brokers/mt5_demo_trader.py`: la negociación de *filling mode* (la
+  causa clásica del retcode 10030), la normalización de volumen al paso del
+  bróker, y la validación de cuenta demo. Portado a `brokers/mt5_native.py`.
+- De `app/brokers/mt5_symbol_map.py`: el enfoque de perfiles por bróker.
+- De `app/alerts/telegram_notifier.py`: el partido de mensajes en 4096 chars.
+
+Lo que **no** estaba ahí y hubo que construir: la lectura de un grupo ajeno con
+Telethon (tu repo solo usa la Bot API para su propio bot), el parser de señales
+de terceros y toda la capa de eventos de gestión.
+
+---
+
+## Estado y límites
+
+**Probado:** parser, motor, riesgo, persistencia, configuración, CLI y el
+broker de papel — 76 tests verdes, y la instalación completa verificada en un
+entorno virtual limpio.
+
+**Sin probar contra un servicio real:** `brokers/metaapi.py` (necesita un token
+y una cuenta MT5 demo conectada) y `telegram/reader.py` (necesita credenciales
+de Telegram). Ambos están escritos contra la API documentada y verificados a
+nivel de firma, pero el primer contacto real puede necesitar ajustes.
+
+**Pendiente:** OCR está preparado pero apagado (`ENABLE_OCR=false`); conviene
+encenderlo recién después de medir cuántas señales del grupo son solo imagen.

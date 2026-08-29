@@ -1,0 +1,290 @@
+"""Configuracion via variables de entorno (.env).
+
+Todo se lee de un solo lugar y se valida al arrancar. Si algo esta mal, el
+sistema lo dice al inicio y no a los 20 minutos con una posicion abierta.
+
+Se usa `dotenv_values` y NO `load_dotenv` a proposito: `load_dotenv` escribe
+en `os.environ`, que es estado global del proceso. Eso hace que cargar dos
+configuraciones distintas contamine la segunda con la primera. Aca el .env se
+lee a un diccionario propio y `os.environ` queda intacto.
+
+Precedencia: las variables de entorno reales le ganan al .env, que es la
+convencion habitual (permite sobreescribir un valor puntual sin editar el
+archivo, util al correr en un servidor).
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+
+try:
+    from dotenv import dotenv_values
+except ImportError:  # pragma: no cover - el .env es opcional
+    def dotenv_values(*_args, **_kwargs) -> dict[str, str]:
+        return {}
+
+
+class ConfigError(RuntimeError):
+    """Configuracion invalida. Aborta el arranque."""
+
+
+# Modos soportados. El orden es la escalera de riesgo que pide el CONTEXTO
+# MAESTRO: primero papel, despues demo, y recien al final dinero real.
+PAPER_ONLY = "PAPER_ONLY"
+PAPER_AND_METAAPI_DEMO = "PAPER_AND_METAAPI_DEMO"
+PAPER_AND_MT5_DEMO = "PAPER_AND_MT5_DEMO"
+LIVE = "LIVE"
+
+VALID_MODES = {PAPER_ONLY, PAPER_AND_METAAPI_DEMO, PAPER_AND_MT5_DEMO, LIVE}
+
+_DEFAULT_SYMBOLS = "XAUUSD,XAGUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,NAS100,US30,US500"
+
+
+class _Env:
+    """Lector tipado sobre un diccionario de configuracion."""
+
+    def __init__(self, values: Mapping[str, str]) -> None:
+        self._values = values
+
+    def str(self, key: str, default: str = "") -> str:
+        value = self._values.get(key)
+        return (value if value is not None else default).strip()
+
+    def bool(self, key: str, default: bool = False) -> bool:
+        raw = self.str(key).lower()
+        if not raw:
+            return default
+        return raw in {"1", "true", "yes", "y", "si", "on"}
+
+    def float(self, key: str, default: float) -> float:
+        raw = self.str(key)
+        if not raw:
+            return default
+        try:
+            return float(raw.replace(",", "."))
+        except ValueError as exc:
+            raise ConfigError(f"{key} tiene que ser un numero, llego '{raw}'") from exc
+
+    def int(self, key: str, default: int) -> int:
+        raw = self.str(key)
+        if not raw:
+            return default
+        try:
+            return int(raw)
+        except ValueError as exc:
+            raise ConfigError(f"{key} tiene que ser un entero, llego '{raw}'") from exc
+
+    def list(self, key: str, default: str = "") -> list[str]:
+        return [item.strip() for item in self.str(key, default).split(",") if item.strip()]
+
+
+@dataclass(frozen=True)
+class Settings:
+    trading_mode: str
+
+    # --- Telegram (lectura del grupo, via Telethon) ---
+    telegram_api_id: int | None
+    telegram_api_hash: str
+    telegram_session_name: str
+    telegram_source_chats: list[str]
+
+    # --- Telegram (notificaciones nuestras, via Bot API) ---
+    telegram_bot_token: str
+    telegram_notify_chat_id: str
+
+    # --- MetaApi (puente MT5 desde macOS) ---
+    metaapi_token: str
+    metaapi_account_id: str
+    metaapi_region: str
+
+    # --- MT5 nativo (solo Windows) ---
+    mt5_login: str
+    mt5_password: str
+    mt5_server: str
+    mt5_path: str
+    mt5_broker_profile: str
+
+    # --- Riesgo ---
+    default_lot: float
+    max_lot: float
+    allowed_symbols: set[str]
+    max_open_trades: int
+    max_signals_per_day: int
+    require_stop_loss: bool
+    require_take_profit: bool
+    max_spread_from_entry_pct: float
+    allow_live_trading: bool
+
+    # --- Comportamiento ---
+    enable_ocr: bool
+    dry_run: bool
+    poll_interval_seconds: int
+
+    # --- Rutas ---
+    data_dir: Path
+    paper_trades_path: Path
+    events_path: Path
+    state_path: Path
+    log_path: Path
+
+    warnings: list[str] = field(default_factory=list)
+
+    # -- Ayudas de lectura -------------------------------------------------
+
+    @property
+    def executes_orders(self) -> bool:
+        """True si este modo manda ordenes a un broker de verdad."""
+        return self.trading_mode != PAPER_ONLY
+
+    @property
+    def broker_kind(self) -> str:
+        return {
+            PAPER_ONLY: "paper",
+            PAPER_AND_METAAPI_DEMO: "metaapi",
+            PAPER_AND_MT5_DEMO: "mt5",
+            LIVE: "mt5",
+        }[self.trading_mode]
+
+    def describe(self) -> str:
+        """Resumen para loguear al arrancar. Nunca incluye secretos."""
+        lines = [
+            f"Modo            : {self.trading_mode}",
+            f"Broker          : {self.broker_kind}",
+            f"Dry run         : {self.dry_run}",
+            f"Lote / max lote : {self.default_lot} / {self.max_lot}",
+            f"Simbolos        : {', '.join(sorted(self.allowed_symbols))}",
+            f"Max abiertas    : {self.max_open_trades}",
+            f"Max senales/dia : {self.max_signals_per_day}",
+            f"Exige SL / TP   : {self.require_stop_loss} / {self.require_take_profit}",
+            f"OCR imagenes    : {self.enable_ocr}",
+            f"Chats fuente    : {', '.join(self.telegram_source_chats) or '(ninguno)'}",
+            f"Telethon        : {'configurado' if self.telegram_api_id else 'FALTA'}",
+            f"Notificaciones  : {'configuradas' if self.telegram_bot_token else 'apagadas'}",
+            f"Paper trades    : {self.paper_trades_path}",
+        ]
+        return "\n".join(lines)
+
+
+def load_settings(env_file: str | Path | None = None) -> Settings:
+    """Lee el .env indicado (o ./.env), valida y devuelve la configuracion."""
+    path = Path(env_file) if env_file else Path(".env")
+
+    values: dict[str, str] = {}
+    if path.exists():
+        values.update({k: v for k, v in dotenv_values(path).items() if v is not None})
+    # Las variables reales del entorno tienen la ultima palabra.
+    values.update(os.environ)
+
+    env = _Env(values)
+    warnings: list[str] = []
+
+    mode = env.str("TRADING_MODE", PAPER_ONLY).upper()
+    if mode not in VALID_MODES:
+        raise ConfigError(
+            f"TRADING_MODE='{mode}' no es valido. Opciones: {', '.join(sorted(VALID_MODES))}"
+        )
+
+    allow_live = env.bool("ALLOW_LIVE_TRADING", False)
+    if mode == LIVE and not allow_live:
+        raise ConfigError(
+            "TRADING_MODE=LIVE requiere ademas ALLOW_LIVE_TRADING=true.\n"
+            "Son dos llaves a proposito: nadie pasa a dinero real sin quererlo dos veces."
+        )
+    if allow_live:
+        warnings.append(
+            "ALLOW_LIVE_TRADING=true: la proteccion de cuenta demo esta DESACTIVADA."
+        )
+
+    data_dir = Path(env.str("DATA_DIR", "data"))
+    default_lot = env.float("DEFAULT_LOT", 0.01)
+    max_lot = env.float("MAX_LOT", 0.01)
+    if default_lot <= 0:
+        raise ConfigError("DEFAULT_LOT tiene que ser mayor que cero")
+    if default_lot > max_lot:
+        raise ConfigError(f"DEFAULT_LOT ({default_lot}) no puede superar MAX_LOT ({max_lot})")
+
+    api_id_raw = env.str("TELEGRAM_API_ID")
+    api_id: int | None = None
+    if api_id_raw:
+        try:
+            api_id = int(api_id_raw)
+        except ValueError as exc:
+            raise ConfigError(
+                f"TELEGRAM_API_ID tiene que ser numerico, llego '{api_id_raw}'"
+            ) from exc
+
+    source_chats = env.list("TELEGRAM_SOURCE_CHATS") or env.list("TELEGRAM_SOURCE_CHAT")
+    if not source_chats:
+        warnings.append(
+            "TELEGRAM_SOURCE_CHATS vacio: el bot no va a escuchar ningun grupo. "
+            "Corre 'python -m tct chats' para listar los tuyos."
+        )
+
+    settings = Settings(
+        trading_mode=mode,
+        telegram_api_id=api_id,
+        telegram_api_hash=env.str("TELEGRAM_API_HASH"),
+        telegram_session_name=env.str("TELEGRAM_SESSION_NAME", "telegram_copy_trading"),
+        telegram_source_chats=source_chats,
+        telegram_bot_token=env.str("TELEGRAM_BOT_TOKEN"),
+        telegram_notify_chat_id=env.str("TELEGRAM_NOTIFY_CHAT_ID"),
+        metaapi_token=env.str("METAAPI_TOKEN"),
+        metaapi_account_id=env.str("METAAPI_ACCOUNT_ID"),
+        metaapi_region=env.str("METAAPI_REGION", "new-york"),
+        mt5_login=env.str("MT5_LOGIN"),
+        mt5_password=env.str("MT5_PASSWORD"),
+        mt5_server=env.str("MT5_SERVER"),
+        mt5_path=env.str("MT5_PATH"),
+        mt5_broker_profile=env.str("MT5_BROKER_PROFILE", "default"),
+        default_lot=default_lot,
+        max_lot=max_lot,
+        allowed_symbols={s.upper() for s in env.list("ALLOWED_SYMBOLS", _DEFAULT_SYMBOLS)},
+        max_open_trades=env.int("MAX_OPEN_TRADES", 5),
+        max_signals_per_day=env.int("MAX_SIGNALS_PER_DAY", 20),
+        require_stop_loss=env.bool("REQUIRE_STOP_LOSS", True),
+        require_take_profit=env.bool("REQUIRE_TAKE_PROFIT", True),
+        max_spread_from_entry_pct=env.float("MAX_SPREAD_FROM_ENTRY_PCT", 0.5),
+        allow_live_trading=allow_live,
+        enable_ocr=env.bool("ENABLE_OCR", False),
+        dry_run=env.bool("DRY_RUN", False),
+        poll_interval_seconds=env.int("POLL_INTERVAL_SECONDS", 5),
+        data_dir=data_dir,
+        paper_trades_path=Path(env.str("PAPER_TRADES_PATH", str(data_dir / "paper_trades.jsonl"))),
+        events_path=Path(env.str("EVENTS_PATH", str(data_dir / "events.jsonl"))),
+        state_path=Path(env.str("STATE_PATH", str(data_dir / "state.json"))),
+        log_path=Path(env.str("LOG_PATH", "logs/tct.log")),
+        warnings=warnings,
+    )
+
+    _validate_mode_requirements(settings)
+    return settings
+
+
+def _validate_mode_requirements(settings: Settings) -> None:
+    """Cada modo necesita sus credenciales. Se avisa ahora, no en produccion."""
+    if settings.trading_mode == PAPER_AND_METAAPI_DEMO:
+        missing = [
+            key
+            for key, value in (
+                ("METAAPI_TOKEN", settings.metaapi_token),
+                ("METAAPI_ACCOUNT_ID", settings.metaapi_account_id),
+            )
+            if not value
+        ]
+        if missing:
+            raise ConfigError(
+                f"TRADING_MODE={PAPER_AND_METAAPI_DEMO} necesita: {', '.join(missing)}"
+            )
+
+    if settings.trading_mode in {PAPER_AND_MT5_DEMO, LIVE}:
+        import sys
+
+        if sys.platform != "win32":
+            raise ConfigError(
+                f"TRADING_MODE={settings.trading_mode} usa el paquete MetaTrader5, que solo "
+                f"existe para Windows (PyPI solo publica wheels win_amd64).\n"
+                f"En macOS usa {PAPER_ONLY} o {PAPER_AND_METAAPI_DEMO}."
+            )

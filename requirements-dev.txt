@@ -1,0 +1,4 @@
+# Para correr los tests.
+#   pip install -r requirements-dev.txt && pytest
+-r requirements.txt
+pytest>=8.0,<10.0

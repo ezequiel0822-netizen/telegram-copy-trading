@@ -1,0 +1,11 @@
+# OCR para senales que vienen dentro de una imagen (ENABLE_OCR=true).
+#
+# OJO: pytesseract es solo el envoltorio de Python. El motor Tesseract es una
+# dependencia de SISTEMA que hay que instalar aparte:
+#
+#   macOS:    brew install tesseract
+#   Windows:  https://github.com/UB-Mannheim/tesseract/wiki
+#
+# Recien despues:  pip install -r requirements-ocr.txt
+pytesseract>=0.3.10,<1.0
+pillow>=10.0,<12.0
