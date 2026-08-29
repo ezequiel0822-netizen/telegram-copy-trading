@@ -18,7 +18,7 @@ Para abrir Terminal: `Cmd` + `Espacio`, escribí `Terminal`, `Enter`.
 
 ```bash
 cd ~/Documents
-git clone https://github.com/USUARIO/telegram-copy-trading.git
+git clone https://github.com/ezequiel0822-netizen/telegram-copy-trading.git
 cd telegram-copy-trading
 ```
 

@@ -72,6 +72,8 @@ sin borrar las credenciales.
 ## Instalación en la Mac
 
 ```bash
+git clone https://github.com/ezequiel0822-netizen/telegram-copy-trading.git
+cd telegram-copy-trading
 bash scripts/setup_mac.sh
 ```
 
