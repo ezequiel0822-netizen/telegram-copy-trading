@@ -23,6 +23,44 @@ logger = logging.getLogger(__name__)
 # Firma del callback que recibe cada mensaje relevante.
 MessageHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
 
+# Media que NUNCA puede contener una senal, aunque sea visualmente una imagen.
+#
+# Los stickers son el caso importante y el motivo de que esta lista exista:
+# en Telegram un sticker es un Document con atributo de sticker, o sea una
+# imagen. Mientras el OCR este apagado da igual, pero apenas se encienda,
+# pasar un sticker por Tesseract produce texto basura ("TP", "BUY", numeros
+# sueltos del dibujo) que el parser podria llegar a leer como una senal real.
+# Por eso se descartan ANTES de la rama de OCR y no despues.
+#
+# Los grupos de senales mandan stickers todo el tiempo (festejos de TP,
+# reacciones), asi que esto se loguea en DEBUG: en INFO taparia los logs.
+_MEDIA_NO_ACCIONABLE = (
+    "sticker", "gif", "dice", "game", "voice", "video_note", "contact", "geo", "poll",
+)
+
+
+def _media_kind(message) -> str:
+    """Clasifica el adjunto de un mensaje. "none" si no tiene.
+
+    El orden importa: un sticker tambien es un `document`, y un video_note
+    tambien, asi que lo no accionable se chequea primero.
+    """
+    for kind in _MEDIA_NO_ACCIONABLE:
+        if getattr(message, kind, None) is not None:
+            return kind
+
+    if getattr(message, "photo", None) is not None:
+        return "photo"
+
+    document = getattr(message, "document", None)
+    if document is not None:
+        # Una captura mandada como archivo (sin comprimir) llega como
+        # document con mime image/*, no como photo. Para el OCR vale igual.
+        mime = (getattr(document, "mime_type", "") or "").lower()
+        return "image_document" if mime.startswith("image/") else "document"
+
+    return "none"
+
 
 class TelegramReader:
     def __init__(self, settings, on_message: MessageHandler) -> None:
@@ -113,12 +151,20 @@ class TelegramReader:
         try:
             message = event.message
             text = (message.message or "").strip()
-            source = "text"
+            kind = _media_kind(message)
 
-            # Una senal puede venir como caption de una imagen. Si no hay ni
-            # texto ni caption, se intenta OCR (si esta habilitado).
-            if not text and getattr(message, "photo", None):
+            if text:
+                # Hay texto: si ademas viene con adjunto, es un caption.
+                source = "caption" if kind != "none" else "text"
+            elif kind in _MEDIA_NO_ACCIONABLE:
+                # Stickers, GIFs, audios, encuestas: se descartan aca, antes
+                # de cualquier intento de OCR. Ver `_MEDIA_NO_ACCIONABLE`.
+                logger.debug("Ignorado: %s sin texto (mensaje %s)", kind, message.id)
+                return
+            elif kind in {"photo", "image_document"}:
                 text, source = await self._maybe_ocr(message)
+            else:
+                return
 
             if not text:
                 return

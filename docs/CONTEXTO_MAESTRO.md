@@ -58,13 +58,14 @@ todas `win_amd64`, ningún `.tar.gz`).
 | MT5 en Mac | Paper-only **y** MetaApi. Ambos implementados |
 | Lectura de Telegram | Telethon (sesión de usuario), no Bot API |
 | Imágenes | Mezcla texto/imagen: hook de OCR preparado pero **apagado** |
+| Stickers | El grupo manda stickers. Se descartan **antes** del OCR (ver abajo) |
 | Máquina destino | Mac M1 (Apple Silicon) |
 
 ---
 
 ## Estado actual (v0.2.0)
 
-**Hecho y con tests (76 verdes, sin red ni credenciales):**
+**Hecho y con tests (103 verdes, sin red ni credenciales):**
 
 - Parser de señales: aperturas, tipos de orden (`BUY LIMIT` / `SELL STOP` /
   `BUY NOW`), rangos de entrada, TPs múltiples, alias de símbolos, emojis,
@@ -76,6 +77,8 @@ todas `win_amd64`, ningún `.tar.gz`).
   deduplicación de mensajes.
 - Broker de papel, y adaptadores MetaApi y MT5 nativo.
 - CLI: `check`, `chats`, `test`, `status`, `run`.
+- Filtrado de adjuntos: stickers, GIFs, audios, encuestas, contactos y
+  ubicaciones se descartan. Se reconocen las capturas mandadas como archivo.
 - Instalador para macOS y documentación paso a paso.
 
 **Escrito pero sin probar contra el servicio real** (requiere credenciales):
@@ -105,6 +108,13 @@ todas `win_amd64`, ningún `.tar.gz`).
    respondiendo al mensaje original, se puede resolver la posición exacta.
 5. **OCR**, sólo si resulta que una parte real de las señales viene en imagen.
    Medir primero con los eventos `image_skipped` del log.
+
+   > Al encenderlo, NO tocar el filtro de `_MEDIA_NO_ACCIONABLE` en
+   > `telegram/reader.py`. Un sticker es un `Document` con atributo de
+   > sticker, o sea una imagen: si llega a Tesseract devuelve texto basura
+   > (`TP`, `BUY`, números del dibujo) que el parser puede leer como señal.
+   > Por eso los stickers se descartan antes de la rama de OCR, y hay tests
+   > en `tests/test_reader.py` que fallan si alguien invierte ese orden.
 6. **Seguimiento de resultados.** Hoy se registra la apertura y el cierre, pero
    no se calcula el P&L de los paper trades. Es lo que haría falta para saber si
    el grupo de señales realmente sirve.

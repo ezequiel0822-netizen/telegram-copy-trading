@@ -118,6 +118,20 @@ coma decimal española (`2345,50`), rangos de entrada y mensajes editados.
 **Descarte** — la charla del grupo (`Buenos días`, `Gracias maestro`) se ignora
 sin generar nada.
 
+**Stickers y otros adjuntos** — los grupos de señales mandan stickers todo el
+tiempo (festejos de TP, reacciones). Se descartan explícitamente, junto con
+GIFs, audios, encuestas, contactos y ubicaciones.
+
+Esto importa más de lo que parece: en Telegram **un sticker es una imagen**
+(un `Document` con atributo de sticker). Mientras el OCR esté apagado da igual,
+pero apenas se encienda, pasar un sticker por Tesseract produce texto basura
+—`TP`, `BUY`, números sueltos del dibujo— que el parser podría llegar a leer
+como una señal real. Por eso se filtran **antes** de la rama de OCR, no después.
+Si un sticker viene con texto, el texto igual se lee: no se pierde una señal.
+
+Como contrapartida, sí se reconocen las capturas mandadas **como archivo** (sin
+comprimir), que llegan como `document` con mime `image/*` y no como `photo`.
+
 ---
 
 ## Capas de seguridad
@@ -189,9 +203,10 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-76 tests, sin red y sin credenciales. Cubren el parser (39 casos con mensajes
+103 tests, sin red y sin credenciales. Cubren el parser (39 casos con mensajes
 reales), el ciclo completo del motor con el broker de papel, las capas de
-riesgo, la configuración y la persistencia.
+riesgo, la configuración, la persistencia y la clasificación de adjuntos
+(stickers, fotos, archivos).
 
 ---
 
@@ -215,8 +230,8 @@ de terceros y toda la capa de eventos de gestión.
 
 ## Estado y límites
 
-**Probado:** parser, motor, riesgo, persistencia, configuración, CLI y el
-broker de papel — 76 tests verdes, y la instalación completa verificada en un
+**Probado:** parser, motor, riesgo, persistencia, configuración, CLI, filtrado
+de adjuntos y el broker de papel — 103 tests verdes, y la instalación completa verificada en un
 entorno virtual limpio.
 
 **Sin probar contra un servicio real:** `brokers/metaapi.py` (necesita un token
