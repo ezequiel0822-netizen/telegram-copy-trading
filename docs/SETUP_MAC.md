@@ -49,19 +49,38 @@ completar el archivo de configuración.
 
 ### Si dice que falta Python
 
-macOS trae Python 3.9, que es demasiado viejo. Instalá uno nuevo:
+macOS trae Python 3.9, que es demasiado viejo. **No hace falta usar la
+terminal para resolverlo**, y conviene no hacerlo: es un instalador normal.
+
+1. Entrá a **https://www.python.org/downloads/macos/**
+2. Buscá **Python 3.13** y descargá el que dice
+   **"macOS 64-bit universal2 installer"**. Ese sirve tanto para las Mac con
+   chip M1/M2/M3/M4 como para las Intel.
+3. Doble clic al archivo `.pkg` y siguiente-siguiente-instalar, como cualquier
+   programa.
+4. **Cerrá la ventana de Terminal y abrí una nueva.** Si no, sigue sin
+   encontrarlo.
+5. Volvé a empezar:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-Cuando termine, seguí las instrucciones que imprime en pantalla (te va a pedir
-correr dos comandos con `eval "$(/opt/homebrew/bin/brew shellenv)"`), y después:
-
-```bash
-brew install python@3.12
+cd ~/Documents/telegram-copy-trading
 bash scripts/setup_mac.sh
 ```
+
+> **¿Por qué no Homebrew?** Es la respuesta más común que vas a encontrar
+> buscando en internet, pero para esto es el camino largo: descarga las
+> herramientas de desarrollo de Xcode (1 a 2 GB), pide permisos de
+> administrador y te hace escribir la contraseña en un prompt incómodo. El
+> instalador de python.org hace lo mismo en dos clics.
+
+> **Si igual vas por Homebrew**, dos cosas que hacen tropezar a todo el mundo:
+> **Pegá un comando por vez.** Si pegás dos líneas juntas, la segunda se cuela
+> como respuesta al pedido de contraseña y vas a ver `Sorry, try again` sin
+> haber escrito nada.
+> **La contraseña no se ve mientras la escribís.** No aparecen puntos ni
+> asteriscos ni se mueve el cursor. Parece que el teclado está roto, pero está
+> andando: escribila a ciegas y apretá Enter. Es la del usuario de la Mac, no
+> la del Apple ID.
 
 ---
 
@@ -274,6 +293,17 @@ configuración, justamente para que un error de tipeo no alcance para saltearla.
 ---
 
 ## Problemas frecuentes
+
+**`Sorry, try again` al pedir la contraseña**
+Casi siempre es una de dos: pegaste varios comandos juntos y el segundo se
+consumió como contraseña, o escribiste bien pero no lo viste porque la
+terminal no muestra nada al tipear. Apretá `Ctrl` + `C`, corré un comando por
+vez, y escribí la contraseña del usuario de la Mac a ciegas. Si podés evitar
+Homebrew del todo, usá el instalador de python.org (ver Paso 1).
+
+**El script sigue diciendo que falta Python después de instalarlo**
+Cerrá la Terminal y abrí una nueva: el instalador actualiza el PATH y eso no
+se aplica hasta abrir una ventana nueva.
 
 **`command not found: python`**
 Falta activar el entorno. Corré `source .venv/bin/activate` desde la carpeta

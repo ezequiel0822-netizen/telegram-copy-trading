@@ -39,24 +39,71 @@ echo
 # que usa el proyecto. Se busca uno mas nuevo antes de rendirse.
 info "Buscando Python 3.10 o superior..."
 PYTHON=""
-for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-        if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
-            PYTHON="$candidate"
-            break
-        fi
+
+sirve() {
+    "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null
+}
+
+# Primero por PATH, de mas nuevo a mas viejo.
+for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && sirve "$candidate"; then
+        PYTHON="$candidate"
+        break
     fi
 done
 
+# Si no aparecio, se buscan las rutas fijas donde instalan el .pkg de
+# python.org y Homebrew. Hace falta porque el instalador grafico actualiza el
+# PATH via el perfil del shell, y eso no se aplica hasta abrir una Terminal
+# nueva: sin este rescate, alguien que acaba de instalar Python veria igual el
+# error de "no se encontro", que es exactamente el momento mas desmoralizante.
 if [ -z "$PYTHON" ]; then
+    for version in 3.14 3.13 3.12 3.11 3.10; do
+        for ruta in \
+            "/Library/Frameworks/Python.framework/Versions/$version/bin/python3" \
+            "/usr/local/bin/python$version" \
+            "/opt/homebrew/bin/python$version" \
+            "/usr/local/opt/python@$version/bin/python3"
+        do
+            if [ -x "$ruta" ] && sirve "$ruta"; then
+                PYTHON="$ruta"
+                warn "Python encontrado fuera del PATH: $ruta"
+                warn "Abri una Terminal nueva para que quede disponible como 'python3'."
+                break 2
+            fi
+        done
+    done
+fi
+
+if [ -z "$PYTHON" ]; then
+    # Se recomienda el instalador de python.org y NO Homebrew a proposito.
+    # Homebrew, para alguien que no programa, implica descargar las Command
+    # Line Tools de Xcode (1-2 GB), permisos de administrador, y escribir la
+    # contrasena en un prompt que no muestra nada mientras se tipea. El .pkg
+    # de python.org es un instalador grafico normal y alcanza igual.
     error "No se encontro Python 3.10 o superior."
     echo
-    echo "  macOS trae Python 3.9, que no alcanza. Instalá uno nuevo con Homebrew:"
+    echo "  macOS trae Python 3.9, que no alcanza. La forma mas simple de"
+    echo "  resolverlo NO usa la terminal:"
     echo
-    echo "      /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    echo "    1. Entra a  https://www.python.org/downloads/macos/"
+    echo "    2. Busca Python 3.13 y descarga el instalador que dice"
+    echo "       \"macOS 64-bit universal2 installer\" (sirve para Mac con chip"
+    echo "       M1/M2/M3/M4 y tambien para las Intel)."
+    echo "    3. Doble clic al archivo .pkg y siguiente-siguiente-instalar."
+    echo "    4. CERRA esta ventana de Terminal y abri una nueva."
+    echo "    5. Volve a correr:   bash scripts/setup_mac.sh"
+    echo
+    echo "  ---------------------------------------------------------------"
+    echo "  Alternativa, solo si ya usas Homebrew:"
+    echo
     echo "      brew install python@3.12"
     echo
-    echo "  Y despues volvé a correr este script."
+    echo "  Si vas a instalar Homebrew primero, dos advertencias:"
+    echo "    - Corre UN comando por vez. Si pegas varias lineas juntas, la"
+    echo "      siguiente se cuela como respuesta al pedido de contrasena."
+    echo "    - Al pedir la contrasena no se ve NADA mientras escribis: ni"
+    echo "      puntos ni asteriscos. Es normal. Escribi y apreta Enter."
     exit 1
 fi
 info "Usando $($PYTHON --version) ($(command -v "$PYTHON"))"
