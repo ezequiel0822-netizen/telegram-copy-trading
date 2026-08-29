@@ -67,31 +67,32 @@ def cmd_check(args: argparse.Namespace) -> int:
         print("  [OK] Version de Python soportada.")
 
     # --- Dependencias ---
+    # metaapi ya es requerida: se instala de entrada para que activar MT5 demo
+    # despues sea solo completar el .env, sin volver a instalar nada.
     print("\nDependencias:")
     for module, label, required in [
         ("telethon", "telethon (leer Telegram)", True),
         ("dotenv", "python-dotenv (.env)", True),
-        ("metaapi_cloud_sdk", "metaapi-cloud-sdk (MT5 desde Mac)", False),
+        ("metaapi_cloud_sdk", "metaapi-cloud-sdk (MT5 demo)", True),
+        ("pytesseract", "pytesseract (OCR de imagenes)", True),
         ("MetaTrader5", "MetaTrader5 (solo Windows)", False),
-        ("pytesseract", "pytesseract (OCR, opcional)", False),
     ]:
         try:
             __import__(module)
             print(f"  [OK]      {label}")
         except ImportError:
             if required:
-                print(f"  [FALTA]   {label}  <- requerido")
+                print(f"  [FALTA]   {label}  <- reinstala con: pip install -r requirements.txt")
                 ok = False
             else:
-                print(f"  [ausente] {label}  (opcional)")
+                print(f"  [ausente] {label}  (no aplica en este sistema)")
 
     # --- Aviso especifico de macOS ---
     if sys.platform == "darwin":
         print("\nmacOS detectado:")
         print("  El paquete MetaTrader5 NO existe para Mac (PyPI solo publica")
-        print("  wheels win_amd64). Modos disponibles aca:")
-        print(f"    - {PAPER_ONLY}              (nativo, sin dependencias extra)")
-        print(f"    - {PAPER_AND_METAAPI_DEMO}  (MT5 demo via MetaApi Cloud)")
+        print("  wheels win_amd64), asi que el camino a MT5 es MetaApi Cloud,")
+        print("  que ya viene instalado.")
 
     # --- Configuracion ---
     print("\nConfiguracion (.env):")
@@ -109,6 +110,24 @@ def cmd_check(args: argparse.Namespace) -> int:
     print(f"  [OK]      {env_path} cargado\n")
     for line in settings.describe().splitlines():
         print(f"    {line}")
+
+    # --- Donde van a parar las ordenes ---
+    print("\nEjecucion:")
+    if settings.trading_mode == PAPER_AND_METAAPI_DEMO:
+        print("  [OK]      Las senales van a ir a tu cuenta MT5 demo via MetaApi.")
+        print("            Se rechaza cualquier cuenta que no sea demo.")
+    elif settings.trading_mode == PAPER_ONLY:
+        print("  [papel]   Solo se registran operaciones simuladas.")
+        if settings.was_auto_resolved:
+            print("            Para operar en tu cuenta MT5 demo, completa en el .env:")
+            print("                METAAPI_TOKEN=...")
+            print("                METAAPI_ACCOUNT_ID=...")
+            print("            (de https://app.metaapi.cloud). Ya esta todo instalado:")
+            print("            no hay que instalar ni cambiar TRADING_MODE.")
+        else:
+            print(f"            TRADING_MODE={settings.configured_mode} lo fija a mano.")
+    else:
+        print(f"  [OK]      Modo {settings.trading_mode}.")
 
     for warning in settings.warnings:
         print(f"\n  [AVISO]   {warning}")

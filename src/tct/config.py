@@ -33,12 +33,18 @@ class ConfigError(RuntimeError):
 
 # Modos soportados. El orden es la escalera de riesgo que pide el CONTEXTO
 # MAESTRO: primero papel, despues demo, y recien al final dinero real.
+#
+# AUTO es el modo por defecto y existe para que MT5 demo este disponible desde
+# el minuto cero sin reinstalar ni reconfigurar nada: el sistema mira si hay
+# credenciales de broker en el .env y decide solo. Completar METAAPI_TOKEN y
+# METAAPI_ACCOUNT_ID es lo unico que separa el modo papel de la cuenta demo.
+AUTO = "AUTO"
 PAPER_ONLY = "PAPER_ONLY"
 PAPER_AND_METAAPI_DEMO = "PAPER_AND_METAAPI_DEMO"
 PAPER_AND_MT5_DEMO = "PAPER_AND_MT5_DEMO"
 LIVE = "LIVE"
 
-VALID_MODES = {PAPER_ONLY, PAPER_AND_METAAPI_DEMO, PAPER_AND_MT5_DEMO, LIVE}
+VALID_MODES = {AUTO, PAPER_ONLY, PAPER_AND_METAAPI_DEMO, PAPER_AND_MT5_DEMO, LIVE}
 
 _DEFAULT_SYMBOLS = "XAUUSD,XAGUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,NAS100,US30,US500"
 
@@ -130,6 +136,10 @@ class Settings:
     state_path: Path
     log_path: Path
 
+    # Lo que decia el .env. Puede ser AUTO, mientras que `trading_mode` es
+    # siempre el modo ya resuelto. Se guarda para poder mostrar la diferencia.
+    configured_mode: str = ""
+
     warnings: list[str] = field(default_factory=list)
 
     # -- Ayudas de lectura -------------------------------------------------
@@ -138,6 +148,10 @@ class Settings:
     def executes_orders(self) -> bool:
         """True si este modo manda ordenes a un broker de verdad."""
         return self.trading_mode != PAPER_ONLY
+
+    @property
+    def was_auto_resolved(self) -> bool:
+        return self.configured_mode == AUTO
 
     @property
     def broker_kind(self) -> str:
@@ -150,8 +164,11 @@ class Settings:
 
     def describe(self) -> str:
         """Resumen para loguear al arrancar. Nunca incluye secretos."""
+        modo = (
+            f"AUTO -> {self.trading_mode}" if self.was_auto_resolved else self.trading_mode
+        )
         lines = [
-            f"Modo            : {self.trading_mode}",
+            f"Modo            : {modo}",
             f"Broker          : {self.broker_kind}",
             f"Dry run         : {self.dry_run}",
             f"Lote / max lote : {self.default_lot} / {self.max_lot}",
@@ -181,11 +198,17 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     env = _Env(values)
     warnings: list[str] = []
 
-    mode = env.str("TRADING_MODE", PAPER_ONLY).upper()
-    if mode not in VALID_MODES:
+    configured_mode = env.str("TRADING_MODE", AUTO).upper()
+    if configured_mode not in VALID_MODES:
         raise ConfigError(
-            f"TRADING_MODE='{mode}' no es valido. Opciones: {', '.join(sorted(VALID_MODES))}"
+            f"TRADING_MODE='{configured_mode}' no es valido. "
+            f"Opciones: {', '.join(sorted(VALID_MODES))}"
         )
+
+    if configured_mode == AUTO:
+        mode = _resolve_auto(env, warnings)
+    else:
+        mode = configured_mode
 
     allow_live = env.bool("ALLOW_LIVE_TRADING", False)
     if mode == LIVE and not allow_live:
@@ -256,11 +279,43 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         events_path=Path(env.str("EVENTS_PATH", str(data_dir / "events.jsonl"))),
         state_path=Path(env.str("STATE_PATH", str(data_dir / "state.json"))),
         log_path=Path(env.str("LOG_PATH", "logs/tct.log")),
+        configured_mode=configured_mode,
         warnings=warnings,
     )
 
     _validate_mode_requirements(settings)
     return settings
+
+
+def _resolve_auto(env: _Env, warnings: list[str]) -> str:
+    """Elige el modo real segun que credenciales de broker haya en el .env.
+
+    Es lo que hace que MT5 demo este disponible desde el principio: no hay que
+    cambiar TRADING_MODE ni reinstalar nada, alcanza con completar dos
+    variables y reiniciar. Mientras esten vacias, el sistema corre en papel.
+
+    MetaApi va primero porque es el unico camino que funciona en macOS, que es
+    la maquina destino.
+    """
+    import sys
+
+    if env.str("METAAPI_TOKEN") and env.str("METAAPI_ACCOUNT_ID"):
+        return PAPER_AND_METAAPI_DEMO
+
+    if (
+        sys.platform == "win32"
+        and env.str("MT5_LOGIN")
+        and env.str("MT5_PASSWORD")
+        and env.str("MT5_SERVER")
+    ):
+        return PAPER_AND_MT5_DEMO
+
+    warnings.append(
+        "Corriendo en papel: no hay credenciales de broker. Para operar en tu "
+        "cuenta MT5 demo, completa METAAPI_TOKEN y METAAPI_ACCOUNT_ID en el .env "
+        "y volve a arrancar (ya esta todo instalado)."
+    )
+    return PAPER_ONLY
 
 
 def _validate_mode_requirements(settings: Settings) -> None:

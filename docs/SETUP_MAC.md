@@ -7,6 +7,8 @@ Para abrir Terminal: `Cmd` + `Espacio`, escribí `Terminal`, `Enter`.
 
 > **Nada de esto opera con dinero real.** El sistema arranca en modo papel:
 > registra operaciones simuladas en un archivo y no manda nada a ningún lado.
+> Operar en una cuenta MT5 **demo** ya viene instalado y listo, pero hay que
+> activarlo a mano completando el `.env` (último capítulo de esta guía).
 
 ---
 
@@ -38,8 +40,12 @@ cd ~/Documents/telegram-copy-trading
 bash scripts/setup_mac.sh
 ```
 
-El script hace todo solo: busca Python, crea el entorno, instala las
-dependencias, corre los tests y muestra un diagnóstico.
+Un solo comando, sin preguntas. Busca Python, crea el entorno, instala **todo**
+(incluido lo necesario para operar en MT5 demo más adelante), corre los tests y
+muestra un diagnóstico. Tarda unos minutos.
+
+Después de esto **no hay que instalar nada más nunca**. Lo único que queda es
+completar el archivo de configuración.
 
 ### Si dice que falta Python
 
@@ -56,13 +62,6 @@ correr dos comandos con `eval "$(/opt/homebrew/bin/brew shellenv)"`), y después
 brew install python@3.12
 bash scripts/setup_mac.sh
 ```
-
-### Te va a preguntar por MetaApi
-
-> `¿Instalar también el puente MetaApi...?`
-
-Respondé **N** por ahora. Se puede instalar después, cuando quieras pasar de
-papel a una cuenta demo real.
 
 ---
 
@@ -234,32 +233,39 @@ ese grupo antes de darle rienda.
 
 ---
 
-## Después: pasar a una cuenta MT5 demo real
+## Pasar a tu cuenta MT5 demo
 
-Solo cuando el paper trading haya funcionado bien un tiempo razonable.
+Esto **ya está instalado y disponible** desde el primer día. No hace falta
+instalar nada ni cambiar el modo: solo completar dos líneas en el `.env`.
 
-Como `MetaTrader5` no existe para Mac, se usa **MetaApi**, que corre el terminal
-MT5 en su nube y lo expone por internet.
+El bot arranca en `TRADING_MODE=AUTO`, que revisa el `.env` en cada arranque.
+Mientras esas dos líneas estén vacías corre en papel; apenas tengan valor,
+manda las órdenes a tu cuenta MT5 demo.
 
-1. Instalá el puente:
-   ```bash
-   source .venv/bin/activate
-   pip install -r requirements-metaapi.txt
-   ```
-2. Creá una cuenta en **https://app.metaapi.cloud**
-3. Generá un **token** y agregá tu cuenta **MT5 demo** (login, contraseña y
+Como `MetaTrader5` no existe para Mac, el puente es **MetaApi**, que corre el
+terminal MT5 en su nube y lo expone por internet.
+
+1. Creá una cuenta en **https://app.metaapi.cloud**
+2. Generá un **token** y agregá tu cuenta **MT5 demo** (login, contraseña y
    servidor del bróker). MetaApi te devuelve un **Account ID**.
-4. En el `.env`:
+3. Abrí `open -e .env` y completá:
    ```
-   TRADING_MODE=PAPER_AND_METAAPI_DEMO
    METAAPI_TOKEN=el_token
    METAAPI_ACCOUNT_ID=el_account_id
    ```
-5. Verificá y arrancá:
+4. Verificá y arrancá:
    ```bash
    python -m tct check
    python -m tct run
    ```
+
+`check` te va a confirmar el cambio con esta línea:
+
+```
+Modo            : AUTO -> PAPER_AND_METAAPI_DEMO
+```
+
+Para volver a papel sin borrar las credenciales, poné `TRADING_MODE=PAPER_ONLY`.
 
 El sistema **rechaza cualquier cuenta que no sea demo**, aunque la configures
 por error. Esa protección está en el ejecutor de órdenes, no en la

@@ -42,12 +42,30 @@ ejecución real en MT5, y para eso está el modo MetaApi.
 
 | `TRADING_MODE` | Qué hace | ¿Corre en Mac? |
 |---|---|---|
-| `PAPER_ONLY` | Registra operaciones simuladas. No manda nada a ningún broker. | Sí, sin nada extra |
-| `PAPER_AND_METAAPI_DEMO` | Registra **y** ejecuta en MT5 demo real vía MetaApi Cloud. | Sí, con `requirements-metaapi.txt` |
-| `PAPER_AND_MT5_DEMO` | Registra **y** ejecuta con el MT5 instalado localmente. | **No.** Solo Windows |
+| **`AUTO`** *(por defecto)* | Decide solo: MT5 demo si hay credenciales de MetaApi en el `.env`, papel si no. | Sí |
+| `PAPER_ONLY` | Solo simula, aunque haya credenciales cargadas. | Sí |
+| `PAPER_AND_METAAPI_DEMO` | Fuerza la ejecución en MT5 demo vía MetaApi Cloud. | Sí |
+| `PAPER_AND_MT5_DEMO` | Ejecuta con el MT5 instalado localmente. | **No.** Solo Windows |
 | `LIVE` | Dinero real. Requiere además `ALLOW_LIVE_TRADING=true`. | Solo Windows |
 
-Empezá siempre en `PAPER_ONLY`.
+### MT5 demo está disponible desde el primer arranque
+
+No hay una segunda instalación ni un cambio de modo. El puente a MetaApi se
+instala junto con todo lo demás, y `AUTO` mira el `.env` en cada arranque:
+
+```
+METAAPI_TOKEN=          ->  corre en papel
+METAAPI_ACCOUNT_ID=
+
+METAAPI_TOKEN=abc...    ->  ejecuta en tu cuenta MT5 demo
+METAAPI_ACCOUNT_ID=123
+```
+
+Completar esas dos líneas y reiniciar es **todo** lo que separa el modo papel
+de la cuenta demo. `python -m tct check` dice en qué estado está y qué falta.
+
+Volver atrás es igual de simple: `TRADING_MODE=PAPER_ONLY` fuerza el modo papel
+sin borrar las credenciales.
 
 ---
 
@@ -57,8 +75,13 @@ Empezá siempre en `PAPER_ONLY`.
 bash scripts/setup_mac.sh
 ```
 
-El script busca Python 3.10+, crea un entorno virtual en `.venv`, instala las
-dependencias, prepara el `.env`, corre los tests y termina con un diagnóstico.
+Un solo comando, sin preguntas. Busca Python 3.10+, crea un entorno virtual en
+`.venv`, instala **todo** (incluidos el puente a MT5 demo y el OCR), instala
+Tesseract si encuentra Homebrew, prepara el `.env`, corre los tests y termina
+con un diagnóstico.
+
+Después de eso no hay que instalar nada más nunca: lo único que queda es
+completar el `.env`.
 
 Guía paso a paso, pensada para alguien que no programa: **[docs/SETUP_MAC.md](docs/SETUP_MAC.md)**
 
@@ -67,7 +90,7 @@ Guía paso a paso, pensada para alguien que no programa: **[docs/SETUP_MAC.md](d
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt   # todo, en una sola instalación
 cp .env.example .env
 ```
 
@@ -203,10 +226,10 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-103 tests, sin red y sin credenciales. Cubren el parser (39 casos con mensajes
+112 tests, sin red y sin credenciales. Cubren el parser (39 casos con mensajes
 reales), el ciclo completo del motor con el broker de papel, las capas de
-riesgo, la configuración, la persistencia y la clasificación de adjuntos
-(stickers, fotos, archivos).
+riesgo, la resolución del modo `AUTO`, la configuración, la persistencia y la
+clasificación de adjuntos (stickers, fotos, archivos).
 
 ---
 

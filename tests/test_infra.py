@@ -82,6 +82,88 @@ def test_mt5_nativo_se_bloquea_fuera_de_windows(tmp_path, monkeypatch):
         load_settings(env)
 
 
+# --- Modo AUTO ------------------------------------------------------------
+# La promesa del modo AUTO: MT5 demo esta disponible desde el primer arranque,
+# y activarlo es completar dos variables del .env. Sin reinstalar, sin cambiar
+# TRADING_MODE, sin tocar codigo. Estos tests son esa promesa.
+
+
+def test_auto_es_el_modo_por_defecto(tmp_path):
+    env = write_env(tmp_path, "TELEGRAM_API_ID=1\n")
+    settings = load_settings(env)
+    assert settings.configured_mode == "AUTO"
+
+
+def test_auto_sin_credenciales_corre_en_papel(tmp_path):
+    settings = load_settings(write_env(tmp_path, "TRADING_MODE=AUTO\n"))
+    assert settings.trading_mode == "PAPER_ONLY"
+    assert settings.broker_kind == "paper"
+    assert settings.executes_orders is False
+    assert any("METAAPI_TOKEN" in w for w in settings.warnings), "debe decir que completar"
+
+
+def test_auto_con_credenciales_metaapi_pasa_a_mt5_demo(tmp_path):
+    """El caso central: solo se agregaron dos lineas al .env."""
+    env = write_env(tmp_path, "TRADING_MODE=AUTO\nMETAAPI_TOKEN=t\nMETAAPI_ACCOUNT_ID=a\n")
+    settings = load_settings(env)
+    assert settings.trading_mode == "PAPER_AND_METAAPI_DEMO"
+    assert settings.broker_kind == "metaapi"
+    assert settings.executes_orders is True
+
+
+def test_auto_necesita_las_dos_credenciales(tmp_path):
+    """Con una sola no alcanza: se queda en papel en vez de fallar al arrancar."""
+    settings = load_settings(write_env(tmp_path, "TRADING_MODE=AUTO\nMETAAPI_TOKEN=t\n"))
+    assert settings.trading_mode == "PAPER_ONLY"
+
+
+def test_auto_en_mac_nunca_elige_mt5_nativo(tmp_path, monkeypatch):
+    """Aunque haya credenciales MT5: ese paquete no existe para macOS."""
+    monkeypatch.setattr("sys.platform", "darwin")
+    env = write_env(
+        tmp_path, "TRADING_MODE=AUTO\nMT5_LOGIN=1\nMT5_PASSWORD=p\nMT5_SERVER=s\n"
+    )
+    settings = load_settings(env)
+    assert settings.trading_mode == "PAPER_ONLY"
+
+
+def test_auto_en_windows_con_credenciales_mt5_usa_mt5_nativo(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    env = write_env(
+        tmp_path, "TRADING_MODE=AUTO\nMT5_LOGIN=1\nMT5_PASSWORD=p\nMT5_SERVER=s\n"
+    )
+    assert load_settings(env).trading_mode == "PAPER_AND_MT5_DEMO"
+
+
+def test_metaapi_le_gana_a_mt5_nativo(tmp_path, monkeypatch):
+    """MetaApi primero: es el unico camino que tambien funciona en la Mac."""
+    monkeypatch.setattr("sys.platform", "win32")
+    env = write_env(
+        tmp_path,
+        "TRADING_MODE=AUTO\nMETAAPI_TOKEN=t\nMETAAPI_ACCOUNT_ID=a\n"
+        "MT5_LOGIN=1\nMT5_PASSWORD=p\nMT5_SERVER=s\n",
+    )
+    assert load_settings(env).trading_mode == "PAPER_AND_METAAPI_DEMO"
+
+
+def test_modo_explicito_le_gana_a_las_credenciales(tmp_path):
+    """Poner PAPER_ONLY a mano vuelve a papel sin borrar las credenciales."""
+    env = write_env(
+        tmp_path, "TRADING_MODE=PAPER_ONLY\nMETAAPI_TOKEN=t\nMETAAPI_ACCOUNT_ID=a\n"
+    )
+    settings = load_settings(env)
+    assert settings.trading_mode == "PAPER_ONLY"
+    assert settings.was_auto_resolved is False
+
+
+def test_describe_muestra_la_resolucion_del_modo(tmp_path):
+    settings = load_settings(write_env(tmp_path, "TRADING_MODE=AUTO\n"))
+    assert "AUTO -> PAPER_ONLY" in settings.describe()
+
+    fijo = load_settings(write_env(tmp_path, "TRADING_MODE=PAPER_ONLY\n"))
+    assert "->" not in fijo.describe().splitlines()[0]
+
+
 def test_paper_only_arranca_sin_credenciales(tmp_path):
     env = write_env(tmp_path, "TRADING_MODE=PAPER_ONLY\n")
     settings = load_settings(env)

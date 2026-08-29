@@ -1,14 +1,35 @@
-# Dependencias base. Esto es lo unico que hace falta para el modo PAPER_ONLY,
-# y funciona igual en macOS (Apple Silicon e Intel), Windows y Linux.
+# Todas las dependencias del sistema, en un solo archivo y una sola instalacion:
 #
-#   pip install -r requirements.txt
+#     pip install -r requirements.txt
+#
+# Despues de esto no hay que instalar nada mas. Pasar de paper trading a una
+# cuenta MT5 demo es solo completar dos variables en el .env: el puente ya
+# quedo instalado aca.
+#
+# Funciona igual en macOS (Apple Silicon e Intel), Windows y Linux.
 
-# Lectura del grupo de Telegram con sesion de usuario.
+
+# --- Leer el grupo de Telegram con sesion de usuario -----------------------
 # Se capea en <2.0 porque Telethon 2.x cambia la API.
 telethon>=1.36,<2.0
 
-# Lectura del archivo .env.
+# --- Leer el archivo .env -------------------------------------------------
 python-dotenv>=1.0,<2.0
+
+# --- Ejecutar en MT5 demo DESDE macOS -------------------------------------
+# MetaApi hostea el terminal MT5 en su nube y lo expone por internet, que es
+# lo que permite operar MT5 desde una Mac. Viene instalado desde el principio
+# aunque no se use todavia: asi activarlo no requiere volver a la terminal.
+# Arrastra ~30 paquetes (aiohttp, httpx, socketio), todos con wheels ARM64.
+metaapi-cloud-sdk>=27.0,<30.0
+
+# --- OCR para senales dentro de imagenes (ENABLE_OCR=true) ----------------
+# Estos dos son solo el lado Python. El motor Tesseract es una dependencia de
+# SISTEMA aparte; `scripts/setup_mac.sh` la instala sola si encuentra Homebrew.
+# A mano:  macOS -> brew install tesseract
+#          Windows -> https://github.com/UB-Mannheim/tesseract/wiki
+pytesseract>=0.3.10,<1.0
+pillow>=10.0,<12.0
 
 # ---------------------------------------------------------------------------
 # MetaTrader5: SOLO WINDOWS.
@@ -18,5 +39,7 @@ python-dotenv>=1.0,<2.0
 # source distribution: sin el marcador, `pip install -r requirements.txt`
 # ABORTA en la Mac con "Could not find a version that satisfies the
 # requirement". Con el marcador, pip simplemente lo saltea.
+#
+# En macOS el camino a MT5 es metaapi-cloud-sdk, arriba.
 # ---------------------------------------------------------------------------
 MetaTrader5>=5.0.45,<6.0.0; sys_platform == "win32"

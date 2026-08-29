@@ -83,23 +83,33 @@ info "Entorno virtual activo."
 info "Actualizando pip..."
 python -m pip install --quiet --upgrade pip
 
-info "Instalando dependencias base (telethon, python-dotenv)..."
+# Una sola instalacion, sin preguntas. Incluye el puente MetaApi aunque todavia
+# no se use: asi pasar a MT5 demo mas adelante es completar el .env y nada mas.
 # En macOS, MetaTrader5 se saltea solo gracias al marcador sys_platform del
 # requirements.txt. Si esto falla con "Could not find a version that satisfies
 # the requirement MetaTrader5", ese marcador se rompio.
-python -m pip install --quiet -r requirements.txt
-
-info "Instalando herramientas de test..."
+info "Instalando todas las dependencias (puede tardar unos minutos)..."
 python -m pip install --quiet -r requirements-dev.txt
 
+# Motor de OCR. Es una dependencia de sistema, no de Python, asi que solo se
+# puede automatizar si el usuario ya tiene Homebrew. No es bloqueante: el OCR
+# viene apagado (ENABLE_OCR=false) y el resto del sistema no lo necesita.
 echo
-read -r -p "¿Instalar tambien el puente MetaApi (para operar MT5 demo desde la Mac)? [s/N] " respuesta
-if [[ "${respuesta:-N}" =~ ^[SsYy]$ ]]; then
-    info "Instalando metaapi-cloud-sdk ..."
-    python -m pip install --quiet -r requirements-metaapi.txt
+if command -v brew >/dev/null 2>&1; then
+    if brew list tesseract >/dev/null 2>&1; then
+        info "Tesseract (OCR) ya estaba instalado."
+    else
+        info "Instalando Tesseract para el OCR de imagenes..."
+        if brew install tesseract >/dev/null 2>&1; then
+            info "Tesseract instalado."
+        else
+            warn "No se pudo instalar Tesseract. El OCR queda sin motor, pero"
+            warn "viene apagado por defecto, asi que no afecta a nada mas."
+        fi
+    fi
 else
-    info "MetaApi omitido. Se puede instalar despues con:"
-    echo "        source .venv/bin/activate && pip install -r requirements-metaapi.txt"
+    info "Homebrew no esta instalado, se omite Tesseract (solo hace falta para"
+    echo "        leer senales dentro de imagenes, que viene apagado)."
 fi
 
 # ---------------------------------------------------------------------------
@@ -140,6 +150,8 @@ echo "${BOLD}  PROXIMOS PASOS${OFF}"
 echo "${BOLD}==========================================================${OFF}"
 cat <<'PASOS'
 
+  Ya no hay que instalar nada mas. Lo unico que queda es completar el .env.
+
   1. Conseguir las credenciales de Telegram en https://my.telegram.org
      (seccion "API development tools") y ponerlas en el archivo .env:
          TELEGRAM_API_ID=...
@@ -157,8 +169,21 @@ cat <<'PASOS'
   5. Verificar que este todo bien:
          python -m tct check
 
-  6. Arrancar en modo papel:
+  6. Arrancar:
          python -m tct run
+
+  ---------------------------------------------------------------------
+  OPERAR EN TU CUENTA MT5 DEMO
+
+  Ya esta todo instalado. El sistema arranca en TRADING_MODE=AUTO, que
+  corre en papel mientras no haya credenciales de broker, y pasa solo a
+  MT5 demo apenas las encuentre. Para activarlo, completa en el .env:
+
+         METAAPI_TOKEN=...
+         METAAPI_ACCOUNT_ID=...
+
+  (se sacan de https://app.metaapi.cloud, agregando ahi tu cuenta MT5
+  demo) y volve a arrancar. No hay que reinstalar ni cambiar el modo.
 
   Guia completa y detallada: docs/SETUP_MAC.md
 

@@ -1,7 +1,7 @@
 # Contexto Maestro - Telegram Copy Trading
 
 Documento de continuidad: lo que hay que saber para seguir el proyecto.
-Actualizado: 2026-08-29 (v0.2.0).
+Actualizado: 2026-08-29 (v0.3.0).
 
 ---
 
@@ -60,18 +60,24 @@ todas `win_amd64`, ningún `.tar.gz`).
 | Imágenes | Mezcla texto/imagen: hook de OCR preparado pero **apagado** |
 | Stickers | El grupo manda stickers. Se descartan **antes** del OCR (ver abajo) |
 | Máquina destino | Mac M1 (Apple Silicon) |
+| Instalación | **Una sola**, sin preguntas. Todo entra de entrada, incluido MetaApi |
+| Modo por defecto | **`AUTO`**: MT5 demo disponible desde el arranque, se activa completando el `.env` |
 
 ---
 
-## Estado actual (v0.2.0)
+## Estado actual (v0.3.0)
 
-**Hecho y con tests (103 verdes, sin red ni credenciales):**
+**Hecho y con tests (112 verdes, sin red ni credenciales):**
 
 - Parser de señales: aperturas, tipos de orden (`BUY LIMIT` / `SELL STOP` /
   `BUY NOW`), rangos de entrada, TPs múltiples, alias de símbolos, emojis,
   markdown, comas de miles, coma decimal española, mensajes editados, y eventos
   de gestión (cierre total, parcial, mover SL a BE). Descarta la charla.
 - Motor completo: parser → riesgo → paper trade → broker → estado.
+- **Modo `AUTO`** (`config.py::_resolve_auto`): elige el broker según qué
+  credenciales haya en el `.env`. MetaApi primero (es el único camino que
+  funciona en macOS), después MT5 nativo si es Windows, y papel si no hay nada.
+  Un modo explícito siempre le gana.
 - Capas de riesgo, todas configurables desde el `.env`.
 - Persistencia JSONL + estado atómico que sobrevive a reinicios, con
   deduplicación de mensajes.
@@ -81,14 +87,24 @@ todas `win_amd64`, ningún `.tar.gz`).
   ubicaciones se descartan. Se reconocen las capturas mandadas como archivo.
 - Instalador para macOS y documentación paso a paso.
 
-**Escrito pero sin probar contra el servicio real** (requiere credenciales):
+**Verificado contra el SDK real, pero sin conexión viva:**
 
-- `brokers/metaapi.py` — escrito contra la API de `metaapi-cloud-sdk`. El SDK
-  publicado hoy es 29.1.1 y el código se escribió contra la forma 27.x; el
-  primer contacto puede necesitar ajustes en los nombres de método.
-- `telegram/reader.py` — la superficie de API de Telethon 1.44 sí se verificó
+- `brokers/metaapi.py` — contrastado método por método contra
+  `metaapi-cloud-sdk` **29.1.1** instalado. Todas las llamadas existen con las
+  firmas usadas, y los campos que lee de las respuestas (`stringCode`,
+  `positionId`, `type`) están en los modelos del SDK. Los valores de `type` son
+  `ACCOUNT_TRADE_MODE_{DEMO,REAL,CONTEST}`, que es lo que espera `_ensure_demo`.
+
+  > Ojo con una trampa del SDK: `account.get_rpc_connection()` devuelve un
+  > `RpcMetaApiConnectionInstance`, NO un `RpcMetaApiConnection`. Los métodos de
+  > trading viven solo en el primero; introspeccionar el segundo hace parecer
+  > que no existe ninguno.
+
+- `telegram/reader.py` — superficie de Telethon 1.44 verificada
   (`events.NewMessage`, `events.MessageEdited`, `iter_dialogs`,
-  `download_media`), pero el flujo de login real no.
+  `download_media`, `message.sticker`).
+
+Lo que falta en ambos es el comportamiento en red: eso necesita credenciales.
 
 ---
 
@@ -100,8 +116,9 @@ todas `win_amd64`, ningún `.tar.gz`).
 2. **Ajustar el parser con mensajes reales.** Los casos de `tests/test_parser.py`
    son representativos, no exhaustivos. Cada mensaje que el grupo mande y el
    parser no entienda debería volverse un test nuevo.
-3. **Probar MetaApi** contra una cuenta demo. Verificar los nombres de método
-   del SDK 29.x y el campo `type` del `account_information`.
+3. **Probar MetaApi contra una cuenta demo viva.** La API ya está verificada
+   contra el SDK; lo que falta es el comportamiento real: latencia del
+   `wait_synchronized`, rechazos del bróker, nombres de símbolos.
 4. **Atar los eventos de gestión a la señal original.** Hoy un "close 50%" sin
    símbolo aplica a todas las posiciones abiertas. Telegram expone
    `reply_to_message_id` y ya se captura en `SignalEvent`: si el grupo gestiona
