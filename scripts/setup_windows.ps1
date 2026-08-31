@@ -134,9 +134,23 @@ $TerminalEncontrada = $RutasMT5 | Where-Object { Test-Path $_ } | Select-Object 
 if ($TerminalEncontrada) {
     Write-Host "    Terminal instalada:  $TerminalEncontrada"
 } else {
-    Aviso "No se encontro la terminal MetaTrader 5 instalada."
-    Write-Host "        Descargala del sitio de tu broker o de metatrader5.com,"
-    Write-Host "        abrila y logueate en tu cuenta DEMO antes de arrancar el bot."
+    # No es fatal: el bot arranca igual en modo papel. Pero en una maquina
+    # recien formateada este es el aviso que mas importa, asi que se explica
+    # entero en vez de mandar a buscar.
+    Aviso "MetaTrader 5 no esta instalado en esta PC."
+    Write-Host ""
+    Write-Host "        Bajalo del sitio de TU BROKER, no de otro lado: la version del"
+    Write-Host "        broker ya viene apuntando a sus servidores. Si usas FxPro, es"
+    Write-Host "        el instalador de MT5 que ofrecen en su web."
+    Write-Host ""
+    Write-Host "        Despues, dentro de MetaTrader:"
+    Write-Host "          1. Archivo -> Abrir una cuenta -> cuenta de DEMOSTRACION"
+    Write-Host "          2. Anota login, contrasena y servidor (van al .env)"
+    Write-Host "          3. Apreta el boton 'Algo Trading' de la barra de arriba"
+    Write-Host "             hasta que quede VERDE (atajo: Ctrl+E)"
+    Write-Host "          4. Dejala abierta: el bot le habla a esa terminal"
+    Write-Host ""
+    Write-Host "        Mientras tanto el bot corre en modo papel sin problema."
 }
 
 # ---------------------------------------------------------------------------
