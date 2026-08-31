@@ -9,4 +9,4 @@ Escalera de riesgo (TRADING_MODE):
     LIVE                   -> dinero real. Necesita ademas ALLOW_LIVE_TRADING=true.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

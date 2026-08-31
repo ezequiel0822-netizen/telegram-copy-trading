@@ -11,6 +11,13 @@
 # Los scripts de shell son los mas sensibles: LF siempre, sin excepcion.
 *.sh text eol=lf
 
+# Y los de Windows, exactamente al reves. Un .bat con finales LF puede fallar
+# en cmd.exe de formas dificiles de diagnosticar (sobre todo con etiquetas y
+# goto), asi que se fuerza CRLF aunque el archivo se edite desde Linux o Mac.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
 # Binarios: que git no los toque.
 *.png binary
 *.jpg binary

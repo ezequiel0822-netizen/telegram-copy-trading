@@ -21,6 +21,7 @@ from pathlib import Path
 
 from tct.config import (
     PAPER_AND_METAAPI_DEMO,
+    PAPER_AND_MT5_DEMO,
     PAPER_ONLY,
     ConfigError,
     Settings,
@@ -116,18 +117,50 @@ def cmd_check(args: argparse.Namespace) -> int:
     if settings.trading_mode == PAPER_AND_METAAPI_DEMO:
         print("  [OK]      Las senales van a ir a tu cuenta MT5 demo via MetaApi.")
         print("            Se rechaza cualquier cuenta que no sea demo.")
+    elif settings.trading_mode == PAPER_AND_MT5_DEMO:
+        print("  [OK]      Las senales van a ir a tu cuenta MT5 demo local.")
+        print("            Acordate: MetaTrader 5 tiene que estar ABIERTO, logueado,")
+        print("            y con el boton 'Algo Trading' en verde.")
     elif settings.trading_mode == PAPER_ONLY:
         print("  [papel]   Solo se registran operaciones simuladas.")
         if settings.was_auto_resolved:
+            # El camino a la cuenta demo depende de la plataforma: en Windows
+            # se habla directo con la terminal, en macOS hace falta el puente.
             print("            Para operar en tu cuenta MT5 demo, completa en el .env:")
-            print("                METAAPI_TOKEN=...")
-            print("                METAAPI_ACCOUNT_ID=...")
-            print("            (de https://app.metaapi.cloud). Ya esta todo instalado:")
-            print("            no hay que instalar ni cambiar TRADING_MODE.")
+            if sys.platform == "win32":
+                print("                MT5_LOGIN=...")
+                print("                MT5_PASSWORD=...")
+                print("                MT5_SERVER=...")
+                print("            (los tres, de tu cuenta demo en MetaTrader 5).")
+            else:
+                print("                METAAPI_TOKEN=...")
+                print("                METAAPI_ACCOUNT_ID=...")
+                print("            (de https://app.metaapi.cloud; en macOS el paquete")
+                print("            MetaTrader5 no existe y hace falta ese puente).")
+            print("            Ya esta todo instalado: no hay que cambiar TRADING_MODE.")
         else:
             print(f"            TRADING_MODE={settings.configured_mode} lo fija a mano.")
     else:
         print(f"  [OK]      Modo {settings.trading_mode}.")
+
+    # --- IA local ---
+    if settings.enable_ollama:
+        import asyncio as _asyncio
+
+        from tct.intelligence.ollama import OllamaParser
+
+        print("\nIA local (Ollama):")
+        listo, detalle = _asyncio.run(OllamaParser(settings).disponible())
+        if listo:
+            print(f"  [OK]      {detalle}")
+            if settings.ollama_auto_execute:
+                print("  [AVISO]   OLLAMA_AUTO_EXECUTE=true: la IA puede abrir operaciones.")
+            else:
+                print("            Solo avisa por Telegram, no opera. Es lo recomendado.")
+        else:
+            # No se marca como error: el bot corre perfecto sin IA.
+            print(f"  [ausente] {detalle}")
+            print("            El bot funciona igual, solo con el parser de reglas.")
 
     for warning in settings.warnings:
         print(f"\n  [AVISO]   {warning}")
@@ -298,7 +331,21 @@ async def _run_async(settings: Settings) -> None:
             return
         logger.warning("El broker '%s' no conecto, se sigue en modo papel.", broker.name)
 
-    engine = Engine(settings, store, broker, notifier)
+    # Interprete de respaldo. Si no esta disponible se avisa y se sigue: el
+    # sistema funciona identico sin el, solo pierde los mensajes raros.
+    ollama = None
+    if settings.enable_ollama:
+        from tct.intelligence.ollama import OllamaParser
+
+        candidato = OllamaParser(settings)
+        listo, detalle = await candidato.disponible()
+        if listo:
+            ollama = candidato
+            logger.info("IA local: %s", detalle)
+        else:
+            logger.warning("IA local desactivada. %s", detalle)
+
+    engine = Engine(settings, store, broker, notifier, ollama=ollama)
     reader = TelegramReader(settings, engine.handle_message)
 
     if not await reader.start():

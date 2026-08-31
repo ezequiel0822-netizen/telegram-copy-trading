@@ -99,7 +99,25 @@ def test_auto_sin_credenciales_corre_en_papel(tmp_path):
     assert settings.trading_mode == "PAPER_ONLY"
     assert settings.broker_kind == "paper"
     assert settings.executes_orders is False
-    assert any("METAAPI_TOKEN" in w for w in settings.warnings), "debe decir que completar"
+    assert settings.warnings, "tiene que decir como pasar a demo"
+
+
+def test_el_aviso_de_papel_nombra_lo_correcto_en_windows(tmp_path, monkeypatch):
+    """En Windows el camino es MT5 nativo, no MetaApi. Mandar a la persona a
+    crear una cuenta en un servicio de pago que no necesita seria un error."""
+    monkeypatch.setattr("sys.platform", "win32")
+    settings = load_settings(write_env(tmp_path, "TRADING_MODE=AUTO\n"))
+    aviso = " ".join(settings.warnings)
+    assert "MT5_LOGIN" in aviso
+    assert "METAAPI" not in aviso
+
+
+def test_el_aviso_de_papel_nombra_lo_correcto_en_mac(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "darwin")
+    settings = load_settings(write_env(tmp_path, "TRADING_MODE=AUTO\n"))
+    aviso = " ".join(settings.warnings)
+    assert "METAAPI_TOKEN" in aviso
+    assert "MT5_LOGIN" not in aviso
 
 
 def test_auto_con_credenciales_metaapi_pasa_a_mt5_demo(tmp_path):

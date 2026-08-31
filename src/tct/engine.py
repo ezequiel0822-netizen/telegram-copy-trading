@@ -28,6 +28,27 @@ from tct.store import OpenPosition, Store, utc_now_iso
 logger = logging.getLogger(__name__)
 
 
+def _parser_no_entendio(event: SignalEvent | None) -> bool:
+    """True si vale la pena molestar a la IA local.
+
+    Son los tres casos donde el parser de reglas se queda corto:
+
+    - None    : no reconocio nada.
+    - UNKNOWN : vio que era de trading pero no pudo sacar los datos.
+    - UPDATE  : entendio A MEDIAS. Saco precios sueltos pero no la direccion,
+                asi que el motor no puede aplicarlo a ninguna posicion y solo
+                lo registra. Es exactamente el mensaje desprolijo para el que
+                existe esta capa ("oro compren 2345 stop 2335"), y dejarlo
+                fuera hacia que medio entender bloqueara a la IA.
+
+    Con cualquier otro evento el parser entendio de verdad y la IA sobra: es
+    mas lenta, consume CPU y no aporta nada sobre una senal ya bien leida.
+    """
+    if event is None:
+        return True
+    return event.event_type in {EventType.UNKNOWN, EventType.UPDATE}
+
+
 class Engine:
     def __init__(
         self,
@@ -35,11 +56,15 @@ class Engine:
         store: Store,
         broker: Broker,
         notifier: Any | None = None,
+        ollama: Any | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.broker = broker
         self.notifier = notifier
+        # Interprete de respaldo. None = apagado o no disponible; el sistema
+        # funciona identico sin el.
+        self.ollama = ollama
 
     # -- Entrada principal -------------------------------------------------
 
@@ -70,6 +95,13 @@ class Engine:
         if message_id is not None:
             self.store.mark_processed(chat_id, message_id)
 
+        # La IA solo entra donde el parser de reglas fallo. Si el parser
+        # entendio, no se la consulta: es mas rapida, gratis y determinista.
+        if self.ollama is not None and _parser_no_entendio(event):
+            interpretado = await self._consultar_ia(text, metadata)
+            if interpretado is not None:
+                event = interpretado
+
         if event is None:
             self.store.save_state()
             return {"status": "ignorado", "reason": "No parece un mensaje de trading"}
@@ -82,6 +114,22 @@ class Engine:
             self.store.save_state()
             logger.info("[DRY RUN] %s %s", event.event_type.value, event.symbol or "")
             return {"status": "dry_run", "signal": event.to_dict()}
+
+        # Una senal que entendio la IA y no el parser NO se ejecuta, salvo que
+        # se active a mano OLLAMA_AUTO_EXECUTE. Ver la explicacion completa en
+        # intelligence/ollama.py: risk.py valida que un precio sea coherente,
+        # no que sea el correcto, asi que un numero inventado pero plausible
+        # pasaria todos los controles.
+        if event.source == "ollama" and not self.settings.ollama_auto_execute:
+            self.store.append_event("ia_sugerencia", {"signal": event.to_dict()})
+            self.store.save_state()
+            await self._notify(self._format_sugerencia_ia(event))
+            logger.info(
+                "La IA interpreto un mensaje que el parser no entendio (%s %s). "
+                "Solo se aviso, no se opero.",
+                event.event_type.value, event.symbol or "?",
+            )
+            return {"status": "sugerencia_ia", "signal": event.to_dict()}
 
         handlers = {
             EventType.OPEN: self._handle_open,
@@ -322,6 +370,34 @@ class Engine:
         return {"status": "actualizacion_registrada", "signal": event.to_dict()}
 
     # -- Auxiliares --------------------------------------------------------
+
+    async def _consultar_ia(self, text: str, metadata: dict[str, Any]) -> SignalEvent | None:
+        """Consulta al interprete local. Nunca lanza: es una capa opcional."""
+        try:
+            return await self.ollama.interpretar(text, metadata)
+        except Exception:
+            logger.exception("La IA local fallo; se sigue solo con el parser de reglas")
+            return None
+
+    def _format_sugerencia_ia(self, event: SignalEvent) -> str:
+        lines = [
+            "MENSAJE QUE EL PARSER NO ENTENDIO",
+            "La IA local lo interpreto asi. NO se opero nada.",
+            "",
+            f"Tipo    : {event.event_type.value}",
+            f"Simbolo : {event.symbol or '-'}",
+            f"Lado    : {event.side.value if event.side else '-'}",
+            f"Entrada : {event.entry if event.entry is not None else '-'}",
+            f"SL      : {event.stop_loss if event.stop_loss is not None else '-'}",
+            f"TPs     : {', '.join(str(tp) for tp in event.take_profits) or '-'}",
+        ]
+        if event.warnings:
+            lines.append("")
+            lines.extend(event.warnings)
+        lines.append("")
+        lines.append("Mensaje original:")
+        lines.append(event.raw_message[:500])
+        return "\n".join(lines)
 
     async def _notify(self, text: str) -> None:
         if self.notifier is not None and self.notifier.enabled():

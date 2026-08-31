@@ -236,3 +236,105 @@ def test_el_estado_sobrevive_a_un_reinicio(tmp_path):
     assert len(store2.open_positions()) == 1
     assert store2.open_positions()[0].symbol == "XAUUSD"
     assert store2.already_processed(-100, 55), "el mensaje ya procesado sigue marcado"
+
+
+# --------------------------------------------------------------------------
+# IA local: la regla es que interpreta, pero no opera
+# --------------------------------------------------------------------------
+
+
+class FakeOllama:
+    """Interprete simulado que siempre devuelve la misma senal."""
+
+    def __init__(self, evento):
+        self.evento = evento
+        self.consultas = []
+
+    async def interpretar(self, mensaje, metadata):
+        self.consultas.append(mensaje)
+        return self.evento
+
+
+def senal_de_ia(mensaje="oro compren 2345 stop 2335 target 2355"):
+    from tct.signals.models import EventType, OrderType, SignalEvent, Side
+
+    return SignalEvent(
+        event_type=EventType.OPEN, symbol="XAUUSD", side=Side.BUY,
+        order_type=OrderType.MARKET, entry_low=2345.0, entry_high=2345.0,
+        stop_loss=2335.0, take_profits=[2355.0],
+        raw_message=mensaje, source="ollama",
+        warnings=["Interpretado por IA local (qwen2.5:7b), confianza alta"],
+    )
+
+
+def test_la_ia_avisa_pero_no_opera(tmp_path):
+    """Regla central: lo que entiende la IA se notifica, no se ejecuta."""
+    settings = build_settings(tmp_path)  # ollama_auto_execute=False por defecto
+    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    engine = Engine(settings, store, PaperBroker(), ollama=FakeOllama(senal_de_ia()))
+
+    resultado = send(engine, "oro compren 2345 stop 2335 target 2355")
+
+    assert resultado["status"] == "sugerencia_ia"
+    assert store.read_paper_trades() == [], "no debe registrar ninguna operacion"
+    assert store.open_positions() == [], "no debe abrir ninguna posicion"
+    assert any(e["kind"] == "ia_sugerencia" for e in store.read_events()), "pero si dejar rastro"
+
+
+def test_con_auto_execute_la_ia_si_opera(tmp_path):
+    """Solo si el usuario lo activa a mano."""
+    settings = build_settings(tmp_path, ollama_auto_execute=True)
+    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    engine = Engine(settings, store, PaperBroker(), ollama=FakeOllama(senal_de_ia()))
+
+    resultado = send(engine, "oro compren 2345 stop 2335 target 2355")
+
+    assert resultado["status"] == "aceptada"
+    assert len(store.read_paper_trades()) == 1
+
+
+def test_no_se_consulta_a_la_ia_si_el_parser_entendio(tmp_path):
+    """La IA es el ultimo recurso, no una segunda opinion sobre todo."""
+    settings = build_settings(tmp_path)
+    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    ia = FakeOllama(senal_de_ia())
+    engine = Engine(settings, store, PaperBroker(), ollama=ia)
+
+    resultado = send(engine, "XAUUSD BUY\nEntry 2345\nSL 2335\nTP 2355")
+
+    assert resultado["status"] == "aceptada"
+    assert ia.consultas == [], "el parser de reglas entendio; no hay que gastar CPU en la IA"
+
+
+def test_se_consulta_a_la_ia_cuando_el_parser_no_entiende(tmp_path):
+    settings = build_settings(tmp_path)
+    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    ia = FakeOllama(senal_de_ia())
+    engine = Engine(settings, store, PaperBroker(), ollama=ia)
+
+    send(engine, "muchachos el oro esta lindo, compren tipo 2345 y cuiden en 2335")
+
+    assert len(ia.consultas) == 1
+
+
+def test_sin_ia_configurada_todo_funciona_igual(tmp_path):
+    """La capa es opcional: su ausencia no cambia nada del comportamiento."""
+    settings = build_settings(tmp_path)
+    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    engine = Engine(settings, store, PaperBroker(), ollama=None)
+
+    assert send(engine, "XAUUSD BUY\nEntry 2345\nSL 2335\nTP 2355")["status"] == "aceptada"
+    assert send(engine, "algo indescifrable 123", message_id=99)["status"] == "ignorado"
+
+
+def test_si_la_ia_explota_el_bot_sigue_vivo(tmp_path):
+    class IaRota:
+        async def interpretar(self, mensaje, metadata):
+            raise RuntimeError("el modelo se cayo")
+
+    settings = build_settings(tmp_path)
+    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    engine = Engine(settings, store, PaperBroker(), ollama=IaRota())
+
+    resultado = send(engine, "muchachos compren oro tipo 2345 y cuiden en 2335")
+    assert resultado["status"] == "ignorado", "degrada al parser de reglas sin romperse"

@@ -1,9 +1,13 @@
-"""Broker MT5 nativo. SOLO Windows.
+"""Broker MT5 nativo. SOLO Windows, y el camino recomendado ahi.
 
-No corre en la Mac y no puede: el paquete `MetaTrader5` solo publica wheels
-`win_amd64`. Se mantiene porque es el camino si el sistema termina en un VPS
-Windows, y porque `config.py` ya bloquea este modo fuera de Windows con un
-mensaje claro.
+En Windows se habla directo con la terminal MT5 instalada en la maquina, sin
+intermediarios ni servicios de terceros: menos latencia, menos piezas que
+puedan fallar y nada que pagar. Es el motivo por el que conviene una PC
+Windows dedicada antes que una Mac.
+
+Fuera de Windows este modulo no puede funcionar: el paquete `MetaTrader5` solo
+publica wheels `win_amd64`. `config.py` bloquea el modo con un mensaje claro y
+en macOS el camino es MetaApi.
 
 La logica dificil (negociacion de filling mode, normalizacion de volumen,
 validacion de cuenta demo) esta portada de `app/brokers/mt5_demo_trader.py`
@@ -22,6 +26,22 @@ from tct.signals.models import OrderType, Side
 
 logger = logging.getLogger(__name__)
 
+# Otros nombres con los que un broker puede bautizar al mismo instrumento.
+# Se prueban despues del nombre canonico, cuando la busqueda exacta falla.
+_ALIAS_DE_BROKER: dict[str, tuple[str, ...]] = {
+    "XAUUSD": ("GOLD", "XAUUSD.", "GOLDUSD"),
+    "XAGUSD": ("SILVER", "SILVERUSD"),
+    "NAS100": ("USTEC", "US100", "NDX100", "NASDAQ100", "TECH100", "USTECH"),
+    "US30": ("DJ30", "DOW30", "WS30", "USA30", "DJIUSD"),
+    "US500": ("SPX500", "SP500", "USA500", "US500Cash"),
+    "GER40": ("DE40", "GER30", "DAX40", "DE30"),
+    "UK100": ("FTSE100", "UKX", "GB100"),
+    "USOIL": ("XTIUSD", "WTI", "CRUDOIL", "OIL"),
+    "UKOIL": ("XBRUSD", "BRENT"),
+    "BTCUSD": ("BITCOIN", "BTCUSDT"),
+    "ETHUSD": ("ETHEREUM", "ETHUSDT"),
+}
+
 
 class MT5NativeBroker(Broker):
     name = "mt5"
@@ -30,6 +50,9 @@ class MT5NativeBroker(Broker):
         self.settings = settings
         self._mt5 = None
         self._ready = False
+        # Cache de simbolo canonico -> nombre real en este broker. None como
+        # valor significa "ya se busco y no existe": evita repetir el barrido.
+        self._symbol_cache: dict[str, str | None] = {}
 
     # -- Ciclo de vida -----------------------------------------------------
 
@@ -66,6 +89,20 @@ class MT5NativeBroker(Broker):
             ):
                 logger.error("mt5.login() fallo: %s", mt5.last_error())
                 return False
+
+        # El boton "AutoTrading" de la barra de MT5. Si esta apagado, todo
+        # parece funcionar hasta que la primera orden vuelve con retcode
+        # 10027 y un mensaje cripto. Se chequea aca para que el problema
+        # aparezca al arrancar y con una instruccion concreta, no a mitad de
+        # una senal real.
+        terminal = mt5.terminal_info()
+        if terminal is not None and getattr(terminal, "trade_allowed", True) is False:
+            logger.error(
+                "MT5 tiene el AutoTrading APAGADO: ninguna orden va a entrar.\n"
+                "        Abri MetaTrader 5 y apreta el boton 'Algo Trading' de la barra\n"
+                "        de arriba (tiene que quedar verde), o presiona Ctrl+E."
+            )
+            return False
 
         account = mt5.account_info()
         if account is None:
@@ -137,7 +174,13 @@ class MT5NativeBroker(Broker):
         take_profit: float | None,
     ) -> OrderResult:
         mt5 = self._mt5
-        broker_symbol = to_broker_symbol(symbol, self.settings.mt5_broker_profile)
+
+        # Primero se le pregunta al broker como se llama el instrumento; el
+        # perfil de sufijos del .env queda como respaldo por si la terminal
+        # todavia no tiene la lista cargada.
+        broker_symbol = self._resolver_contra_broker(symbol) or to_broker_symbol(
+            symbol, self.settings.mt5_broker_profile
+        )
 
         info = self._ensure_symbol(broker_symbol)
         if info is None:
@@ -338,6 +381,60 @@ class MT5NativeBroker(Broker):
             except Exception:
                 return None
         return info
+
+    def _resolver_contra_broker(self, canonico: str) -> str | None:
+        """Encuentra como se llama REALMENTE este instrumento en este broker.
+
+        Se le pregunta a MT5 en vez de confiar en una tabla de sufijos escrita
+        a mano. Cada broker bautiza distinto (XAUUSD, XAUUSDm, XAUUSD.r,
+        GOLD...), y una tabla estatica queda desactualizada o simplemente no
+        cubre al broker que termine usando el usuario. Con la terminal
+        conectada, la lista autoritativa esta a una llamada de distancia.
+
+        El resultado se cachea: `symbols_get()` devuelve miles de simbolos y
+        recorrerlos en cada senal seria un desperdicio.
+        """
+        canonico = canonico.strip().upper()
+        if canonico in self._symbol_cache:
+            return self._symbol_cache[canonico]
+
+        mt5 = self._mt5
+        try:
+            todos = mt5.symbols_get() or ()
+        except Exception:
+            logger.warning("No se pudo listar los simbolos del broker", exc_info=True)
+            return None
+
+        nombres = [getattr(s, "name", "") for s in todos]
+
+        # 1) Nombre exacto.
+        # 2) Nombre + sufijo del broker (XAUUSDm, XAUUSD.r, XAUUSD.s...).
+        # 3) Alias conocidos del instrumento (GOLD para XAUUSD, US100 para
+        #    NAS100), tambien con sufijo.
+        candidatos = [canonico, *_ALIAS_DE_BROKER.get(canonico, ())]
+        for candidato in candidatos:
+            for nombre in nombres:
+                if nombre.upper() == candidato:
+                    self._symbol_cache[canonico] = nombre
+                    return nombre
+        for candidato in candidatos:
+            for nombre in nombres:
+                arriba = nombre.upper()
+                # Solo se acepta sufijo corto: evita que "EURUSD" matchee con
+                # un simbolo distinto tipo "EURUSDT" de cripto.
+                if arriba.startswith(candidato) and len(arriba) - len(candidato) <= 4:
+                    resto = arriba[len(candidato):]
+                    if resto == "" or not resto[0].isalnum() or len(resto) <= 2:
+                        self._symbol_cache[canonico] = nombre
+                        logger.info("Simbolo %s resuelto como '%s' en este broker", canonico, nombre)
+                        return nombre
+
+        logger.error(
+            "El broker no expone ningun simbolo para %s. Revisa que este en Market Watch.",
+            canonico,
+        )
+        self._symbol_cache[canonico] = None
+        return None
 
     @staticmethod
     def _normalize_volume(info: Any, lot: float) -> float | None:

@@ -1,5 +1,10 @@
 """Traduce el simbolo canonico al nombre que usa cada broker.
 
+OJO: en Windows con MT5 conectado esta tabla es solo un RESPALDO. El camino
+principal es `MT5NativeBroker._resolver_contra_broker()`, que le pregunta a la
+terminal que simbolos existen de verdad. Una tabla escrita a mano envejece mal
+y nunca cubre a todos los brokers; preguntar es exacto.
+
 El grupo dice "GOLD", el parser lo normaliza a "XAUUSD", pero el broker puede
 llamarlo "XAUUSD.r", "XAUUSD_m" o "GOLD". Este modulo es el unico lugar donde
 vive esa traduccion.
@@ -21,7 +26,7 @@ _BROKER_SUFFIXES: dict[str, str] = {
     "fbs": "",
     "roboforex": ".r",   # XAUUSD.r
     "icmarkets_raw": ".raw",
-    "fxpro": ".s",
+    "fxpro": "",
     "tickmill": "",
 }
 

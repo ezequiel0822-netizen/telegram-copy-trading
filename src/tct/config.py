@@ -136,6 +136,18 @@ class Settings:
     state_path: Path
     log_path: Path
 
+    # --- IA local opcional (Ollama) ---
+    # Respaldo para mensajes que el parser de reglas no entiende. Nunca es el
+    # camino principal: si el parser entendio, la IA ni se entera.
+    enable_ollama: bool = False
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen2.5:7b"
+    ollama_timeout_seconds: int = 60
+    # Que la IA pueda OPERAR y no solo avisar. Apagado a proposito: las
+    # validaciones de riesgo verifican que un precio sea coherente, no que sea
+    # el correcto. Un precio inventado pero plausible las pasa todas.
+    ollama_auto_execute: bool = False
+
     # Lo que decia el .env. Puede ser AUTO, mientras que `trading_mode` es
     # siempre el modo ya resuelto. Se guarda para poder mostrar la diferencia.
     configured_mode: str = ""
@@ -152,6 +164,12 @@ class Settings:
     @property
     def was_auto_resolved(self) -> bool:
         return self.configured_mode == AUTO
+
+    def _describe_ollama(self) -> str:
+        if not self.enable_ollama:
+            return "apagada"
+        rol = "puede OPERAR" if self.ollama_auto_execute else "solo avisa"
+        return f"{self.ollama_model} ({rol})"
 
     @property
     def broker_kind(self) -> str:
@@ -177,6 +195,7 @@ class Settings:
             f"Max senales/dia : {self.max_signals_per_day}",
             f"Exige SL / TP   : {self.require_stop_loss} / {self.require_take_profit}",
             f"OCR imagenes    : {self.enable_ocr}",
+            f"IA local        : {self._describe_ollama()}",
             f"Chats fuente    : {', '.join(self.telegram_source_chats) or '(ninguno)'}",
             f"Telethon        : {'configurado' if self.telegram_api_id else 'FALTA'}",
             f"Notificaciones  : {'configuradas' if self.telegram_bot_token else 'apagadas'}",
@@ -279,6 +298,11 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         events_path=Path(env.str("EVENTS_PATH", str(data_dir / "events.jsonl"))),
         state_path=Path(env.str("STATE_PATH", str(data_dir / "state.json"))),
         log_path=Path(env.str("LOG_PATH", "logs/tct.log")),
+        enable_ollama=env.bool("ENABLE_OLLAMA", False),
+        ollama_url=env.str("OLLAMA_URL", "http://localhost:11434"),
+        ollama_model=env.str("OLLAMA_MODEL", "qwen2.5:7b"),
+        ollama_timeout_seconds=env.int("OLLAMA_TIMEOUT_SECONDS", 60),
+        ollama_auto_execute=env.bool("OLLAMA_AUTO_EXECUTE", False),
         configured_mode=configured_mode,
         warnings=warnings,
     )
@@ -310,10 +334,17 @@ def _resolve_auto(env: _Env, warnings: list[str]) -> str:
     ):
         return PAPER_AND_MT5_DEMO
 
+    # Que completar depende de la plataforma: en Windows se habla directo con
+    # la terminal MT5, en macOS hace falta el puente de MetaApi.
+    faltante = (
+        "MT5_LOGIN, MT5_PASSWORD y MT5_SERVER"
+        if sys.platform == "win32"
+        else "METAAPI_TOKEN y METAAPI_ACCOUNT_ID"
+    )
     warnings.append(
-        "Corriendo en papel: no hay credenciales de broker. Para operar en tu "
-        "cuenta MT5 demo, completa METAAPI_TOKEN y METAAPI_ACCOUNT_ID en el .env "
-        "y volve a arrancar (ya esta todo instalado)."
+        f"Corriendo en papel: no hay credenciales de broker. Para operar en tu "
+        f"cuenta MT5 demo, completa {faltante} en el .env y volve a arrancar "
+        f"(ya esta todo instalado)."
     )
     return PAPER_ONLY
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telegram-copy-trading"
-version = "0.3.0"
+version = "0.4.0"
 description = "Lee senales de trading de Telegram y las replica en paper trading y MT5 demo."
 readme = "README.md"
 requires-python = ">=3.10"

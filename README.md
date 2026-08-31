@@ -4,8 +4,9 @@ Lee señales de trading de un grupo de Telegram, las convierte en operaciones
 estructuradas, las registra siempre como *paper trade*, y opcionalmente las
 ejecuta en una cuenta **MT5 demo**.
 
-Pensado para correr en **macOS (Apple Silicon)**, y también funciona en Windows
-y Linux.
+**Windows es la plataforma recomendada**: MetaTrader 5 se conecta de forma
+nativa, sin intermediarios. También corre en macOS y Linux, con la salvedad de
+más abajo.
 
 ```
 Telegram  ->  parser  ->  control de riesgo  ->  paper trade  ->  broker (opcional)
@@ -15,7 +16,19 @@ Telegram  ->  parser  ->  control de riesgo  ->  paper trade  ->  broker (opcion
 
 ---
 
-## Lo primero que hay que saber: MetaTrader5 no existe para Mac
+## Instalación
+
+| | |
+|---|---|
+| **Windows** (recomendado) | Doble clic en `scripts\instalar.bat`. Guía: **[docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md)** |
+| **macOS** | `bash scripts/setup_mac.sh`. Guía: **[docs/SETUP_MAC.md](docs/SETUP_MAC.md)** |
+
+Un solo comando en ambos casos. Después no hay que instalar nada más: lo único
+que queda es completar el `.env`.
+
+---
+
+## Por qué Windows: MetaTrader5 no existe para Mac
 
 El paquete `MetaTrader5` de PyPI publica **únicamente wheels `win_amd64`** y no
 tiene *source distribution*. En una Mac, `pip install MetaTrader5` no falla al
@@ -33,8 +46,9 @@ Con eso pip **saltea** el paquete en la Mac en lugar de abortar la instalación
 entera. **No borres ese marcador.**
 
 Consecuencia práctica: en la Mac, la lectura de Telegram, el parser y el paper
-trading funcionan **100% nativo**. Lo único que necesita un puente es la
-ejecución real en MT5, y para eso está el modo MetaApi.
+trading funcionan **100% nativo**, pero la ejecución en MT5 necesita un puente
+de pago (MetaApi). En Windows se habla directo con la terminal instalada: menos
+latencia, menos piezas que puedan fallar y nada que pagar.
 
 ---
 
@@ -45,7 +59,7 @@ ejecución real en MT5, y para eso está el modo MetaApi.
 | **`AUTO`** *(por defecto)* | Decide solo: MT5 demo si hay credenciales de MetaApi en el `.env`, papel si no. | Sí |
 | `PAPER_ONLY` | Solo simula, aunque haya credenciales cargadas. | Sí |
 | `PAPER_AND_METAAPI_DEMO` | Fuerza la ejecución en MT5 demo vía MetaApi Cloud. | Sí |
-| `PAPER_AND_MT5_DEMO` | Ejecuta con el MT5 instalado localmente. | **No.** Solo Windows |
+| `PAPER_AND_MT5_DEMO` | Ejecuta con el MT5 instalado localmente. **Lo recomendado.** | **No.** Solo Windows |
 | `LIVE` | Dinero real. Requiere además `ALLOW_LIVE_TRADING=true`. | Solo Windows |
 
 ### MT5 demo está disponible desde el primer arranque
@@ -156,6 +170,37 @@ Si un sticker viene con texto, el texto igual se lee: no se pierde una señal.
 
 Como contrapartida, sí se reconocen las capturas mandadas **como archivo** (sin
 comprimir), que llegan como `document` con mime `image/*` y no como `photo`.
+
+---
+
+## IA local para los mensajes raros (opcional)
+
+El parser de reglas es rápido, gratis y predecible, pero un grupo real a veces
+escribe así:
+
+> *"muchachos entramos largos en el oro ahora tipo 2345, cuidamos abajo de 2335
+> y buscamos 2355"*
+
+Eso no lo agarra ninguna regla. Ahí entra **[Ollama](https://ollama.com)**, que
+corre en la propia PC: gratis, sin mandar nada a internet y sin cuenta en
+ningún lado. Se activa con `ENABLE_OLLAMA=true`.
+
+Probado contra un modelo real, ese mensaje se convierte en
+`XAUUSD BUY, entrada 2345, SL 2335, TP 2355`.
+
+**La IA no opera.** Cuando entiende algo que el parser no pudo, avisa por
+Telegram y ahí termina. El motivo es concreto: las validaciones de riesgo
+verifican que un precio sea *coherente*, no que sea el *correcto*. Si el modelo
+lee 2345 donde decía 2355, esa señal pasa todos los controles y opera con un
+número inventado. Perderse una señal es barato; operar una equivocada, no.
+
+Hay una segunda red: **todo número que devuelve la IA se busca en el mensaje
+original**, y si no aparece literalmente se descarta la interpretación entera.
+Un modelo puede inventar un precio verosímil, pero no puede hacer que aparezca
+en un texto que ya está escrito.
+
+Solo se la consulta cuando el parser falla, así que en un grupo con formato
+consistente casi nunca se activa.
 
 ---
 

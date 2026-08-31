@@ -1,7 +1,7 @@
 # Contexto Maestro - Telegram Copy Trading
 
 Documento de continuidad: lo que hay que saber para seguir el proyecto.
-Actualizado: 2026-08-29 (v0.3.0).
+Actualizado: 2026-08-31 (v0.4.0).
 
 ---
 
@@ -23,7 +23,29 @@ cambiar**.
 
 ---
 
-## Restricción que define la arquitectura: el destino es una Mac M1
+## GIRO (31-ago-2026): el destino pasa a ser una PC Windows dedicada
+
+El usuario decidió mover el sistema a una **PC Windows dedicada** en vez de la
+Mac, y tiene razón: en Windows el paquete `MetaTrader5` funciona nativo, así
+que se habla directo con la terminal instalada. Se acaba la dependencia de
+MetaApi (un servicio de pago), baja la latencia y hay menos piezas que puedan
+fallar. Además, una máquina dedicada resuelve lo de que no puede dormirse.
+
+El soporte de macOS **se mantiene entero** — no costaba nada y ya estaba hecho.
+
+Decisiones nuevas de esta etapa:
+
+| Tema | Decisión |
+|---|---|
+| Plataforma principal | Windows, con `PAPER_AND_MT5_DEMO` vía MT5 nativo |
+| Bróker demo | FxPro |
+| RAM de la PC | 16 GB, alcanza para un modelo de 7B |
+| IA local | Ollama, **solo avisa, no opera** (`OLLAMA_AUTO_EXECUTE=false`) |
+| Arranque | Automático al prender la PC (acceso directo en shell:startup) |
+
+---
+
+## Restricción original: por qué existe la rama macOS
 
 El sistema **no corre en la máquina donde se desarrolló** (Windows). El destino
 es la Mac (Apple Silicon M1) del padre del usuario, y tiene que poder entregarse
@@ -65,9 +87,9 @@ todas `win_amd64`, ningún `.tar.gz`).
 
 ---
 
-## Estado actual (v0.3.0)
+## Estado actual (v0.4.0)
 
-**Hecho y con tests (112 verdes, sin red ni credenciales):**
+**Hecho y con tests (151 verdes, sin red ni credenciales):**
 
 - Parser de señales: aperturas, tipos de orden (`BUY LIMIT` / `SELL STOP` /
   `BUY NOW`), rangos de entrada, TPs múltiples, alias de símbolos, emojis,
@@ -85,7 +107,28 @@ todas `win_amd64`, ningún `.tar.gz`).
 - CLI: `check`, `chats`, `test`, `status`, `run`.
 - Filtrado de adjuntos: stickers, GIFs, audios, encuestas, contactos y
   ubicaciones se descartan. Se reconocen las capturas mandadas como archivo.
-- Instalador para macOS y documentación paso a paso.
+- Instaladores para Windows (`scripts/instalar.bat`) y macOS
+  (`scripts/setup_mac.sh`), más documentación paso a paso de cada uno.
+- **Capa de IA local (`intelligence/ollama.py`)**, opcional y apagada por
+  defecto. Solo se consulta cuando el parser de reglas falla (None, UNKNOWN o
+  UPDATE). Lo que interpreta se notifica pero NO se ejecuta.
+- **Resolución de símbolos contra el bróker vivo**
+  (`MT5NativeBroker._resolver_contra_broker`): se le pregunta a MT5 qué
+  símbolos existen en vez de confiar en una tabla de sufijos escrita a mano.
+- Chequeo del botón AutoTrading de MT5 al conectar: si está apagado, el bot lo
+  dice al arrancar en vez de fallar con retcode 10027 en la primera señal.
+
+**Verificado contra Ollama REAL** (31-ago-2026, modelo `llama3.2:3b`):
+el mensaje *"muchachos entramos largos en el oro ahora tipo 2345, cuidamos
+abajo de 2335 y buscamos 2355"* — que el parser de reglas no entiende — se
+convirtió correctamente en `XAUUSD BUY, entrada 2345, SL 2335, TP 2355`.
+Tarda ~25 s por mensaje con un 3B en CPU.
+
+> Trampa del schema que costó encontrar: Ollama convierte el JSON Schema en una
+> gramática, y **los campos que no están en `required` el modelo simplemente no
+> los genera**. Con solo las 4 claves básicas marcadas obligatorias, devolvía
+> `es_senal`/`tipo`/`confianza`/`razon` y omitía entero el símbolo y los
+> precios. Están TODOS en `required` por eso: no tocarlo.
 
 **Verificado contra el SDK real, pero sin conexión viva:**
 
@@ -116,9 +159,11 @@ Lo que falta en ambos es el comportamiento en red: eso necesita credenciales.
 2. **Ajustar el parser con mensajes reales.** Los casos de `tests/test_parser.py`
    son representativos, no exhaustivos. Cada mensaje que el grupo mande y el
    parser no entienda debería volverse un test nuevo.
-3. **Probar MetaApi contra una cuenta demo viva.** La API ya está verificada
-   contra el SDK; lo que falta es el comportamiento real: latencia del
-   `wait_synchronized`, rechazos del bróker, nombres de símbolos.
+3. **Primer contacto real con MT5 demo.** Todas las constantes y funciones que
+   usa `mt5_native.py` se verificaron contra el paquete instalado, pero falta
+   una `order_send` de verdad: filling mode que acepte FxPro, nombres de
+   símbolos reales, y el comportamiento del `_resolver_contra_broker`.
+   (MetaApi queda como el camino de macOS, verificado contra el SDK 29.1.1.)
 4. **Atar los eventos de gestión a la señal original.** Hoy un "close 50%" sin
    símbolo aplica a todas las posiciones abiertas. Telegram expone
    `reply_to_message_id` y ya se captura en `SignalEvent`: si el grupo gestiona
@@ -132,7 +177,12 @@ Lo que falta en ambos es el comportamiento en red: eso necesita credenciales.
    > (`TP`, `BUY`, números del dibujo) que el parser puede leer como señal.
    > Por eso los stickers se descartan antes de la rama de OCR, y hay tests
    > en `tests/test_reader.py` que fallan si alguien invierte ese orden.
-6. **Seguimiento de resultados.** Hoy se registra la apertura y el cierre, pero
+6. **Medir cuánto le acierta la IA.** Los eventos `ia_sugerencia` de
+   `data/events.jsonl` son el material: hay que revisarlos unas semanas contra
+   lo que el grupo realmente quiso decir ANTES de considerar
+   `OLLAMA_AUTO_EXECUTE=true`. Sin esa medición, activarlo es apostar.
+
+7. **Seguimiento de resultados.** Hoy se registra la apertura y el cierre, pero
    no se calcula el P&L de los paper trades. Es lo que haría falta para saber si
    el grupo de señales realmente sirve.
 
