@@ -13,6 +13,20 @@ nativa, sin intermediarios ni servicios de pago. En una Mac eso no es posible.
 
 ---
 
+> ### 🔶 Sobre los avisos "esto puede variar"
+>
+> A lo largo de la guía vas a ver bloques marcados así. Señalan los puntos donde
+> lo que ves en pantalla **puede no coincidir exactamente** con lo que dice acá:
+> porque el bróker cambió su web, porque MetaTrader usa otras palabras en tu
+> versión, o porque es una parte del sistema que todavía no se pudo probar
+> contra una cuenta real.
+>
+> No son errores. Son los lugares donde conviene leer con atención en vez de ir
+> en piloto automático. Cada uno dice **qué podría verse distinto** y **cómo
+> darte cuenta de que igual vas bien**.
+
+---
+
 ## Índice
 
 1. [Antes de empezar](#antes-de-empezar)
@@ -164,6 +178,17 @@ Al final crea un acceso directo **"Bot de Trading"** en el escritorio.
 > explica nada. El `.bat` saltea esa restricción **solo para esa ejecución**;
 > no cambia ninguna configuración de tu Windows.
 
+> ### 🔶 Esto puede variar
+>
+> **La instalación automática de Ollama no se pudo probar.** La máquina donde se
+> desarrolló ya lo tenía instalado, así que esa rama del instalador nunca se
+> ejecutó de verdad. (Sí se verificó que el paquete existe en el catálogo de
+> Windows con el nombre correcto.)
+>
+> **Si falla:** instalalo a mano desde **https://ollama.com/download**, y después
+> corré `scripts\instalar_ia.bat`. El bot funciona perfecto sin la IA, así que
+> esto nunca te va a bloquear la instalación.
+
 ---
 
 ## Paso 4 — Instalar MetaTrader 5 de FxPro
@@ -182,6 +207,17 @@ Al final crea un acceso directo **"Bot de Trading"** en el escritorio.
 
 La primera vez suele abrirse directamente la ventana de **abrir una cuenta**.
 Si es así, saltá al paso 5. Si no, también lo hacés desde el menú.
+
+> ### 🔶 Esto puede variar
+>
+> **Qué podría verse distinto:** los sitios de los brókers se rediseñan seguido.
+> Puede que "Plataformas" esté en otro lado, se llame "Trading Platforms", o
+> quede escondido en un menú desplegable.
+>
+> **Qué hacer:** buscá `MetaTrader 5` en el buscador del propio sitio de FxPro.
+> Si no aparece por ningún lado, descargá el MetaTrader genérico de
+> **metatrader5.com** — funciona igual, solo que en el paso 5 vas a tener que
+> buscar el servidor de FxPro a mano en vez de que ya venga cargado.
 
 ---
 
@@ -248,6 +284,28 @@ Para confirmar que quedó conectada: abajo a la derecha de MetaTrader tiene que
 aparecer un indicador con la velocidad de conexión (algo como `28/5 kb`). Si
 dice **"Sin conexión"** o **"No connection"**, la cuenta no entró.
 
+> ### 🔶 Esto puede variar — es el paso más propenso a verse distinto
+>
+> Describí este asistente por cómo funciona en general, pero **MetaTrader cambia
+> los textos entre versiones e idiomas, y cada bróker arma su propio
+> formulario**.
+>
+> **Qué podría verse distinto:**
+> - "Abrir cuenta" en vez de "Abrir una cuenta".
+> - Que aparezcan más servidores de FxPro de los que esperabas, o uno solo.
+> - Que el formulario pida otros campos, u ofrezca tipos de cuenta con nombres
+>   raros (Standard, Raw Spread, Elite...). Para una demo, cualquiera sirve.
+> - Que el orden de las pantallas no sea exactamente este.
+>
+> **Cómo saber que igual vas bien.** Dos cosas no cambian nunca:
+> 1. En algún momento vas a elegir explícitamente **"demo"** o
+>    **"demostración"**. Si no viste esa opción, parate y volvé atrás: podrías
+>    estar abriendo una cuenta real.
+> 2. Al final te muestra **un login y dos contraseñas**. Si llegaste a esa
+>    pantalla, el paso salió bien, sin importar cómo se veía el camino.
+>
+> Si te perdés en el medio, sacá una captura de pantalla y mandámela.
+
 ---
 
 ## Paso 6 — Activar Algo Trading
@@ -271,6 +329,17 @@ El atajo de teclado es **Ctrl + E**.
 
 > **Dejá MetaTrader abierto siempre.** El bot no abre MetaTrader: le habla a la
 > terminal que ya está corriendo. Si la cerrás, el bot se queda sin conexión.
+
+> ### 🔶 Esto puede variar
+>
+> **Qué podría verse distinto:** el botón se llama **"Algo Trading"** en las
+> versiones nuevas, **"AutoTrading"** en las viejas, y en algunas traducciones
+> aparece como **"Trading algorítmico"**. También cambia el ícono.
+>
+> **Cómo encontrarlo igual:** es siempre el mismo botón, en la barra de
+> herramientas de arriba, y **el atajo `Ctrl + E` funciona en todas las
+> versiones**. Apretalo y fijate si el botón cambia de color: si pasa de rojo a
+> verde, era ese.
 
 ---
 
@@ -363,6 +432,20 @@ inversora — ver el paso 5).
 
 Además te avisa si la cuenta es real en vez de demo, o si te olvidaste de
 activar Algo Trading.
+
+> ### 🔶 Esto puede variar — es código nuevo, sin probar contra una cuenta viva
+>
+> Este comando se probó **solo con MetaTrader cerrado**, donde da el mensaje de
+> error correcto. **Leer una cuenta real y conectada lo vas a estrenar vos.**
+>
+> **Qué podría salir distinto:** que algún campo salga vacío, que el nombre del
+> servidor venga con un formato inesperado, o que tire un error que no está
+> contemplado.
+>
+> **Si pasa eso**, copiame lo que imprima y lo corrijo. Mientras tanto podés
+> sacar los datos a mano desde MetaTrader:
+> **Herramientas → Opciones → pestaña "Servidor"**. Ahí figuran el servidor y el
+> login. (En inglés: Tools → Options → Server.)
 
 ### Las credenciales de Telegram
 
@@ -521,6 +604,23 @@ particular.
 Si querés ser más prudente todavía, poné `DRY_RUN=true` en el `.env` unos días:
 anota cómo interpretó cada mensaje **sin crear ninguna operación, ni siquiera
 en papel**.
+
+> ### 🔶 Esto puede variar — la primera orden real es lo menos probado del sistema
+>
+> Todo lo que MetaTrader expone se verificó contra el paquete instalado, pero
+> **una orden de verdad contra FxPro no se pudo probar**. El punto más delicado
+> es el *filling mode*: cada bróker acepta un modo distinto de ejecución y no
+> avisa cuál. El bot los prueba en orden hasta que uno entre, pero es la clase
+> de cosa que solo se confirma operando.
+>
+> **Qué mirar en la primera señal aceptada:**
+> - Si en el log aparece `ticket=<un número>`, la orden entró. Confirmalo en la
+>   pestaña **"Operaciones"** de MetaTrader.
+> - Si aparece `retcode=` seguido de un número, algo la rechazó. **Ese número
+>   dice exactamente qué pasó** — mandámelo y te digo qué ajustar.
+>
+> Los más comunes: `10027` (Algo Trading apagado), `10030` (filling mode),
+> `10019` (fondos insuficientes), `10016` (SL o TP inválidos para ese símbolo).
 
 ---
 
