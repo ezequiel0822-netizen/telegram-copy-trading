@@ -106,6 +106,18 @@ class Engine:
             self.store.save_state()
             return {"status": "ignorado", "reason": "No parece un mensaje de trading"}
 
+        # Pausa manual desde Telegram. Se sigue leyendo, parseando y
+        # registrando: lo unico que se corta es abrir o cerrar. Asi, cuando
+        # reanudes, podes mirar en events.jsonl que te perdiste.
+        if self.store.is_paused:
+            self.store.append_event("pausado", {"signal": event.to_dict()})
+            self.store.save_state()
+            logger.info(
+                "PAUSADO: se registro %s %s pero no se opero.",
+                event.event_type.value, event.symbol or "",
+            )
+            return {"status": "pausado", "signal": event.to_dict()}
+
         # DRY_RUN observa sin tocar nada: ni paper trade, ni broker, ni estado.
         # Sirve para mirar como parsea un grupo nuevo durante unos dias antes
         # de dejarlo operar.

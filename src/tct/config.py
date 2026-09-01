@@ -136,6 +136,19 @@ class Settings:
     state_path: Path
     log_path: Path
 
+    # --- Identidad y control remoto ---
+    # Nombre de esta instancia. Con dos bots corriendo (uno demo y uno real),
+    # es lo que permite dirigirles ordenes por separado desde Telegram.
+    instance_name: str = "demo"
+    enable_telegram_control: bool = True
+    # Donde escuchar los comandos. "me" son tus Mensajes Guardados: privado,
+    # siempre disponible y sin configurar nada.
+    telegram_control_chat: str = "me"
+
+    # Freno por perdida diaria, en % del balance del arranque del dia.
+    # 0 = apagado. Para dinero real conviene ponerlo.
+    max_daily_loss_pct: float = 0.0
+
     # --- IA local opcional (Ollama) ---
     # Respaldo para mensajes que el parser de reglas no entiende. Nunca es el
     # camino principal: si el parser entendio, la IA ni se entera.
@@ -165,6 +178,11 @@ class Settings:
     def was_auto_resolved(self) -> bool:
         return self.configured_mode == AUTO
 
+    @property
+    def is_live(self) -> bool:
+        """True solo si esto opera con dinero real."""
+        return self.trading_mode == LIVE and self.allow_live_trading
+
     def _describe_ollama(self) -> str:
         if not self.enable_ollama:
             return "apagada"
@@ -186,6 +204,8 @@ class Settings:
             f"AUTO -> {self.trading_mode}" if self.was_auto_resolved else self.trading_mode
         )
         lines = [
+            f"Instancia       : {self.instance_name.upper()}"
+            + ("   <<< DINERO REAL >>>" if self.is_live else ""),
             f"Modo            : {modo}",
             f"Broker          : {self.broker_kind}",
             f"Dry run         : {self.dry_run}",
@@ -194,6 +214,8 @@ class Settings:
             f"Max abiertas    : {self.max_open_trades}",
             f"Max senales/dia : {self.max_signals_per_day}",
             f"Exige SL / TP   : {self.require_stop_loss} / {self.require_take_profit}",
+            f"Tope perdida dia: "
+            + (f"{self.max_daily_loss_pct}%" if self.max_daily_loss_pct else "sin tope"),
             f"OCR imagenes    : {self.enable_ocr}",
             f"IA local        : {self._describe_ollama()}",
             f"Chats fuente    : {', '.join(self.telegram_source_chats) or '(ninguno)'}",
@@ -265,6 +287,18 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
             "Corre 'python -m tct chats' para listar los tuyos."
         )
 
+    instance_name = env.str("INSTANCE_NAME", "real" if mode == LIVE else "demo").lower()
+    # Se valida contra el vocabulario de destinatarios de los comandos de
+    # Telegram. Un nombre fuera de esa lista haria que "/pausa <nombre>" se
+    # interprete como texto libre y el comando no llegue a destino.
+    _NOMBRES_VALIDOS = {"demo", "real", "papel", "paper"}
+    if instance_name not in _NOMBRES_VALIDOS:
+        raise ConfigError(
+            f"INSTANCE_NAME='{instance_name}' no es valido. "
+            f"Tiene que ser uno de: {', '.join(sorted(_NOMBRES_VALIDOS))}.\n"
+            "Es el nombre con el que le hablas por Telegram (ej: /pausa real)."
+        )
+
     settings = Settings(
         trading_mode=mode,
         telegram_api_id=api_id,
@@ -298,6 +332,10 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         events_path=Path(env.str("EVENTS_PATH", str(data_dir / "events.jsonl"))),
         state_path=Path(env.str("STATE_PATH", str(data_dir / "state.json"))),
         log_path=Path(env.str("LOG_PATH", "logs/tct.log")),
+        instance_name=instance_name,
+        enable_telegram_control=env.bool("ENABLE_TELEGRAM_CONTROL", True),
+        telegram_control_chat=env.str("TELEGRAM_CONTROL_CHAT", "me"),
+        max_daily_loss_pct=env.float("MAX_DAILY_LOSS_PCT", 0.0),
         enable_ollama=env.bool("ENABLE_OLLAMA", False),
         ollama_url=env.str("OLLAMA_URL", "http://localhost:11434"),
         ollama_model=env.str("OLLAMA_MODEL", "llama3.2:3b"),

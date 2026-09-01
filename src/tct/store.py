@@ -97,6 +97,14 @@ class State:
     signals_today: int = 0
     signals_day: str = field(default_factory=_today_utc)
 
+    # Pausa manual. Persiste a proposito: si pausaste desde el telefono porque
+    # el mercado se puso feo, un reinicio del bot NO debe reanudar solo.
+    paused: bool = False
+    paused_reason: str = ""
+
+    # Balance al abrir el dia, para medir la perdida diaria. None = sin tomar.
+    day_start_balance: float | None = None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "last_message_id": self.last_message_id,
@@ -106,6 +114,9 @@ class State:
             "open_positions": [p.to_dict() for p in self.open_positions],
             "signals_today": self.signals_today,
             "signals_day": self.signals_day,
+            "paused": self.paused,
+            "paused_reason": self.paused_reason,
+            "day_start_balance": self.day_start_balance,
         }
 
     @classmethod
@@ -116,6 +127,9 @@ class State:
             open_positions=[OpenPosition.from_dict(p) for p in (data.get("open_positions") or [])],
             signals_today=int(data.get("signals_today") or 0),
             signals_day=data.get("signals_day") or _today_utc(),
+            paused=bool(data.get("paused")),
+            paused_reason=data.get("paused_reason") or "",
+            day_start_balance=data.get("day_start_balance"),
         )
 
 
@@ -204,6 +218,40 @@ class Store:
         if self.state.signals_day != _today_utc():
             return 0
         return self.state.signals_today
+
+    # -- Pausa -------------------------------------------------------------
+
+    def pause(self, reason: str = "") -> None:
+        self.state.paused = True
+        self.state.paused_reason = reason
+        self.save_state()
+
+    def resume(self) -> None:
+        self.state.paused = False
+        self.state.paused_reason = ""
+        self.save_state()
+
+    @property
+    def is_paused(self) -> bool:
+        return self.state.paused
+
+    # -- Perdida diaria ----------------------------------------------------
+
+    def day_start_balance(self, balance_actual: float | None) -> float | None:
+        """Balance de referencia del dia. Se toma el primero que se ve.
+
+        Se reinicia al cambiar de dia, junto con el cupo de senales, para que
+        el tope de perdida sea diario de verdad y no acumulado desde siempre.
+        """
+        hoy = _today_utc()
+        if self.state.signals_day != hoy:
+            self.state.signals_day = hoy
+            self.state.signals_today = 0
+            self.state.day_start_balance = None
+        if self.state.day_start_balance is None and balance_actual is not None:
+            self.state.day_start_balance = float(balance_actual)
+            self.save_state()
+        return self.state.day_start_balance
 
     # -- Estado en disco ---------------------------------------------------
 

@@ -4,7 +4,11 @@
 .env
 .env.local
 .env.*
+# Las plantillas SI van al repo: no tienen credenciales, solo los huecos.
+# La regla `.env.*` de arriba se las lleva puestas, incluida .env.real.example,
+# que es la que documenta como configurar la cuenta real.
 !.env.example
+!*.example
 
 # Sesiones de Telethon. Este archivo ES una credencial: quien lo tenga entra
 # a la cuenta de Telegram sin telefono ni codigo.

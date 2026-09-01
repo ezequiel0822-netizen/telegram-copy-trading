@@ -72,6 +72,12 @@ def evaluate_open(settings: Settings, store: Store, event: SignalEvent) -> RiskD
     if store.find_positions(symbol):
         reasons.append(f"Ya hay una posicion abierta en {symbol}")
 
+    # --- Tope de perdida diaria ------------------------------------------
+    # Se evalua contra el balance con el que abrio el dia. Es la proteccion
+    # que mas importa con dinero real: un dia malo se corta solo en vez de
+    # seguir tomando cada senal que llegue.
+    reasons.extend(_daily_loss_reasons(settings, store))
+
     # --- Cupo diario -----------------------------------------------------
     used = store.signals_today()
     if used >= settings.max_signals_per_day:
@@ -80,6 +86,29 @@ def evaluate_open(settings: Settings, store: Store, event: SignalEvent) -> RiskD
         )
 
     return RiskDecision(not reasons, reasons)
+
+
+def _daily_loss_reasons(settings: Settings, store: Store) -> list[str]:
+    """Frena si la perdida del dia supera MAX_DAILY_LOSS_PCT.
+
+    Devuelve lista vacia si el tope esta apagado (0) o si todavia no se pudo
+    leer el balance: sin dato no se inventa un motivo de rechazo.
+    """
+    if settings.max_daily_loss_pct <= 0:
+        return []
+
+    inicial = store.state.day_start_balance
+    actual = getattr(store, "balance_actual", None)
+    if not inicial or actual is None:
+        return []
+
+    caida_pct = (inicial - actual) / inicial * 100
+    if caida_pct >= settings.max_daily_loss_pct:
+        return [
+            f"Tope de perdida diaria alcanzado: -{caida_pct:.1f}% "
+            f"(limite {settings.max_daily_loss_pct}%). Se reanuda manana."
+        ]
+    return []
 
 
 def _geometry_reasons(event: SignalEvent) -> list[str]:
