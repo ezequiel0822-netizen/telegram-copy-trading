@@ -248,3 +248,45 @@ def test_las_respuestas_propias_no_re_disparan_comandos(tmp_path):
     respuesta = cmd(control, "/estado")
     assert respuesta.startswith("[")
     assert cmd(control, respuesta) is None, "una respuesta propia no debe procesarse"
+
+
+# --------------------------------------------------------------------------
+# El cableado
+# --------------------------------------------------------------------------
+# Estos tests existen por un error concreto: el control se escribio, se probo
+# unidad por unidad, y NUNCA se conecto al arranque. Los 27 tests de arriba
+# pasaban porque instancian la clase a mano. Ninguno miraba si `run` la usa.
+
+
+def test_el_arranque_conecta_el_control():
+    """La pieza tiene que estar cableada, no solo existir."""
+    import inspect
+
+    from tct import cli
+
+    fuente = inspect.getsource(cli._run_async)
+    assert "ControlTelegram" in fuente, "el control no se instancia al arrancar"
+    assert "escuchar_comandos" in fuente, "el control no se engancha a Telegram"
+
+
+def test_el_lector_expone_su_cliente_para_el_control():
+    """El control se engancha al MISMO cliente: dos sesiones corrompen el .session."""
+    from tct.telegram.reader import TelegramReader
+
+    assert hasattr(TelegramReader, "client")
+    lector = TelegramReader(object(), None)
+    assert lector.client is None, "sin start() todavia no hay cliente"
+
+
+def test_sin_control_la_instancia_real_no_arranca():
+    """Con dinero real, quedarse sin forma de frenarlo desde el telefono es
+    motivo suficiente para no arrancar."""
+    import inspect
+
+    from tct import cli
+
+    fuente = inspect.getsource(cli._run_async)
+    assert "settings.is_live" in fuente
+    # El aborto tiene que estar dentro del bloque que maneja el fallo del control.
+    tramo = fuente[fuente.index("escuchar_comandos"):]
+    assert "return" in tramo.split("encabezado")[0], "no aborta si falla el control en real"

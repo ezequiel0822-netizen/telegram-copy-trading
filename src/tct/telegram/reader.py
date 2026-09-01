@@ -115,6 +115,16 @@ class TelegramReader:
 
         return True
 
+    @property
+    def client(self):
+        """El cliente de Telethon ya conectado, o None si no se inicio.
+
+        Se expone para que el control remoto se enganche a esta misma sesion
+        en vez de abrir una segunda: dos clientes sobre el mismo archivo
+        .session lo corrompen.
+        """
+        return self._client
+
     async def run_forever(self) -> None:
         if self._client is None:
             raise RuntimeError("Hay que llamar a start() antes que a run_forever()")
