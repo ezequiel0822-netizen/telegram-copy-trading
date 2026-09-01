@@ -208,37 +208,64 @@ def test_un_comando_que_explota_no_tumba_el_control(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_el_tope_de_perdida_diaria_frena_las_aperturas(tmp_path):
-    settings, store, engine, _ = armar(tmp_path, max_daily_loss_pct=5.0)
-    store.day_start_balance(10000.0)
-    store.balance_actual = 9400.0  # -6%, pasa el limite de 5%
+SENAL_SIMPLE = "XAUUSD BUY\nEntry 2345\nSL 2335\nTP 2355"
 
-    resultado = send(engine, "XAUUSD BUY\nEntry 2345\nSL 2335\nTP 2355")
+
+def _con_equity(tmp_path, inicial, actual, tope):
+    """Arma un motor con la cuenta abriendo el dia en `inicial` y valiendo
+    `actual` ahora. El equity se mueve en el BROKER, que es de donde el motor
+    lo lee: setearlo en el store seria probar un mecanismo que no existe."""
+    settings, store, engine, control = armar(tmp_path, max_daily_loss_pct=tope)
+    engine.broker.equity_simulado = inicial
+    store.day_start_balance(inicial)
+    engine.broker.equity_simulado = actual
+    return settings, store, engine, control
+
+
+def test_el_tope_de_perdida_diaria_frena_las_aperturas(tmp_path):
+    """El freno mas importante con dinero real. Estuvo escrito y desconectado:
+    risk.py leia un valor que nadie asignaba fuera de los tests."""
+    _, _, engine, _ = _con_equity(tmp_path, 10000.0, 9400.0, tope=5.0)  # -6%
+
+    resultado = send(engine, SENAL_SIMPLE)
 
     assert resultado["status"] == "rechazada"
     assert any("perdida diaria" in r for r in resultado["reasons"])
 
 
 def test_sin_tope_configurado_no_frena_nada(tmp_path):
-    _, store, engine, _ = armar(tmp_path, max_daily_loss_pct=0.0)
-    store.day_start_balance(10000.0)
-    store.balance_actual = 1000.0  # -90%
-
-    assert send(engine, "XAUUSD BUY\nEntry 2345\nSL 2335\nTP 2355")["status"] == "aceptada"
+    _, _, engine, _ = _con_equity(tmp_path, 10000.0, 1000.0, tope=0.0)  # -90%
+    assert send(engine, SENAL_SIMPLE)["status"] == "aceptada"
 
 
 def test_una_perdida_por_debajo_del_tope_deja_operar(tmp_path):
+    _, _, engine, _ = _con_equity(tmp_path, 10000.0, 9700.0, tope=5.0)  # -3%
+    assert send(engine, SENAL_SIMPLE)["status"] == "aceptada"
+
+
+def test_si_el_broker_no_da_el_equity_no_se_inventa_un_rechazo(tmp_path):
+    """Sin dato no se bloquea por las dudas: se opera y se sigue."""
+    _, _, engine, _ = armar(tmp_path, max_daily_loss_pct=5.0)
+    engine.broker.equity_simulado = None
+
+    assert send(engine, SENAL_SIMPLE)["status"] == "aceptada"
+
+
+def test_el_motor_lee_el_equity_del_broker(tmp_path):
+    """La conexion que faltaba: que el valor viaje del broker al riesgo."""
     _, store, engine, _ = armar(tmp_path, max_daily_loss_pct=5.0)
-    store.day_start_balance(10000.0)
-    store.balance_actual = 9700.0  # -3%
+    engine.broker.equity_simulado = 8000.0
 
-    assert send(engine, "XAUUSD BUY\nEntry 2345\nSL 2335\nTP 2355")["status"] == "aceptada"
+    send(engine, SENAL_SIMPLE)
+
+    assert store.balance_actual == 8000.0, "el motor no leyo el equity del broker"
+    assert store.state.day_start_balance == 8000.0, "no se fijo la referencia del dia"
 
 
-def test_sin_balance_leido_no_se_inventa_un_rechazo(tmp_path):
-    """Si todavia no se pudo leer el balance, no se bloquea por las dudas."""
-    _, store, engine, _ = armar(tmp_path, max_daily_loss_pct=5.0)
-    assert send(engine, "XAUUSD BUY\nEntry 2345\nSL 2335\nTP 2355")["status"] == "aceptada"
+def test_la_ganancia_del_dia_nunca_frena(tmp_path):
+    """Solo la caida importa: subir no puede activar el tope."""
+    _, _, engine, _ = _con_equity(tmp_path, 10000.0, 12000.0, tope=5.0)
+    assert send(engine, SENAL_SIMPLE)["status"] == "aceptada"
 
 
 def test_las_respuestas_propias_no_re_disparan_comandos(tmp_path):

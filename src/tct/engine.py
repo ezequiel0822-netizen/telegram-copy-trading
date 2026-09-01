@@ -202,6 +202,11 @@ class Engine:
     # -- Apertura ----------------------------------------------------------
 
     async def _handle_open(self, event: SignalEvent) -> dict[str, Any]:
+        # El freno por perdida diaria necesita saber cuanto vale la cuenta
+        # AHORA. Se pide antes de evaluar el riesgo porque es justo uno de los
+        # motivos por los que se puede rechazar la senal.
+        await self._actualizar_equity()
+
         decision = evaluate_open(self.settings, self.store, event)
 
         if not decision.ok:
@@ -468,6 +473,31 @@ class Engine:
         return {"status": "actualizacion_registrada", "signal": event.to_dict()}
 
     # -- Auxiliares --------------------------------------------------------
+
+    async def _actualizar_equity(self) -> None:
+        """Trae el valor de la cuenta y fija la referencia del dia.
+
+        Si el broker no puede darlo, `balance_actual` queda en None y el freno
+        diario no opina: sin dato no se rechaza nada.
+        """
+        if self.settings.max_daily_loss_pct <= 0:
+            return
+        try:
+            equity = await self.broker.account_equity()
+        except Exception:
+            logger.warning("No se pudo leer el equity de la cuenta", exc_info=True)
+            return
+
+        self.store.balance_actual = equity
+        inicial = self.store.day_start_balance(equity)
+
+        if inicial and equity is not None:
+            caida = (inicial - equity) / inicial * 100
+            if caida > 0:
+                logger.info(
+                    "Cuenta: %.2f | apertura del dia: %.2f | caida %.2f%% (tope %.1f%%)",
+                    equity, inicial, caida, self.settings.max_daily_loss_pct,
+                )
 
     async def _consultar_ia(self, text: str, metadata: dict[str, Any]) -> SignalEvent | None:
         """Consulta al interprete local. Nunca lanza: es una capa opcional."""

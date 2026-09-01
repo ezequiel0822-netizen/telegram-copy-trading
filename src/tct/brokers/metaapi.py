@@ -138,6 +138,17 @@ class MetaApiBroker(Broker):
             "Se bloquea la ejecucion. Para operar real hace falta ALLOW_LIVE_TRADING=true."
         )
 
+    async def account_equity(self) -> float | None:
+        if not await self.is_ready():
+            return None
+        try:
+            info = await self._connection.get_account_information() or {}
+        except Exception:
+            logger.warning("No se pudo leer el equity de MetaApi", exc_info=True)
+            return None
+        valor = info.get("equity")
+        return float(valor) if valor is not None else None
+
     # -- Operaciones -------------------------------------------------------
 
     async def open_order(

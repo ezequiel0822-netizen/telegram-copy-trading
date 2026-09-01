@@ -144,6 +144,19 @@ class MT5NativeBroker(Broker):
 
         return False, "La cuenta no es demo. Se bloquea la ejecucion."
 
+    async def account_equity(self) -> float | None:
+        if not await self.is_ready():
+            return None
+        return await asyncio.to_thread(self._equity_sync)
+
+    def _equity_sync(self) -> float | None:
+        try:
+            cuenta = self._mt5.account_info()
+        except Exception:
+            logger.warning("No se pudo leer el equity de MT5", exc_info=True)
+            return None
+        return float(cuenta.equity) if cuenta is not None else None
+
     # -- Operaciones -------------------------------------------------------
 
     async def open_order(

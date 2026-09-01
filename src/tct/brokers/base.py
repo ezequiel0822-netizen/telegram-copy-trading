@@ -97,6 +97,18 @@ class Broker(ABC):
     ) -> OrderResult:
         ...
 
+    async def account_equity(self) -> float | None:
+        """Valor actual de la cuenta, o None si no se puede leer.
+
+        Se pide EQUITY y no BALANCE: el balance solo refleja lo ya cerrado, y
+        el freno por perdida diaria tiene que reaccionar tambien a lo que se
+        esta perdiendo en posiciones todavia abiertas.
+
+        Devolver None significa "no se pudo leer", y `risk.py` lo interpreta
+        como "no frenar": sin dato no se inventa un motivo de rechazo.
+        """
+        return None
+
     async def health(self) -> dict[str, Any]:
         """Info de diagnostico para el comando `status`. Nunca incluye secretos."""
         return {"broker": self.name, "ready": await self.is_ready()}

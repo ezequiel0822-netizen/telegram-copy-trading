@@ -25,6 +25,9 @@ class PaperBroker(Broker):
     def __init__(self) -> None:
         self._tickets = itertools.count(900_000_001)
         self._positions: dict[int, dict[str, Any]] = {}
+        # Valor de cuenta ficticio. Existe para poder probar el tope de
+        # perdida diaria sin un broker real.
+        self.equity_simulado: float | None = 10_000.0
 
     async def connect(self) -> bool:
         return True
@@ -34,6 +37,10 @@ class PaperBroker(Broker):
 
     async def is_ready(self) -> bool:
         return True
+
+    async def account_equity(self) -> float | None:
+        """Equity simulado. Los tests lo mueven para ejercitar el freno diario."""
+        return self.equity_simulado
 
     async def open_order(
         self,
