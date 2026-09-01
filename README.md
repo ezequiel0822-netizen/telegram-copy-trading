@@ -16,6 +16,15 @@ Telegram  ->  parser  ->  control de riesgo  ->  paper trade  ->  broker (opcion
 
 ---
 
+> ### Si sos una IA retomando este proyecto
+>
+> Leé **[docs/CONTEXTO_MAESTRO.md](docs/CONTEXTO_MAESTRO.md)** entero antes de
+> tocar código. Tiene el estado actual, las decisiones tomadas, las trampas del
+> código que no hay que "simplificar", los catorce bugs que ya se encontraron
+> (y por qué existían), y lo que falta.
+
+---
+
 ## Instalación
 
 | | |
