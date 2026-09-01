@@ -194,10 +194,12 @@ if ($OllamaPresente) {
             Where-Object { $_ }
     } catch { }
 
-    # Orden de preferencia para extraer datos de un texto corto y desprolijo
-    # en castellano. Los qwen2.5/3 son los mas solidos siguiendo un schema;
-    # los de 3B entran al final porque se equivocan mas, pero sirven.
-    $Preferencia = @("qwen2.5", "qwen3", "llama3.1", "mistral", "gemma", "phi", "llama3.2")
+    # Orden de preferencia. Los de 3B van PRIMERO a proposito: medido sobre
+    # un procesador de 8 nucleos sin placa de video, un 3B tarda ~25 segundos
+    # por mensaje y un 7B/8B tarda VARIOS MINUTOS. Como la tarea es acotada
+    # (sacar 5 datos de un mensaje corto, con el formato forzado por el
+    # schema), el modelo chico alcanza y la diferencia de velocidad no.
+    $Preferencia = @("qwen2.5:3b", "llama3.2", "qwen2.5", "qwen3", "llama3.1", "mistral", "gemma", "phi")
     foreach ($pref in $Preferencia) {
         $encontrado = $Instalados | Where-Object { $_ -like "$pref*" } | Select-Object -First 1
         if ($encontrado) { $ModeloIA = $encontrado; break }
@@ -209,16 +211,18 @@ if ($OllamaPresente) {
         $OllamaListo = $true
     } else {
         Write-Host ""
-        Write-Host "    No hay ningun modelo descargado. El recomendado es qwen2.5:7b:"
-        Write-Host "      - Ocupa 4.7 GB y tarda entre 10 y 30 minutos segun tu conexion."
+        Write-Host "    No hay ningun modelo descargado. El recomendado es llama3.2:3b:"
+        Write-Host "      - Ocupa 2 GB. Tarda unos minutos segun tu conexion."
+        Write-Host "      - Sin placa de video responde en ~25 segundos por mensaje."
+        Write-Host "        (un modelo de 7B tardaria varios MINUTOS en la misma PC)"
         Write-Host "      - Se puede hacer despues, cuando quieras, con scripts\instalar_ia.bat"
         Write-Host "      - El bot funciona igual sin esto: solo pierde los mensajes raros."
         $r = Read-Host "    Descargar el modelo ahora? [s/N]"
         if ($r -match "^[SsYy]") {
-            Paso "Descargando qwen2.5:7b. Podes dejarlo corriendo y volver despues..."
-            ollama pull qwen2.5:7b
+            Paso "Descargando llama3.2:3b..."
+            ollama pull llama3.2:3b
             if ($LASTEXITCODE -eq 0) {
-                $ModeloIA = "qwen2.5:7b"
+                $ModeloIA = "llama3.2:3b"
                 $OllamaListo = $true
                 Write-Host "    Modelo listo." -ForegroundColor Green
             } else {
@@ -309,11 +313,14 @@ Escribir-Titulo "PROXIMOS PASOS"
          TELEGRAM_API_ID=...
          TELEGRAM_API_HASH=...
 
-  3. Abri MetaTrader 5, logueate en tu cuenta DEMO, y anota los datos:
-         MT5_LOGIN=...
-         MT5_PASSWORD=...
-         MT5_SERVER=...
+  3. Abri MetaTrader 5 y logueate en tu cuenta DEMO.
      Dejala ABIERTA: el bot le habla a la terminal que ya esta corriendo.
+     Acordate de prender el boton "Algo Trading" (Ctrl+E, tiene que
+     quedar VERDE) o ninguna orden va a entrar.
+
+     Despues hace doble clic en scripts\datos_mt5.bat: lee tu cuenta y
+     te dice exactamente que copiar al .env, incluido el nombre del
+     servidor, que es el dato que mas cuesta averiguar a mano.
 
   4. Abri una terminal en esta carpeta y activa el entorno:
          .venv\Scripts\activate

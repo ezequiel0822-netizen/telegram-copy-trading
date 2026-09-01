@@ -27,11 +27,11 @@ echo.
 echo Si arriba YA aparece un modelo que quieras usar, cerra esta ventana y
 echo escribi su nombre en OLLAMA_MODEL dentro del archivo .env
 echo.
-echo Si no, se va a descargar qwen2.5:7b ^(4.7 GB, entre 10 y 30 minutos^).
+echo Si no, se va a descargar llama3.2:3b ^(2 GB, unos minutos^).
 echo.
 pause
 
-ollama pull qwen2.5:7b
+ollama pull llama3.2:3b
 if errorlevel 1 (
     echo.
     echo La descarga fallo. Podes reintentar corriendo este archivo de nuevo.
@@ -50,7 +50,7 @@ if not exist ".env" (
     exit /b 1
 )
 
-".venv\Scripts\python.exe" -c "import pathlib,re; p=pathlib.Path('.env'); t=p.read_text(encoding='utf-8'); t=re.sub(r'^ENABLE_OLLAMA=.*$','ENABLE_OLLAMA=true',t,flags=re.M); t=re.sub(r'^OLLAMA_MODEL=.*$','OLLAMA_MODEL=qwen2.5:7b',t,flags=re.M); p.write_text(t,encoding='utf-8'); print('   .env actualizado: ENABLE_OLLAMA=true, OLLAMA_MODEL=qwen2.5:7b')"
+".venv\Scripts\python.exe" -c "import pathlib,re; p=pathlib.Path('.env'); t=p.read_text(encoding='utf-8'); t=re.sub(r'^ENABLE_OLLAMA=.*$','ENABLE_OLLAMA=true',t,flags=re.M); t=re.sub(r'^OLLAMA_MODEL=.*$','OLLAMA_MODEL=llama3.2:3b',t,flags=re.M); p.write_text(t,encoding='utf-8'); print('   .env actualizado: ENABLE_OLLAMA=true, OLLAMA_MODEL=llama3.2:3b')"
 
 echo.
 echo Listo. La IA local queda activada.

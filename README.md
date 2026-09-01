@@ -185,8 +185,11 @@ Eso no lo agarra ninguna regla. Ahí entra **[Ollama](https://ollama.com)**, que
 corre en la propia PC: gratis, sin mandar nada a internet y sin cuenta en
 ningún lado. Se activa con `ENABLE_OLLAMA=true`.
 
-Probado contra un modelo real, ese mensaje se convierte en
-`XAUUSD BUY, entrada 2345, SL 2335, TP 2355`.
+Probado contra un modelo real (`llama3.2:3b`), ese mensaje se convierte en
+`XAUUSD BUY, entrada 2345, SL 2335, TP 2355`, en unos 25 segundos.
+
+Usá un modelo de 3B salvo que la PC tenga placa de video: medido sobre un
+procesador de 8 núcleos sin GPU, un 7B tarda **varios minutos** por mensaje.
 
 **La IA no opera.** Cuando entiende algo que el parser no pudo, avisa por
 Telegram y ahí termina. El motivo es concreto: las validaciones de riesgo

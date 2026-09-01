@@ -22,7 +22,7 @@ from tct.signals.models import EventType, Side
 class FakeSettings:
     ollama_url = "http://localhost:11434"
     ollama_model = "qwen2.5:7b"
-    ollama_timeout_seconds = 30
+    ollama_timeout_seconds = 180
     ollama_auto_execute = False
     enable_ollama = True
 

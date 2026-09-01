@@ -141,8 +141,8 @@ class Settings:
     # camino principal: si el parser entendio, la IA ni se entera.
     enable_ollama: bool = False
     ollama_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:7b"
-    ollama_timeout_seconds: int = 60
+    ollama_model: str = "llama3.2:3b"
+    ollama_timeout_seconds: int = 180
     # Que la IA pueda OPERAR y no solo avisar. Apagado a proposito: las
     # validaciones de riesgo verifican que un precio sea coherente, no que sea
     # el correcto. Un precio inventado pero plausible las pasa todas.
@@ -300,8 +300,8 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         log_path=Path(env.str("LOG_PATH", "logs/tct.log")),
         enable_ollama=env.bool("ENABLE_OLLAMA", False),
         ollama_url=env.str("OLLAMA_URL", "http://localhost:11434"),
-        ollama_model=env.str("OLLAMA_MODEL", "qwen2.5:7b"),
-        ollama_timeout_seconds=env.int("OLLAMA_TIMEOUT_SECONDS", 60),
+        ollama_model=env.str("OLLAMA_MODEL", "llama3.2:3b"),
+        ollama_timeout_seconds=env.int("OLLAMA_TIMEOUT_SECONDS", 180),
         ollama_auto_execute=env.bool("OLLAMA_AUTO_EXECUTE", False),
         configured_mode=configured_mode,
         warnings=warnings,

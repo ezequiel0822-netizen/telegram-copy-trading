@@ -30,6 +30,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -158,6 +159,11 @@ class OllamaParser:
         self.model = settings.ollama_model
         self.timeout = settings.ollama_timeout_seconds
         self._aviso_dado = False
+        # Un modelo local sin placa de video usa todos los nucleos disponibles.
+        # Si llegan tres mensajes raros seguidos y se lanzan tres consultas en
+        # paralelo, se pelean por la misma CPU y las tres tardan mucho mas que
+        # si esperaran turno. El candado las serializa.
+        self._turno = asyncio.Lock()
 
     # -- Disponibilidad ----------------------------------------------------
 
@@ -204,7 +210,8 @@ class OllamaParser:
         if not vale_la_pena_consultar(mensaje):
             return None
 
-        crudo = await asyncio.to_thread(self._consultar_sync, mensaje)
+        async with self._turno:
+            crudo = await asyncio.to_thread(self._consultar_sync, mensaje)
         if crudo is None:
             return None
 
@@ -227,17 +234,31 @@ class OllamaParser:
             headers={"Content-Type": "application/json"},
         )
 
+        comenzado = time.monotonic()
         try:
             with urllib.request.urlopen(peticion, timeout=self.timeout) as respuesta:
                 datos = json.loads(respuesta.read().decode("utf-8"))
         except (urllib.error.URLError, ValueError, TimeoutError, OSError) as exc:
-            if not self._aviso_dado:
+            transcurrido = time.monotonic() - comenzado
+            # El agotamiento de tiempo se distingue del resto y se avisa SIEMPRE,
+            # no una sola vez: en una maquina sin placa de video es el fallo
+            # probable, y si se silenciara el usuario veria a la IA no hacer
+            # nada nunca sin ninguna pista de por que.
+            if transcurrido >= self.timeout - 1:
+                logger.warning(
+                    "La IA local tardo mas de %ss y se corto. Subi OLLAMA_TIMEOUT_SECONDS "
+                    "en el .env, o usa un modelo mas chico (OLLAMA_MODEL=llama3.2:3b).",
+                    self.timeout,
+                )
+            elif not self._aviso_dado:
                 logger.warning(
                     "Ollama no pudo responder (%s). El sistema sigue con el parser de reglas.",
                     type(exc).__name__,
                 )
                 self._aviso_dado = True
             return None
+
+        logger.info("La IA local respondio en %.0fs", time.monotonic() - comenzado)
 
         try:
             return json.loads(datos.get("response") or "{}")

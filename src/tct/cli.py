@@ -1,6 +1,7 @@
 """Interfaz de linea de comandos.
 
     python -m tct check     # diagnostico: python, dependencias, .env, plataforma
+    python -m tct mt5       # lee tu cuenta MT5 y dice que poner en el .env
     python -m tct chats     # lista tus chats de Telegram con sus IDs
     python -m tct test      # prueba el parser con un mensaje, sin tocar nada
     python -m tct status    # posiciones abiertas y estadisticas
@@ -176,6 +177,108 @@ def cmd_check(args: argparse.Namespace) -> int:
     print("  RESULTADO: " + ("todo listo para arrancar" if ok else "faltan cosas (ver arriba)"))
     print("=" * 62)
     return 0 if ok else 1
+
+
+# --------------------------------------------------------------------------
+# mt5
+# --------------------------------------------------------------------------
+
+
+def cmd_mt5(args: argparse.Namespace) -> int:
+    """Lee la cuenta de la terminal MT5 abierta y dice que poner en el .env.
+
+    Existe para eliminar la parte mas confusa de la instalacion: averiguar el
+    nombre EXACTO del servidor del broker. Ese nombre no se adivina (cada
+    broker tiene varios, y cambian), y escribirlo mal da un error de login que
+    no explica nada. Si la terminal ya esta abierta y logueada, el dato esta
+    ahi: se lee y listo.
+    """
+    if sys.platform != "win32":
+        print("Este comando solo sirve en Windows: el paquete MetaTrader5 no")
+        print("existe para otros sistemas. En macOS el camino es MetaApi.")
+        return 1
+
+    try:
+        import MetaTrader5 as mt5
+    except ImportError:
+        print("Falta el paquete MetaTrader5. Reinstala con:")
+        print("    pip install -r requirements.txt")
+        return 1
+
+    print("Conectando con la terminal MetaTrader 5 abierta...\n")
+    if not mt5.initialize():
+        codigo, mensaje = mt5.last_error()
+        print(f"[ERROR] No se pudo conectar: {mensaje} (codigo {codigo})\n")
+        print("Casi siempre es una de estas tres:")
+        print("  1. MetaTrader 5 no esta abierto. Abrilo.")
+        print("  2. Esta abierto pero sin loguear en ninguna cuenta.")
+        print("  3. Se abrio 'como administrador' y este comando no. Los dos")
+        print("     tienen que correr con el mismo nivel de permisos.")
+        return 1
+
+    try:
+        cuenta = mt5.account_info()
+        terminal = mt5.terminal_info()
+
+        if cuenta is None:
+            print("[ERROR] La terminal esta abierta pero sin cuenta cargada.")
+            print("Logueate en tu cuenta demo y volve a probar.")
+            return 1
+
+        demo_const = getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", None)
+        es_demo = cuenta.trade_mode == demo_const if demo_const is not None else None
+
+        print("=" * 58)
+        print("  CUENTA DETECTADA")
+        print("=" * 58)
+        print(f"  Titular    : {cuenta.name}")
+        print(f"  Broker     : {cuenta.company}")
+        print(f"  Login      : {cuenta.login}")
+        print(f"  Servidor   : {cuenta.server}")
+        print(f"  Balance    : {cuenta.balance} {cuenta.currency}")
+        tipo = "DEMO" if es_demo else "REAL" if es_demo is False else "desconocido"
+        print(f"  Tipo       : {tipo}")
+
+        print("\n" + "=" * 58)
+        print("  QUE PONER EN EL .env")
+        print("=" * 58)
+        print("  Copia estas dos lineas tal cual (la tercera es tu password):\n")
+        print(f"      MT5_LOGIN={cuenta.login}")
+        print(f"      MT5_SERVER={cuenta.server}")
+        print("      MT5_PASSWORD=<la de tu cuenta demo>")
+
+        # Avisos que evitan un fallo silencioso mas adelante.
+        problemas = []
+        if es_demo is False:
+            problemas.append(
+                "Esta cuenta es REAL, no demo. El bot se va a negar a operar en\n"
+                "     ella, que es justamente lo que queres. Crea una cuenta demo:\n"
+                "     en MetaTrader, Archivo -> Abrir una cuenta."
+            )
+        if terminal is not None and getattr(terminal, "trade_allowed", True) is False:
+            problemas.append(
+                "El boton 'Algo Trading' esta APAGADO. Ninguna orden va a entrar.\n"
+                "     Apretalo en la barra de arriba de MetaTrader (tiene que quedar\n"
+                "     verde) o presiona Ctrl+E."
+            )
+        if getattr(cuenta, "trade_allowed", True) is False:
+            problemas.append(
+                "El broker tiene el trading deshabilitado en esta cuenta.\n"
+                "     Suele pasar con cuentas demo vencidas: crea una nueva."
+            )
+
+        if problemas:
+            print("\n" + "=" * 58)
+            print("  HAY QUE ARREGLAR ESTO ANTES DE OPERAR")
+            print("=" * 58)
+            for i, p in enumerate(problemas, 1):
+                print(f"  {i}. {p}")
+        else:
+            print("\n  Todo en orden: cuenta demo y Algo Trading activado.")
+
+        return 1 if problemas else 0
+    finally:
+        mt5.shutdown()
 
 
 # --------------------------------------------------------------------------
@@ -381,6 +484,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("check", help="Diagnostico del entorno y la configuracion")
+    sub.add_parser("mt5", help="Lee tu cuenta de MetaTrader 5 y dice que poner en el .env")
 
     chats = sub.add_parser("chats", help="Lista tus chats de Telegram con sus IDs")
     chats.add_argument("--limit", type=int, default=60)
@@ -399,6 +503,7 @@ def main(argv: list[str] | None = None) -> int:
 
     handlers = {
         "check": cmd_check,
+        "mt5": cmd_mt5,
         "chats": cmd_chats,
         "test": cmd_test,
         "status": cmd_status,
