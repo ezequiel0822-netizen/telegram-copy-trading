@@ -14,6 +14,7 @@ perderia la unica evidencia de que la senal existio.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -65,6 +66,14 @@ class Engine:
         # Interprete de respaldo. None = apagado o no disponible; el sistema
         # funciona identico sin el.
         self.ollama = ollama
+        # Telethon despacha cada mensaje en su propia task. Sin este candado,
+        # dos senales casi simultaneas evaluan el riesgo a la vez (leyendo el
+        # mismo estado) y registran despues: las dos ven "0 posiciones
+        # abiertas" y las dos abren, salteandose MAX_OPEN_TRADES y la regla de
+        # una posicion por simbolo. Serializar el ciclo entero es la unica
+        # forma simple de que la foto que ve el riesgo siga siendo cierta
+        # cuando se escribe el resultado.
+        self._turno = asyncio.Lock()
 
     # -- Entrada principal -------------------------------------------------
 
@@ -73,6 +82,10 @@ class Engine:
 
         Devuelve un dict con lo que paso, util para tests y para el replay.
         """
+        async with self._turno:
+            return await self._procesar(text, metadata)
+
+    async def _procesar(self, text: str, metadata: dict[str, Any]) -> dict[str, Any]:
         chat_id = metadata.get("chat_id")
         message_id = metadata.get("message_id")
 
@@ -94,6 +107,24 @@ class Engine:
 
         if message_id is not None:
             self.store.mark_processed(chat_id, message_id)
+
+        # Las ediciones se exceptuan del dedup para captar correcciones (un SL
+        # mal tipeado que el grupo arregla). Pero si ese mensaje YA abrio una
+        # operacion, la edicion no puede abrir otra: los canales editan el
+        # mensaje viejo para marcar el resultado, y eso mandaba una orden
+        # nueva horas despues, a precio de mercado y con el SL original.
+        if (
+            is_edit
+            and event is not None
+            and event.event_type is EventType.OPEN
+            and self.store.ya_opero(chat_id, message_id)
+        ):
+            self.store.append_event("edicion_ignorada", {"signal": event.to_dict()})
+            self.store.save_state()
+            logger.info(
+                "Edicion de un mensaje que ya opero (%s). No se reabre.", message_id
+            )
+            return {"status": "edicion_ignorada", "signal": event.to_dict()}
 
         # La IA solo entra donde el parser de reglas fallo. Si el parser
         # entendio, no se la consulta: es mas rapida, gratis y determinista.
@@ -208,6 +239,30 @@ class Engine:
         # 2) Broker, solo si el modo lo permite.
         order = await self._send_open(event, lot, take_profits)
 
+        # Si el broker rechazo, NO se registra la posicion. Registrarla dejaria
+        # una fantasma: existe en el estado y no en el broker, bloquea el
+        # simbolo por la regla de "ya hay una posicion abierta" y ocupa cupo de
+        # MAX_OPEN_TRADES, para siempre. El paper trade de arriba ya quedo
+        # escrito, asi que la senal no se pierde.
+        if order is not None and not order.ok:
+            self.store.append_event("apertura_fallida", {
+                "trade_id": trade_id,
+                "signal": event.to_dict(),
+                "order": order.to_dict(),
+            })
+            await self._notify(
+                f"NO se pudo abrir {event.symbol}: {order.reason}\n"
+                "La senal quedo registrada, pero no hay ninguna posicion."
+            )
+            logger.error("El broker rechazo la apertura de %s: %s",
+                         event.symbol, order.reason)
+            return {
+                "status": "apertura_fallida",
+                "reason": order.reason,
+                "paper_trade": paper,
+                "signal": event.to_dict(),
+            }
+
         # 3) Estado. El ticket es el del broker si hubo, o el sintetico del
         #    paper broker, que igual sirve para atar cierres posteriores.
         position = OpenPosition(
@@ -224,6 +279,8 @@ class Engine:
             mode=self.settings.trading_mode,
         )
         self.store.add_position(position)
+        if event.telegram_message_id is not None:
+            self.store.marcar_que_opero(event.telegram_chat_id, event.telegram_message_id)
 
         self.store.append_event("aceptada", {
             "trade_id": trade_id,
@@ -276,6 +333,8 @@ class Engine:
             return {"status": "rechazada", "reasons": decision.reasons}
 
         results = []
+        cerradas = 0
+        fallidas: list[str] = []
         for position in targets:
             order = await self.broker.close_position(
                 ticket=position.broker_ticket, symbol=position.symbol, fraction=1.0
@@ -289,13 +348,32 @@ class Engine:
                 "order": order.to_dict(),
                 "signal": event.to_dict(),
             })
-            self.store.remove_position(position.trade_id)
+            # Solo se borra del estado si el broker confirmo. Borrarla igual
+            # dejaria la operacion viva en el broker y sin registro: ningun
+            # cierre posterior la encontraria, y correria sola hasta el SL.
+            if order.ok:
+                self.store.remove_position(position.trade_id)
+                cerradas += 1
+            else:
+                fallidas.append(f"{position.symbol}: {order.reason}")
             results.append(order.to_dict())
 
-        self.store.append_event("cierre", {"signal": event.to_dict(), "orders": results})
-        await self._notify(f"Cerradas {len(targets)} posicion(es): "
+        self.store.append_event("cierre", {
+            "signal": event.to_dict(), "orders": results, "fallidas": fallidas,
+        })
+
+        if fallidas:
+            await self._notify(
+                f"Cerradas {cerradas} de {len(targets)}. NO se pudieron cerrar:\n"
+                + "\n".join(f"  {f}" for f in fallidas)
+                + "\nSiguen abiertas y el bot las sigue teniendo en cuenta."
+            )
+            return {"status": "cierre_parcial_fallido", "count": cerradas,
+                    "fallidas": fallidas, "orders": results}
+
+        await self._notify(f"Cerradas {cerradas} posicion(es): "
                            f"{', '.join(p.symbol for p in targets)}")
-        return {"status": "cerrada", "count": len(targets), "orders": results}
+        return {"status": "cerrada", "count": cerradas, "orders": results}
 
     async def _handle_partial_close(self, event: SignalEvent) -> dict[str, Any]:
         decision, targets = evaluate_management(self.settings, self.store, event)
@@ -350,6 +428,14 @@ class Engine:
             order = await self.broker.modify_stop_loss(
                 ticket=position.broker_ticket, symbol=position.symbol, stop_loss=new_sl
             )
+            # Sin este chequeo el estado mentiria sobre donde esta el stop: el
+            # bot creeria estar protegido en breakeven mientras el broker lo
+            # mantiene donde estaba.
+            if not order.ok:
+                logger.error("No se pudo mover el SL de %s: %s",
+                             position.symbol, order.reason)
+                results.append(order.to_dict())
+                continue
             position.stop_loss = new_sl
             self.store.append_paper_trade({
                 "trade_id": position.trade_id,

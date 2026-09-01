@@ -75,7 +75,12 @@ def test_senal_valida_se_acepta_y_se_registra(engine):
 
 
 def test_el_paper_trade_se_registra_aunque_el_broker_falle(tmp_path):
-    """Regla del CONTEXTO MAESTRO: siempre se guarda el paper trade."""
+    """Regla del CONTEXTO MAESTRO: siempre se guarda el paper trade.
+
+    Pero el resultado NO puede decir "aceptada" cuando el broker rechazo, y
+    sobre todo no puede quedar una posicion registrada que en el broker no
+    existe: bloquearia el simbolo y ocuparia cupo para siempre.
+    """
 
     class BrokerRoto(PaperBroker):
         async def is_ready(self) -> bool:
@@ -87,9 +92,9 @@ def test_el_paper_trade_se_registra_aunque_el_broker_falle(tmp_path):
 
     result = send(engine, "XAUUSD BUY\nEntry 2345\nSL 2335\nTP 2355")
 
-    assert result["status"] == "aceptada"
-    assert result["order"]["ok"] is False, "el broker fallo..."
-    assert len(store.read_paper_trades()) == 1, "...pero el paper trade quedo igual"
+    assert len(store.read_paper_trades()) == 1, "el paper trade tiene que quedar igual"
+    assert result["status"] == "apertura_fallida", "no puede informar un exito que no hubo"
+    assert store.open_positions() == [], "no puede quedar una posicion fantasma"
 
 
 def test_simbolo_fuera_de_la_lista_blanca_se_rechaza(engine):

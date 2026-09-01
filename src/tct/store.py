@@ -93,6 +93,9 @@ class State:
 
     last_message_id: dict[str, int] = field(default_factory=dict)
     processed_message_ids: list[str] = field(default_factory=list)
+    # Mensajes que ya ABRIERON una operacion. Distinto de los procesados: hay
+    # que poder saber si una edicion corresponde a una senal ya ejecutada.
+    opened_message_ids: list[str] = field(default_factory=list)
     open_positions: list[OpenPosition] = field(default_factory=list)
     signals_today: int = 0
     signals_day: str = field(default_factory=_today_utc)
@@ -111,6 +114,7 @@ class State:
             # Se recorta a los ultimos 500: alcanza de sobra para deduplicar y
             # evita que el archivo de estado crezca sin techo.
             "processed_message_ids": self.processed_message_ids[-500:],
+            "opened_message_ids": self.opened_message_ids[-500:],
             "open_positions": [p.to_dict() for p in self.open_positions],
             "signals_today": self.signals_today,
             "signals_day": self.signals_day,
@@ -124,6 +128,7 @@ class State:
         return cls(
             last_message_id={str(k): int(v) for k, v in (data.get("last_message_id") or {}).items()},
             processed_message_ids=list(data.get("processed_message_ids") or []),
+            opened_message_ids=list(data.get("opened_message_ids") or []),
             open_positions=[OpenPosition.from_dict(p) for p in (data.get("open_positions") or [])],
             signals_today=int(data.get("signals_today") or 0),
             signals_day=data.get("signals_day") or _today_utc(),
@@ -179,6 +184,23 @@ class Store:
             self.state.last_message_id[str(chat_id)] = max(current, int(message_id))
         except (TypeError, ValueError):
             pass
+
+    # -- Mensajes que ya abrieron una operacion ----------------------------
+
+    def marcar_que_opero(self, chat_id: Any, message_id: Any) -> None:
+        """Recuerda que este mensaje ya abrio una operacion.
+
+        Es distinto de `mark_processed`: ese marca "lo vi", este marca "opere
+        por el". La diferencia importa porque las ediciones se exceptuan del
+        dedup a proposito (para captar un SL corregido), y sin esta segunda
+        marca una edicion del mensaje original abriria la operacion de nuevo.
+        """
+        clave = f"{chat_id}:{message_id}"
+        if clave not in self.state.opened_message_ids:
+            self.state.opened_message_ids.append(clave)
+
+    def ya_opero(self, chat_id: Any, message_id: Any) -> bool:
+        return f"{chat_id}:{message_id}" in set(self.state.opened_message_ids)
 
     # -- Posiciones --------------------------------------------------------
 
