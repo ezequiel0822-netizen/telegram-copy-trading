@@ -66,7 +66,11 @@ _ALIASES_BY_LENGTH = sorted(SYMBOL_ALIASES, key=len, reverse=True)
 _LABEL_RE = re.compile(
     r"(?P<TP>\b(?:TAKE\s*PROFITS?|TARGETS?|OBJETIVOS?|TPS?|T/P)\s*\d?(?![\d.,]))"
     r"|(?P<SL>\b(?:STOP\s*LOSS|STOPLOSS|SL|S/L|STOP)\b)"
-    r"|(?P<ENTRY>\b(?:ENTRY\s*ZONE|ENTRY\s*PRICE|ENTRY|ENTRADA|ENTER|PRECIO|PRICE|ZONA|ZONE)\b|@)"
+    # El "@" solo cuenta como etiqueta si lo sigue un numero ("BUY @ 2345").
+    # Sin ese lookahead, un @usuario del pie del mensaje ("@gold2345") pisaba
+    # el precio de entrada con los digitos del nombre, y como suele caer entre
+    # el SL y el TP la validacion geometrica no lo notaba.
+    r"|(?P<ENTRY>\b(?:ENTRY\s*ZONE|ENTRY\s*PRICE|ENTRY|ENTRADA|ENTER|PRECIO|PRICE|ZONA|ZONE)\b|@(?=\s*\d))"
 )
 
 # Numeros de precio. Ignora los que llevan % pegado (son fracciones de cierre,
@@ -93,6 +97,23 @@ _MOVE_SL_RE = re.compile(
     r"|\b(?:SL|STOP\s*LOSS)\b[^\n]{0,20}?\b(?:TO\s+)?(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN|ENTRY|ENTRADA)\b"
     r"|\b(?:BREAK\s*EVEN|BREAKEVEN)\b"
 )
+# Marcas de que el mensaje CUENTA algo que ya paso, en vez de pedir algo.
+#
+# Es el filtro mas importante del parser. Los canales postean recaps todo el
+# dia repitiendo la senal completa ("CERRADA EN GANANCIA / GOLD SELL 2350 /
+# SL 2360 / TP 2340"), y sin esto cada recap abria una operacion nueva: mismo
+# simbolo, mismo lado, precios coherentes entre si, geometria valida. Pasaba
+# todos los controles porque, mirado como datos, era una senal perfecta.
+#
+# No alcanza con las palabras de gestion (CERRAR, CLOSE): "cerrada" describe,
+# no ordena. Y no se puede usar el tilde verde solo, porque muchos canales lo
+# ponen de adorno en senales legitimas.
+_RESULTADO_RE = re.compile(
+    r"\b(?:CERRAD[AO]S?|RESULTADOS?|ALCANZAD[AO]S?|CONSEGUID[AO]S?|LOGRAD[AO]S?|"
+    r"GANANCIAS?|PROFITS?|PERDIDAS?|HIT|REACHED|SECURED|CLOSED)\b"
+    r"|[+-]\s*\d+\s*PIPS"
+)
+
 _BREAKEVEN_RE = re.compile(r"\b(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN)\b")
 _HALF_RE = re.compile(r"\b(?:HALF|MITAD)\b")
 _PERCENT_RE = re.compile(r"(\d{1,3})\s*%")
@@ -236,9 +257,31 @@ def _extract_order_type(text: str) -> tuple[OrderType, str]:
 
 
 def _extract_symbol(text: str) -> str | None:
+    """Encuentra el instrumento, priorizando el que acompana al BUY/SELL.
+
+    Antes ganaba el alias mas largo del diccionario sin importar donde
+    apareciera en el mensaje. Con "Mientras el gold descansa, BTC BUY 65000"
+    eso abria ORO en vez de bitcoin: una operacion en el instrumento
+    equivocado, con precios coherentes entre si, que pasaba todos los
+    controles.
+
+    Ahora gana el que esta mas cerca del BUY/SELL, que es donde vive el
+    instrumento de verdad; lo demas son menciones al pasar.
+    """
+    candidatos: list[tuple[int, int, str]] = []
     for alias in _ALIASES_BY_LENGTH:
-        if re.search(rf"\b{re.escape(alias)}\b", text):
-            return SYMBOL_ALIASES[alias]
+        for match in re.finditer(rf"\b{re.escape(alias)}\b", text):
+            # El tercer criterio es el largo negado: con la misma distancia,
+            # gana el alias mas especifico (NAS100 antes que NAS).
+            candidatos.append((match.start(), -len(alias), SYMBOL_ALIASES[alias]))
+
+    if candidatos:
+        lado = _SIDE_RE.search(text)
+        if lado is not None:
+            candidatos.sort(key=lambda c: (abs(c[0] - lado.start()), c[1]))
+        else:
+            candidatos.sort(key=lambda c: (c[0], c[1]))
+        return candidatos[0][2]
 
     # Par de divisas: dos monedas conocidas pegadas (EURUSD, GBPJPY...).
     for match in re.finditer(r"\b([A-Z]{3})([A-Z]{3})\b", text):
@@ -310,6 +353,12 @@ def _extract_prices(text: str) -> tuple[float | None, float | None, float | None
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         chunk = text[match.end() : end]
+        # Una linea en blanco cierra el bloque de precios. Sin esto, la ultima
+        # etiqueta se tragaba todo el pie del mensaje y cosas como
+        # "Valido 24hs. Grupo VIP 2024" entraban como take profits.
+        corte = chunk.find("\n\n")
+        if corte != -1:
+            chunk = chunk[:corte]
         kind = match.lastgroup
         numbers = _extract_numbers(chunk)
         if not numbers:
@@ -333,9 +382,14 @@ def _extract_numbers(text: str) -> list[float]:
     """Numeros de un fragmento, salteando los que llevan % o son parte de un ratio."""
     values: list[float] = []
     for match in _NUMBER_RE.finditer(text):
-        after = text[match.end() : match.end() + 3]
+        after = text[match.end() : match.end() + 8]
         if re.match(r"\s*%", after):
             continue  # "50%" es una fraccion de cierre, no un precio
+        # "80 PIPS", "2 LOTES", "24 HS": son cantidades, no niveles de precio.
+        # Sin esto, un "+80 pips" al final de un "SL a BE" se convertia en el
+        # stop loss nuevo, y el bot mandaba el SL de oro a 80.
+        if re.match(r"\s*(?:PIPS?|LOTES?|HS?|HORAS?|DIAS?|MIN)\b", after):
+            continue
         before = text[max(0, match.start() - 1) : match.start()]
         if before == ":" or re.match(r"\s*:", after):
             continue  # ratio tipo "1:3" o "R:R 1:2"
@@ -409,20 +463,58 @@ def _classify(
     close_fraction: float | None,
     warnings: list[str],
 ) -> EventType | None:
-    """Decide que pide el mensaje. None = no es de trading, ignorar."""
-    # Una senal completa (lado + SL o TP) gana sobre cualquier keyword de
-    # gestion: "SELL GOLD, close below 2340 invalidates" es una apertura.
+    """Decide que pide el mensaje. None = no es de trading, ignorar.
+
+    El ORDEN de las reglas es lo unico que importa aca, y cada una esta donde
+    esta por un caso concreto que rompia con el orden anterior.
+    """
+    # Una senal "completa" es lado + al menos un precio de riesgo. Se calcula
+    # primero porque casi todas las reglas de abajo la consultan.
     looks_like_new_signal = side is not None and (stop_loss is not None or take_profits)
-    if looks_like_new_signal:
-        return EventType.OPEN
 
     has_partial = bool(_PARTIAL_RE.search(text))
     has_close = bool(_CLOSE_RE.search(text))
     has_move_sl = bool(_MOVE_SL_RE.search(text))
 
-    if has_partial:
+    # --- 1) Gestion pura -------------------------------------------------
+    # Va primero, pero SOLO cuando el mensaje no trae una senal completa. Esa
+    # condicion es la que separa "Move SL to BE, +80 pips" (gestion, sin lado)
+    # de "GOLD SELL 2350, close below 2340 invalidates / SL 2360 / TP 2330"
+    # (apertura que menciona la palabra close de pasada).
+    if not looks_like_new_signal:
+        if has_partial:
+            if has_move_sl:
+                warnings.append(
+                    "El mensaje tambien pide mover el SL; se atiende el cierre parcial"
+                )
+            return EventType.PARTIAL_CLOSE
+        if has_close:
+            return EventType.CLOSE
         if has_move_sl:
-            warnings.append("El mensaje tambien pide mover el SL; se atiende el cierre parcial")
+            return EventType.MOVE_SL
+
+    # --- 2) Recaps y resultados ------------------------------------------
+    # Va DESPUES de la gestion y ANTES de la apertura. Un recap repite la
+    # senal entera y, mirado solo como datos, es indistinguible de una senal
+    # nueva: mismo lado, mismos precios, geometria valida. Lo unico que lo
+    # delata es que el texto habla en pasado.
+    #
+    # Tuvo que quedar despues de la gestion porque los mensajes de gestion
+    # legitimos tambien hablan de resultados: "TP1 hit, move SL to BE" o
+    # "close half, +80 pips" son ordenes, no cronicas.
+    #
+    # Devuelve None (se ignora sin ruido) y no UNKNOWN: un canal activo postea
+    # varios recaps por dia. Si sospechas que se traga senales de verdad,
+    # `tct simular` muestra que hizo con cada mensaje del dia.
+    if _RESULTADO_RE.search(text):
+        return None
+
+    # --- 3) Apertura -----------------------------------------------------
+    if looks_like_new_signal:
+        return EventType.OPEN
+
+    # --- 4) Gestion con senal completa (raro, pero posible) --------------
+    if has_partial:
         return EventType.PARTIAL_CLOSE
     if has_close:
         return EventType.CLOSE
