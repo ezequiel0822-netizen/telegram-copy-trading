@@ -133,3 +133,59 @@ def test_texto_de_cierre_al_final_no_contamina_los_tp():
     assert evento.take_profits == [2355.0, 2365.0], (
         f"el texto del final se colo como TP: {evento.take_profits}"
     )
+
+
+# --------------------------------------------------------------------------
+# Mensajes reales del canal del usuario
+# --------------------------------------------------------------------------
+# Salieron de correr `tct simular` contra el grupo de verdad. El del "dia
+# magico" se clasificaba como CLOSE y habria cerrado todas las posiciones
+# abiertas: la palabra "cerrar" estaba ahi, pero contando, no pidiendo.
+
+
+@pytest.mark.parametrize(
+    "mensaje",
+    [
+        "Hoy es simplemente un dia magico. Pudimos cerrar otra operacion en ganancia",
+        "Cerramos todo por hoy muchachos, buen dia",
+        "Logramos cerrar en TP2, felicitaciones a todos",
+        "Conseguimos cerrar 3 operaciones seguidas hoy",
+        "We closed another one in profit today",
+    ],
+)
+def test_una_cronica_no_es_una_orden(mensaje):
+    """Narrar que se cerro algo no puede cerrar nada."""
+    evento = parse_signal(mensaje)
+    assert evento is None or evento.event_type is not EventType.CLOSE, (
+        f"un mensaje que narra se interpreto como orden: {evento}"
+    )
+
+
+@pytest.mark.parametrize(
+    "mensaje,esperado",
+    [
+        ("Cerrar todo ahora", EventType.CLOSE),
+        ("Cierren la mitad del oro", EventType.PARTIAL_CLOSE),
+        ("Close all positions", EventType.CLOSE),
+        ("Close 50% XAUUSD", EventType.PARTIAL_CLOSE),
+        ("MOVER SL A 4444", EventType.MOVE_SL),
+    ],
+)
+def test_las_ordenes_de_verdad_siguen_funcionando(mensaje, esperado):
+    """El filtro de cronicas no puede tragarse las ordenes imperativas."""
+    evento = parse_signal(mensaje)
+    assert evento is not None, f"se descarto una orden legitima: {mensaje}"
+    assert evento.event_type is esperado
+
+
+def test_el_formato_deal_del_canal_se_lee_completo():
+    """Formato real: 'DEAL | GOLD (XAU/USD) BUY XAUUSD 4456'."""
+    evento = parse_signal(
+        "DEAL | GOLD (XAU/USD) BUY XAUUSD 4456\n"
+        "Parameters:\nTP1: 4460\nTP2: 4462\nTP3: 4464\nSL: 4448"
+    )
+    assert evento.event_type is EventType.OPEN
+    assert evento.symbol == "XAUUSD"
+    assert evento.entry == 4456.0
+    assert evento.stop_loss == 4448.0
+    assert evento.take_profits == [4460.0, 4462.0, 4464.0]

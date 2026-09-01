@@ -114,6 +114,24 @@ _RESULTADO_RE = re.compile(
     r"|[+-]\s*\d+\s*PIPS"
 )
 
+# Verbos que solo aparecen CONTANDO algo, nunca pidiendolo. Son primera
+# persona del plural en pasado, o participios: "pudimos cerrar", "cerramos",
+# "operacion cerrada". Ninguna orden real de un canal usa estas formas.
+#
+# Van en un regex aparte de _RESULTADO_RE y se chequean ANTES que la gestion,
+# porque el problema que resuelven es exactamente que la palabra de gestion
+# esta presente: "Pudimos CERRAR otra operacion" tiene CERRAR, y sin esto se
+# ejecutaba como una orden de cerrar todo.
+#
+# _RESULTADO_RE, en cambio, tiene marcas mas debiles (HIT, PIPS) que SI
+# aparecen en ordenes legitimas ("TP1 hit, move SL to BE"), por eso se chequea
+# despues de la gestion.
+_NARRATIVA_RE = re.compile(
+    r"\b(?:PUDIMOS|LOGRAMOS|CONSEGUIMOS|CERRAMOS|GANAMOS|TERMINAMOS|HICIMOS|"
+    r"SUMAMOS|LLEVAMOS\s+\w+\s+OPERACION|"
+    r"WE\s+(?:CLOSED|MADE|GOT|HIT)|MANAGED\s+TO)\b"
+)
+
 _BREAKEVEN_RE = re.compile(r"\b(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN)\b")
 _HALF_RE = re.compile(r"\b(?:HALF|MITAD)\b")
 _PERCENT_RE = re.compile(r"(\d{1,3})\s*%")
@@ -468,6 +486,14 @@ def _classify(
     El ORDEN de las reglas es lo unico que importa aca, y cada una esta donde
     esta por un caso concreto que rompia con el orden anterior.
     """
+    # --- 0) Cronicas -----------------------------------------------------
+    # Va primero de todo, incluso antes de la gestion, porque el problema que
+    # resuelve es que la palabra de gestion ESTA presente pero narrando.
+    # Caso real: "Hoy es un dia magico. Pudimos cerrar otra operacion" se
+    # ejecutaba como una orden de cerrar TODAS las posiciones abiertas.
+    if _NARRATIVA_RE.search(text):
+        return None
+
     # Una senal "completa" es lado + al menos un precio de riesgo. Se calcula
     # primero porque casi todas las reglas de abajo la consultan.
     looks_like_new_signal = side is not None and (stop_loss is not None or take_profits)
