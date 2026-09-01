@@ -226,3 +226,43 @@ def test_los_metadatos_de_telegram_se_conservan():
     assert event.is_edit is True
     assert event.source == "caption"
     assert "XAUUSD BUY" in event.raw_message, "el mensaje original queda para auditar"
+
+
+# --------------------------------------------------------------------------
+# Simbolos con digitos en el nombre
+# --------------------------------------------------------------------------
+# Regresion encontrada con `tct simular` sobre un dia de mensajes: el "30" de
+# US30 se leia como el precio de entrada. Afectaba a TODOS los indices, y en el
+# campo mas peligroso. El SL y los TP salian bien porque van tras una etiqueta;
+# la entrada, que se toma del texto suelto, era la que se envenenaba.
+
+
+@pytest.mark.parametrize(
+    "mensaje,simbolo,entrada",
+    [
+        ("US30 SELL 39,500\nSL 39,700\nTP 39,200", "US30", 39500.0),
+        ("NAS100 BUY 18500\nSL 18400\nTP 18700", "NAS100", 18500.0),
+        ("US500 BUY 5300\nSL 5280\nTP 5350", "US500", 5300.0),
+        ("GER40 SELL 18200\nSL 18300\nTP 18000", "GER40", 18200.0),
+        ("UK100 BUY 8200\nSL 8150\nTP 8300", "UK100", 8200.0),
+    ],
+)
+def test_los_digitos_del_simbolo_no_se_leen_como_precio(mensaje, simbolo, entrada):
+    event = parse_signal(mensaje)
+    assert event.symbol == simbolo
+    assert event.entry == entrada, "el numero del nombre del indice se colo como entrada"
+
+
+def test_alias_con_digitos_tampoco_contamina():
+    """'US100' es alias de NAS100 y tambien lleva digitos."""
+    event = parse_signal("US100 BUY 18500\nSL 18400\nTP 18700")
+    assert event.symbol == "NAS100"
+    assert event.entry == 18500.0
+
+
+def test_el_enmascarado_no_se_come_precios_legitimos():
+    """Enmascarar el simbolo no debe tocar ningun numero del mensaje."""
+    event = parse_signal("US30 BUY\nEntry 39,500\nSL 39,300\nTP1 39,800\nTP2 40,000")
+    assert event.entry == 39500.0
+    assert event.stop_loss == 39300.0
+    assert event.take_profits == [39800.0, 40000.0]

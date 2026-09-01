@@ -2,6 +2,8 @@
 
     python -m tct check     # diagnostico: python, dependencias, .env, plataforma
     python -m tct mt5       # lee tu cuenta MT5 y dice que poner en el .env
+    python -m tct simular   # reproduce los mensajes reales de hoy
+    python -m tct probar    # verifica la cadena completa contra MT5
     python -m tct chats     # lista tus chats de Telegram con sus IDs
     python -m tct test      # prueba el parser con un mensaje, sin tocar nada
     python -m tct status    # posiciones abiertas y estadisticas
@@ -282,6 +284,290 @@ def cmd_mt5(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# simular
+# --------------------------------------------------------------------------
+
+
+def cmd_simular(args: argparse.Namespace) -> int:
+    """Reproduce los mensajes reales de las ultimas horas contra el sistema.
+
+    Es la unica forma de saber si el parser entiende a ESE grupo sin esperar a
+    que llegue una senal nueva. Por defecto NO ejecuta nada: muestra que habria
+    pasado con cada mensaje. Con --ejecutar, corre de verdad contra la cuenta
+    demo.
+    """
+    settings = load_settings(args.env_file)
+    setup_logging(verbose=args.verbose)
+
+    if not settings.telegram_source_chats:
+        print("No hay ningun chat configurado en TELEGRAM_SOURCE_CHATS.")
+        print("Corre primero:  python -m tct chats")
+        return 1
+
+    return asyncio.run(_simular_async(settings, args))
+
+
+async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
+    from tct.brokers.base import build_broker
+    from tct.brokers.paper import PaperBroker
+    from tct.engine import Engine
+    from tct.signals.parser import parse_signal
+    from tct.store import Store
+    from tct.telegram.reader import fetch_recent_messages
+
+    print(f"Trayendo los mensajes de las ultimas {args.horas} horas...\n")
+    mensajes = await fetch_recent_messages(settings, horas=args.horas, limite=args.limite)
+
+    con_texto = [(t, m) for t, m in mensajes if t]
+    sin_texto = len(mensajes) - len(con_texto)
+
+    print("=" * 66)
+    print(f"  {len(mensajes)} mensajes en las ultimas {args.horas}h "
+          f"({len(con_texto)} con texto, {sin_texto} solo media)")
+    print("=" * 66)
+
+    if not con_texto:
+        print("\nNo hay mensajes de texto en ese rango. Proba con mas horas:")
+        print(f"    python -m tct simular --horas {args.horas * 3}")
+        return 0
+
+    # --- Modo mirada: solo el parser, sin motor ni broker -----------------
+    if not args.ejecutar:
+        interpretados = 0
+        for texto, meta in con_texto:
+            evento = parse_signal(texto, **{
+                k: v for k, v in meta.items()
+                if k in {"message_id", "chat_id", "is_edit", "reply_to_message_id", "source"}
+            })
+            resumen = " ".join(texto.split())[:58]
+            if evento is None:
+                if args.todos:
+                    print(f"  .  {resumen}")
+                continue
+            interpretados += 1
+            lado = evento.side.value if evento.side else "-"
+            print(f"  >  {resumen}")
+            print(f"     -> {evento.event_type.value} {evento.symbol or '?'} {lado} "
+                  f"e={evento.entry} sl={evento.stop_loss} tp={evento.take_profits}")
+            for aviso in evento.warnings:
+                print(f"        aviso: {aviso}")
+
+        print("\n" + "=" * 66)
+        print(f"  {interpretados} de {len(con_texto)} mensajes se interpretaron como senal")
+        print("=" * 66)
+        print("\n  Esto fue solo una mirada: no se registro ni ejecuto nada.")
+        print("  Para correrlo de verdad contra la cuenta demo:")
+        print(f"      python -m tct simular --horas {args.horas} --ejecutar")
+        if not args.todos:
+            print("\n  Para ver tambien los mensajes descartados, agrega --todos")
+        return 0
+
+    # --- Modo ejecucion: el ciclo completo, con broker real ---------------
+    # Se usa un almacenamiento aparte para no mezclar esta prueba con el
+    # historial real del bot.
+    carpeta = settings.data_dir / "simulacion"
+    store = Store(
+        carpeta / "events.jsonl", carpeta / "paper_trades.jsonl", carpeta / "state.json"
+    )
+    broker = build_broker(settings)
+    if not await broker.connect():
+        if settings.executes_orders:
+            print(f"\n[ERROR] No se pudo conectar el broker '{broker.name}'.")
+            print("Corre 'python -m tct mt5' para ver que pasa con MetaTrader.")
+            return 1
+        broker = PaperBroker()
+        await broker.connect()
+
+    print(f"\nEjecutando contra: {broker.name} (modo {settings.trading_mode})")
+    print(f"Registros de esta prueba en: {carpeta}\n")
+
+    engine = Engine(settings, store, broker)
+    conteo: dict[str, int] = {}
+    try:
+        for texto, meta in con_texto:
+            resultado = await engine.handle_message(texto, meta)
+            estado = resultado.get("status", "?")
+            conteo[estado] = conteo.get(estado, 0) + 1
+            if estado in {"ignorado", "duplicado"}:
+                continue
+            resumen = " ".join(texto.split())[:52]
+            print(f"  [{estado:<16}] {resumen}")
+            for motivo in resultado.get("reasons", []):
+                print(f"                     motivo: {motivo}")
+    finally:
+        await broker.disconnect()
+        store.save_state()
+
+    print("\n" + "=" * 66)
+    print("  RESULTADO")
+    print("=" * 66)
+    for estado, veces in sorted(conteo.items(), key=lambda p: -p[1]):
+        print(f"  {estado:<22} {veces}")
+
+    abiertas = store.open_positions()
+    if abiertas:
+        print(f"\n  Quedaron {len(abiertas)} posicion(es) abiertas:")
+        for p in abiertas:
+            print(f"    {p.symbol} {p.side} lote={p.lot} ticket={p.broker_ticket}")
+        print("\n  Si operaste contra MT5 demo, revisalas en la pestana 'Operaciones'")
+        print("  de MetaTrader y cerralas a mano si no las queres.")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# probar
+# --------------------------------------------------------------------------
+
+
+def cmd_probar(args: argparse.Namespace) -> int:
+    """Verifica la cadena completa contra MetaTrader 5, paso por paso.
+
+    Chequea conexion, cuenta demo, AutoTrading, resolucion de simbolos y
+    cotizaciones. Con --operar hace ademas la prueba de fuego: abre una
+    posicion del tamano minimo y la cierra enseguida. Eso es lo unico que
+    demuestra de verdad que el filling mode del broker es compatible, que es
+    la parte del sistema que no se puede verificar sin operar.
+    """
+    if sys.platform != "win32":
+        print("Este comando prueba MetaTrader 5 nativo, que solo existe en Windows.")
+        return 1
+
+    settings = load_settings(args.env_file)
+    setup_logging(verbose=args.verbose)
+    return asyncio.run(_probar_async(settings, args))
+
+
+async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
+    from tct.brokers.mt5_native import MT5NativeBroker
+    from tct.signals.models import OrderType, Side
+
+    fallos: list[str] = []
+
+    def paso(numero: str, titulo: str) -> None:
+        print(f"\n[{numero}] {titulo}")
+
+    print("=" * 66)
+    print("  PRUEBA DE LA CADENA COMPLETA CONTRA METATRADER 5")
+    print("=" * 66)
+
+    # --- 1. Conexion y cuenta -------------------------------------------
+    paso("1/5", "Conectando con MetaTrader 5...")
+    broker = MT5NativeBroker(settings)
+    if not await broker.connect():
+        print("      FALLO. Revisa arriba el motivo.")
+        print("\n  Lo mas comun: MetaTrader cerrado, sin loguear, o Algo Trading")
+        print("  apagado. 'python -m tct mt5' lo dice con mas detalle.")
+        return 1
+    print("      OK: conectado, cuenta demo y AutoTrading activo.")
+
+    mt5 = broker._mt5
+    try:
+        cuenta = mt5.account_info()
+        print(f"      {cuenta.company} | {cuenta.server} | {cuenta.balance} {cuenta.currency}")
+
+        # --- 2. Resolucion de simbolos -----------------------------------
+        paso("2/5", "Resolviendo los simbolos de ALLOWED_SYMBOLS contra el broker...")
+        resueltos: dict[str, str] = {}
+        for simbolo in sorted(settings.allowed_symbols):
+            real = await asyncio.to_thread(broker._resolver_contra_broker, simbolo)
+            if real:
+                resueltos[simbolo] = real
+                marca = "" if real == simbolo else f"  (el broker lo llama '{real}')"
+                print(f"      OK    {simbolo}{marca}")
+            else:
+                print(f"      FALTA {simbolo}  <- este broker no lo expone")
+        if not resueltos:
+            fallos.append("El broker no expone ninguno de los simbolos configurados")
+            print("\n      Ninguno resolvio. Revisa ALLOWED_SYMBOLS en el .env.")
+
+        # --- 3. Cotizaciones ---------------------------------------------
+        paso("3/5", "Pidiendo cotizaciones...")
+        con_precio: list[tuple[str, str, float]] = []
+        for canonico, real in resueltos.items():
+            info = await asyncio.to_thread(broker._ensure_symbol, real)
+            tick = mt5.symbol_info_tick(real) if info else None
+            if tick and tick.ask:
+                con_precio.append((canonico, real, tick.ask))
+                print(f"      OK    {canonico:<8} bid={tick.bid} ask={tick.ask}")
+            else:
+                print(f"      sin cotizacion: {canonico}  (mercado cerrado?)")
+        if not con_precio:
+            fallos.append("Ningun simbolo tiene cotizacion (puede ser el mercado cerrado)")
+
+        # --- 4. Volumen minimo -------------------------------------------
+        paso("4/5", "Verificando el lote configurado...")
+        for canonico, real, _ in con_precio[:3]:
+            info = await asyncio.to_thread(broker._ensure_symbol, real)
+            volumen = broker._normalize_volume(info, settings.default_lot)
+            if volumen is None:
+                print(f"      FALLA {canonico}: DEFAULT_LOT={settings.default_lot} fuera de rango")
+                fallos.append(f"DEFAULT_LOT invalido para {canonico}")
+            else:
+                aviso = "" if volumen == settings.default_lot else f"  (se ajusta a {volumen})"
+                print(f"      OK    {canonico:<8} lote {settings.default_lot}{aviso} "
+                      f"| min={info.volume_min} paso={info.volume_step}")
+
+        # --- 5. Orden real -------------------------------------------------
+        paso("5/5", "Prueba de orden real")
+        if not args.operar:
+            print("      SALTADA. Es la unica que demuestra que el filling mode")
+            print("      del broker es compatible, y es lo que no se puede saber")
+            print("      sin operar. Para hacerla:")
+            print("\n          python -m tct probar --operar")
+            print("\n      Abre una posicion del tamano minimo y la cierra enseguida.")
+        elif not con_precio:
+            print("      No se puede: ningun simbolo tiene cotizacion.")
+            fallos.append("Sin cotizaciones no se pudo probar una orden")
+        else:
+            canonico, real, precio = next(
+                ((c, r, p) for c, r, p in con_precio if c == args.simbolo), con_precio[0]
+            )
+            print(f"      Abriendo {canonico} ({real}) al minimo, para cerrarla enseguida...")
+
+            apertura = await broker.open_order(
+                symbol=canonico, side=Side.BUY, order_type=OrderType.MARKET,
+                lot=settings.default_lot, entry=None, stop_loss=None, take_profit=None,
+            )
+            if not apertura.ok:
+                print(f"      FALLO al abrir: {apertura.reason}")
+                fallos.append(f"No se pudo abrir la orden de prueba: {apertura.reason}")
+            else:
+                print(f"      OK: abierta. ticket={apertura.ticket} precio={apertura.price}")
+                cierre = await broker.close_position(
+                    ticket=apertura.ticket, symbol=canonico, fraction=1.0
+                )
+                if cierre.ok:
+                    print(f"      OK: cerrada. {cierre.reason}")
+                else:
+                    print(f"      FALLO al cerrar: {cierre.reason}")
+                    fallos.append(
+                        f"La posicion {apertura.ticket} se abrio pero NO se cerro. "
+                        "Cerrala a mano en MetaTrader."
+                    )
+    finally:
+        await broker.disconnect()
+
+    # --- Resumen ---------------------------------------------------------
+    print("\n" + "=" * 66)
+    if fallos:
+        print("  HAY PROBLEMAS")
+        print("=" * 66)
+        for i, f in enumerate(fallos, 1):
+            print(f"  {i}. {f}")
+        return 1
+
+    print("  TODO EN ORDEN")
+    print("=" * 66)
+    if args.operar:
+        print("  La cadena completa funciona: conexion, simbolos, cotizaciones,")
+        print("  y una orden real que se abrio y se cerro contra tu cuenta demo.")
+    else:
+        print("  Todo lo que se puede verificar sin operar esta bien.")
+        print("  Falta la prueba de fuego:  python -m tct probar --operar")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # chats
 # --------------------------------------------------------------------------
 
@@ -486,6 +772,24 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("check", help="Diagnostico del entorno y la configuracion")
     sub.add_parser("mt5", help="Lee tu cuenta de MetaTrader 5 y dice que poner en el .env")
 
+    simular = sub.add_parser(
+        "simular", help="Reproduce los mensajes reales de hoy contra el sistema")
+    simular.add_argument("--horas", type=int, default=24,
+                         help="Cuantas horas hacia atras traer (por defecto 24)")
+    simular.add_argument("--limite", type=int, default=200,
+                         help="Maximo de mensajes por chat (por defecto 200)")
+    simular.add_argument("--ejecutar", action="store_true",
+                         help="Ejecutar de verdad. Sin esto solo muestra que pasaria.")
+    simular.add_argument("--todos", action="store_true",
+                         help="Mostrar tambien los mensajes que se descartan")
+
+    probar = sub.add_parser(
+        "probar", help="Verifica la cadena completa contra MetaTrader 5")
+    probar.add_argument("--operar", action="store_true",
+                        help="Abrir y cerrar una posicion real de prueba en la demo")
+    probar.add_argument("--simbolo", default="XAUUSD",
+                        help="Simbolo para la prueba de orden (por defecto XAUUSD)")
+
     chats = sub.add_parser("chats", help="Lista tus chats de Telegram con sus IDs")
     chats.add_argument("--limit", type=int, default=60)
 
@@ -504,6 +808,8 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "check": cmd_check,
         "mt5": cmd_mt5,
+        "simular": cmd_simular,
+        "probar": cmd_probar,
         "chats": cmd_chats,
         "test": cmd_test,
         "status": cmd_status,

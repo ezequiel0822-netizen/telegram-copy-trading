@@ -123,12 +123,16 @@ def parse_signal(
     order_type, masked = _extract_order_type(text)
     symbol = _extract_symbol(masked)
     side = _extract_side(masked)
-    entry_low, entry_high, stop_loss, take_profits = _extract_prices(masked)
+
+    # Los precios se buscan sobre el texto SIN los nombres de instrumento: si
+    # no, el "30" de US30 se lee como un precio. Ver `_mask_symbols`.
+    sin_simbolos = _mask_symbols(masked)
+    entry_low, entry_high, stop_loss, take_profits = _extract_prices(sin_simbolos)
 
     # Fallback: "GOLD BUY 2345" no tiene etiqueta "Entry". Si hay lado y no se
     # encontro entrada, tomamos el primer numero suelto que no sea SL ni TP.
     if entry_low is None and side is not None:
-        entry_low, entry_high = _loose_entry(masked, exclude={stop_loss, *take_profits})
+        entry_low, entry_high = _loose_entry(sin_simbolos, exclude={stop_loss, *take_profits})
 
     close_fraction = _extract_close_fraction(masked)
 
@@ -249,6 +253,36 @@ def _extract_symbol(text: str) -> str | None:
             return base + quote
 
     return None
+
+
+def _mask_symbols(text: str) -> str:
+    """Borra los nombres de instrumento antes de buscar precios.
+
+    Sin esto, "US30 SELL 39,500" toma el 30 de "US30" como precio de entrada:
+    el nombre del instrumento LLEVA digitos y el extractor de numeros no
+    distingue. Afecta a todos los indices (US30, NAS100, US500, GER40, UK100)
+    justo en el campo mas peligroso, la entrada.
+
+    Se reemplaza por espacios de la misma longitud para no correr las
+    posiciones, que el troceado por etiquetas necesita intactas.
+    """
+    masked = text
+    for alias in _ALIASES_BY_LENGTH:
+        masked = re.sub(
+            rf"\b{re.escape(alias)}\b",
+            lambda m: " " * len(m.group(0)),
+            masked,
+        )
+    # Los pares de divisas no traen digitos, pero se enmascaran igual para que
+    # ningun resto suyo pueda confundirse con un numero.
+    def _borrar_par(match: re.Match[str]) -> str:
+        base, quote = match.group(1), match.group(2)
+        if base in _CURRENCIES and quote in _CURRENCIES and base != quote:
+            return " " * len(match.group(0))
+        return match.group(0)
+
+    masked = re.sub(r"\b([A-Z]{3})([A-Z]{3})\b", _borrar_par, masked)
+    return masked
 
 
 def _extract_side(text: str) -> Side | None:
