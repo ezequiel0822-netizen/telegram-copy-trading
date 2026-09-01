@@ -485,14 +485,42 @@ Falta decirle al bot **qué grupo** escuchar.
 
 Se abre una ventana negra ya parada en esa carpeta.
 
-### Activar el entorno
+### Activar el entorno — ojo, depende de la terminal
+
+Windows tiene dos terminales y **el comando no es el mismo**. Si copiás el de
+una en la otra, no funciona.
+
+**Si abriste `cmd`** (la ventana negra clásica):
 
 ```
 .venv\Scripts\activate
 ```
 
-Vas a ver que la línea ahora empieza con `(.venv)`. **Esto hay que hacerlo cada
-vez que abrís una terminal nueva.** Si algo "no anda", casi siempre es esto.
+**Si estás en PowerShell** (la ventana azul, o si escribiste `powershell`):
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+En los dos casos, cuando funciona, la línea pasa a empezar con `(.venv)`.
+**Hay que hacerlo cada vez que abrís una terminal nueva.** Si algo "no anda",
+casi siempre es esto.
+
+> ### La forma que funciona siempre
+>
+> Si PowerShell te dice que **no puede cargar el archivo porque la ejecución de
+> scripts está deshabilitada**, o si simplemente no querés acordarte de cuál
+> comando va en cuál terminal, hay una alternativa que **no necesita activar
+> nada**: llamar directamente al Python del proyecto.
+>
+> ```
+> .\.venv\Scripts\python.exe -m tct chats
+> ```
+>
+> Funciona igual en `cmd` y en PowerShell, y no depende de ninguna política de
+> Windows. Es más largo de escribir, pero nunca falla. En el resto de la guía,
+> donde diga `python -m tct algo`, podés usar
+> `.\.venv\Scripts\python.exe -m tct algo` sin activar el entorno.
 
 ### Listar tus grupos
 
@@ -543,25 +571,55 @@ TELEGRAM_SOURCE_CHATS=-1001234567890,-1009876543210
 
 Doble clic en **`scripts\diagnostico.bat`**.
 
-Fijate en dos lugares.
+Este comando **no modifica nada**, así que podés correrlo las veces que quieras.
+Es la forma de saber en qué punto estás.
 
-**Uno**, el modo. Tiene que decir:
+### Cómo leer lo que sale
+
+El diagnóstico imprime bastante. Estas son las líneas que importan:
+
+| Línea | Qué significa |
+|---|---|
+| `Telethon : configurado` | Ya pusiste `TELEGRAM_API_ID` y `TELEGRAM_API_HASH`. |
+| `Telethon : FALTA` | Faltan esos dos datos (paso 7). |
+| `Chats fuente : (ninguno)` | Todavía no elegiste el grupo (paso 9). |
+| `IA local : llama3.2:3b (solo avisa)` | Ollama funcionando. El "solo avisa" es lo correcto. |
+| `IA local : apagada` | Sin IA. El bot funciona igual, solo pierde los mensajes raros. |
+| `Modo : AUTO -> PAPER_ONLY` | Sin datos de MT5: registra pero no opera. |
+| `Modo : AUTO -> PAPER_AND_MT5_DEMO` | Con MT5 conectado: **opera en tu cuenta demo**. |
+
+Abajo de todo, cada línea que empieza con `[FALTA]` es una cosa pendiente, y
+dice cuál.
+
+### Un ejemplo a mitad de camino
+
+Es normal que el diagnóstico diga "faltan cosas" durante un rato. Por ejemplo,
+esto está **bien encaminado**, no roto:
 
 ```
-Modo            : AUTO -> PAPER_AND_MT5_DEMO
+    Modo            : AUTO -> PAPER_ONLY
+    IA local        : llama3.2:3b (solo avisa)
+    Chats fuente    : (ninguno)
+    Telethon        : configurado
+
+  [FALTA]   TELEGRAM_SOURCE_CHATS
+
+  RESULTADO: faltan cosas (ver arriba)
 ```
 
-Si dice `AUTO -> PAPER_ONLY`, faltan datos de MT5 en el `.env`. Tienen que
-estar **los tres**: login, contraseña y servidor.
+Ahí, Python, las dependencias, el `.env` y la IA ya están. Quedan dos cosas:
+elegir el grupo de Telegram (paso 9) y conectar MetaTrader (pasos 4 a 6, más el
+`.env` del paso 8).
 
-**Dos**, el resultado final:
+### Cuando esté todo
 
 ```
+    Modo            : AUTO -> PAPER_AND_MT5_DEMO
+    Chats fuente    : -1001234567890
+    Telethon        : configurado
+
   RESULTADO: todo listo para arrancar
 ```
-
-Si falta algo, el mensaje dice exactamente qué. Este comando no modifica nada,
-así que podés correrlo las veces que quieras.
 
 ---
 
@@ -830,9 +888,19 @@ Subí `OLLAMA_TIMEOUT_SECONDS` en el `.env`, o pasá a un modelo más chico.
 
 ### General
 
-**`command not found: python`**
+**`command not found: python`** / **`python no se reconoce como un comando`**
 Falta activar el entorno. Desde la carpeta del proyecto:
-`.venv\Scripts\activate`
+- En `cmd`: `.venv\Scripts\activate`
+- En PowerShell: `.\.venv\Scripts\Activate.ps1`
+
+**PowerShell: "No se puede cargar el archivo... la ejecución de scripts está
+deshabilitada"**
+Es una protección de Windows contra scripts descargados. Dos salidas:
+- **La simple**: no actives nada y llamá directo al Python del proyecto:
+  `.\.venv\Scripts\python.exe -m tct check`
+- **La otra**: habilitalo solo para esa ventana, sin cambiar nada permanente:
+  `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
+  y después activá normalmente.
 
 **Se cerró la ventana del bot y no sé por qué**
 Mirá `logs\tct.log`, que guarda todo lo que pasó.
