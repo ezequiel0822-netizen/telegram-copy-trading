@@ -204,6 +204,54 @@ def distancia_al_mercado(event: SignalEvent, market_price: float) -> float | Non
     return abs(borde - market_price) / market_price * 100
 
 
+# Cuanto puede alejarse un stop del precio real antes de dar por hecho que el
+# numero esta mal leido. Es un FACTOR, no un porcentaje, y es enorme a
+# proposito.
+#
+# Un stop se pone lejos del mercado por definicion, y cuanto es "lejos" depende
+# del instrumento, de la estrategia y del dia: medirlo con la tolerancia de una
+# entrada rechazaria stops perfectamente sanos. Lo que NO depende de nada es la
+# ESCALA. Ningun stop legitimo vale el doble ni la mitad que el instrumento que
+# protege. Un 444 con el oro en 4438 (un digito comido) o un 4430 aplicado a
+# EURUSD en 1.08 (el numero de otro instrumento) quedan afuera por varios
+# ordenes de magnitud, y son justamente los dos errores que se buscan.
+#
+# No es configurable a proposito: no es una politica de riesgo que alguien
+# quiera ajustar, es verificar que el numero pertenezca a este mercado.
+FACTOR_ESCALA_STOP = 2.0
+
+
+def stop_fuera_de_escala(
+    stop_loss: float | None, market_price: float | None
+) -> str | None:
+    """Motivo por el que un stop no puede ser de este instrumento, o None.
+
+    Sin precio no opina, igual que todo lo demas que mira afuera: sin dato no
+    se inventa un motivo de rechazo.
+
+    Esto NO reemplaza la validacion del broker. MT5 ya rechaza un stop del lado
+    equivocado del mercado, que es la mitad de los desastres posibles. La otra
+    mitad, un stop del lado correcto pero absurdamente lejos, MT5 la ACEPTA sin
+    chistar: la posicion queda sin proteccion real y nadie se entera.
+    """
+    if stop_loss is None or market_price is None or market_price <= 0:
+        return None
+    if stop_loss <= 0:
+        return f"stop invalido ({_num(stop_loss)})"
+
+    if stop_loss > market_price * FACTOR_ESCALA_STOP:
+        return (
+            f"{_num(stop_loss)} es mas del doble del precio real "
+            f"({_num(market_price)}), no puede ser un stop de este instrumento"
+        )
+    if stop_loss < market_price / FACTOR_ESCALA_STOP:
+        return (
+            f"{_num(stop_loss)} es menos de la mitad del precio real "
+            f"({_num(market_price)}), no puede ser un stop de este instrumento"
+        )
+    return None
+
+
 def _num(valor: float | None) -> str:
     """Precio legible: 4438.5 y no 4438.500000000001; 1.0855 y no 1.09."""
     if valor is None:

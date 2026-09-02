@@ -21,7 +21,12 @@ from typing import Any
 
 from tct.brokers.base import Broker, OrderResult
 from tct.config import Settings
-from tct.risk import evaluate_management, evaluate_open, usable_take_profits
+from tct.risk import (
+    evaluate_management,
+    evaluate_open,
+    stop_fuera_de_escala,
+    usable_take_profits,
+)
 from tct.signals.models import EventType, SignalEvent, Side
 from tct.signals.parser import parse_signal
 from tct.store import OpenPosition, Store, utc_now_iso
@@ -237,7 +242,7 @@ class Engine:
 
         # Y el contraste con el precio real necesita saber cuanto vale el
         # instrumento AHORA, por el mismo motivo.
-        precio_mercado = await self._precio_de_mercado(event)
+        precio_mercado = await self._precio_para_abrir(event)
 
         decision = evaluate_open(
             self.settings, self.store, event, market_price=precio_mercado
@@ -503,11 +508,31 @@ class Engine:
         results = []
         movidas = 0
         fallidas: list[str] = []
+        descartadas: list[str] = []
         for position in targets:
             # "a breakeven" significa el precio de entrada de ESA posicion,
             # por eso se resuelve por posicion y no una sola vez.
             new_sl = position.entry if event.move_sl_to_breakeven else event.stop_loss
             if new_sl is None:
+                continue
+
+            # El contraste con el precio real, tambien en la gestion. Se
+            # resuelve POR POSICION y no una sola vez porque un "MOVER SL A
+            # 4430" sin simbolo aplica a TODAS las abiertas: 4430 es un stop
+            # perfecto para el oro y una barbaridad para EURUSD, que cotiza a
+            # 1.08. Y MT5 no ataja eso: rechaza los stops del lado equivocado,
+            # pero un stop del lado correcto y absurdamente lejos lo acepta sin
+            # chistar, dejando la posicion sin proteccion real.
+            #
+            # Se descartan solo las posiciones cuyo numero no da la escala, en
+            # vez de rechazar el mensaje entero: mover lo que se puede mover es
+            # mejor que no mover nada, y lo que quedo sin tocar se avisa.
+            motivo = stop_fuera_de_escala(
+                new_sl, await self._precio_de_mercado(position.symbol)
+            )
+            if motivo is not None:
+                logger.error("No se movio el SL de %s: %s", position.symbol, motivo)
+                descartadas.append(f"{position.symbol}: {motivo}")
                 continue
 
             order = await self.broker.modify_stop_loss(
@@ -536,23 +561,26 @@ class Engine:
             results.append(order.to_dict())
 
         self.store.append_event("mover_sl", {
-            "signal": event.to_dict(), "orders": results, "fallidas": fallidas,
+            "signal": event.to_dict(), "orders": results,
+            "fallidas": fallidas, "descartadas": descartadas,
         })
         destino = "breakeven" if event.move_sl_to_breakeven else str(event.stop_loss)
+        problemas = fallidas + descartadas
 
         # `results` incluye los rechazos, asi que contarlos como movidas decia
         # "SL movido en 1 posicion(es)" con el broker habiendo rechazado todo.
         # El estado ya estaba bien; lo que mentia era el aviso, que es lo unico
         # que la persona ve desde el telefono. Creerte protegido en breakeven
         # cuando el stop sigue donde estaba es peor que no recibir el aviso.
-        if fallidas:
+        if problemas:
             await self._notify(
-                f"SL a {destino}: salio en {movidas} de {len(fallidas) + movidas}.\n"
-                "NO se pudo mover en:\n" + "\n".join(f"  {f}" for f in fallidas)
+                f"SL a {destino}: salio en {movidas} de {len(problemas) + movidas}.\n"
+                "NO se pudo mover en:\n" + "\n".join(f"  {p}" for p in problemas)
                 + "\nEsas posiciones siguen con el stop anterior."
             )
             return {"status": "sl_movido_parcial", "count": movidas,
-                    "fallidas": fallidas, "orders": results}
+                    "fallidas": fallidas, "descartadas": descartadas,
+                    "orders": results}
 
         await self._notify(f"SL movido a {destino} en {movidas} posicion(es)")
         return {"status": "sl_movido", "count": movidas, "orders": results}
@@ -598,31 +626,38 @@ class Engine:
                     equity, inicial, caida, self.settings.max_daily_loss_pct,
                 )
 
-    async def _precio_de_mercado(self, event: SignalEvent) -> float | None:
-        """Trae la cotizacion real del instrumento de la senal.
+    async def _precio_de_mercado(self, symbol: str | None) -> float | None:
+        """Trae la cotizacion real de un instrumento.
 
-        Nunca lanza: si el broker no responde, el control contra el mercado se
-        queda sin dato y no opina. Es la misma politica que el freno diario, y
-        por el mismo motivo: un broker lento no puede dejar al bot sin operar.
+        Nunca lanza: si el broker no responde, quien la pidio se queda sin dato
+        y no opina. Es la misma politica que el freno diario, y por el mismo
+        motivo: un broker lento no puede dejar al bot sin operar.
 
         Se pide con el simbolo CANONICO (XAUUSD) y es el broker el que lo
         traduce a como se llame en esa cuenta, igual que al mandar la orden.
         """
-        if not event.symbol:
+        if not symbol:
             return None
-        # Si los dos controles estan apagados, la llamada es puro costo.
+        try:
+            return await self.broker.market_price(symbol)
+        except Exception:
+            logger.warning(
+                "No se pudo leer el precio de mercado de %s", symbol, exc_info=True
+            )
+            return None
+
+    async def _precio_para_abrir(self, event: SignalEvent) -> float | None:
+        """El precio que necesita el control de apertura, si esta encendido.
+
+        Con los dos limites en 0 la llamada seria puro costo en el camino
+        critico de una senal.
+        """
         if (
             self.settings.max_spread_from_entry_pct <= 0
             and self.settings.max_pending_distance_pct <= 0
         ):
             return None
-        try:
-            return await self.broker.market_price(event.symbol)
-        except Exception:
-            logger.warning(
-                "No se pudo leer el precio de mercado de %s", event.symbol, exc_info=True
-            )
-            return None
+        return await self._precio_de_mercado(event.symbol)
 
     async def _consultar_ia(self, text: str, metadata: dict[str, Any]) -> SignalEvent | None:
         """Consulta al interprete local. Nunca lanza: es una capa opcional."""

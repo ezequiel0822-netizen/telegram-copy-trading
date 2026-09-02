@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-02 · v0.6.0 · 284 tests · sobre el commit `b622a4e`
+Actualizado: 2026-09-02 · v0.7.0 · 303 tests · sobre el commit `80a139d`
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -71,6 +71,7 @@ Telegram (Telethon, sesión de usuario)
    ↓  engine.py         orquesta; serializa con un Lock
    ↓  risk.py           todas las validaciones, cada una con su motivo
    ↑  broker.market_price()   el unico dato de afuera que entra al riesgo
+                               (aperturas y tambien MOVE_SL)
    ↓  brokers/          paper | mt5_native (Windows) | metaapi (macOS)
    →  store.py          JSONL + estado atómico
 ```
@@ -155,6 +156,26 @@ a mercado, MT5 entra al precio actual e ignora la entrada del mensaje: lo que
 queda mal es el **stop**. Leer "entrada 2345, stop 2335" con el oro en 4438 no
 abre a mal precio, abre con dos mil puntos de riesgo. Por eso el control existe
 aunque la entrada parseada ni siquiera se envíe.
+
+**`risk.py` — en la gestión se mide ESCALA, no cercanía, y son cosas distintas.**
+Una entrada se compara contra el mercado con una tolerancia estricta (0.5%).
+Un **stop** no: se pone lejos del mercado por definición, y cuánto es "lejos"
+depende del instrumento, de la estrategia y del día. Aplicarle la tolerancia de
+una entrada rechazaría stops sanos todos los días. Por eso `FACTOR_ESCALA_STOP`
+es un **factor de 2**, enorme a propósito: lo único que ningún stop legítimo
+hace es valer el doble o la mitad que el instrumento que protege. Apretar ese
+número creyendo que "más estricto es más seguro" rompe el filtro.
+
+**`risk.py` — el chequeo de escala en la gestión descarta POR POSICIÓN, no
+rechaza el mensaje.** Un `MOVER SL A 4430` sin símbolo va a todo lo abierto:
+4430 es un stop perfecto para el oro y una barbaridad para EURUSD. Se mueve lo
+que se puede y se avisa lo que quedó sin tocar. Mover algunas y callarse las
+otras sería peor que no mover ninguna.
+
+**MT5 no alcanza como red para los stops.** Rechaza los del lado equivocado del
+mercado —la mitad de los desastres— pero un stop del lado correcto y
+absurdamente lejos lo **acepta sin chistar**: la posición queda sin protección
+real y nadie se entera. Ese hueco es el que tapa el chequeo de escala.
 
 **`control.py` — CUALQUIER comando desarma la confirmación, `/cerrar` incluido.**
 Y se desarma **antes** de mirar `_es_para_mi`. Exceptuar el `cerrar` parecía lo
@@ -325,11 +346,14 @@ Ordenado por lo que más importa antes de dinero real.
    `_aparece_en_texto` deja pasar prefijos (`3950` valida contra `39,500`), y
    rechaza números legítimos con separador de miles (el prompt le pide al
    modelo que copie las comas, y después el parseo se rompe con ellas).
-5. **El contraste con el mercado no cubre los eventos de gestión.** Un
-   `MOVER SL A 4444` no se compara contra nada: si el número está mal leído, el
-   stop se mueve igual. Solo se valida la apertura. Peor con un `MOVE_SL` sin
-   símbolo, que aplica el número de un instrumento a **todas** las posiciones
-   abiertas —ver la pregunta abierta de §2.
+5. **En la gestión solo se ataja el error de ESCALA, no el sutil.** Un
+   `MOVER SL A 4438` leído como `4338` pasa: está a 2% del mercado, que es un
+   stop perfectamente plausible. Distinguirlo de un stop ancho legítimo no se
+   puede sin saber la intención del mensaje, así que probablemente no tenga
+   arreglo por este lado. Lo que sí queda: un `MOVE_SL` sin símbolo sigue
+   aplicando a **todas** las posiciones cuya escala coincida —si el canal opera
+   oro y otro instrumento de precio parecido, el filtro no los separa. Ver la
+   pregunta abierta de §2.
 6. **Dos procesos con el mismo `.env` se pisan.** No hay lockfile.
 7. **Órdenes pendientes no se pueden cancelar.** Solo se usa `positions_get()`.
 8. **Sin P&L de los paper trades.** Es lo que haría falta para saber si el
