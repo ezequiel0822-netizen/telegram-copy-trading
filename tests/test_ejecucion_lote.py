@@ -116,6 +116,50 @@ def test_cerrar_nunca_se_bloquea_por_max_lot(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Llenado parcial: el broker ejecuta MENOS de lo que se le pidio
+# --------------------------------------------------------------------------
+
+
+def test_el_estado_guarda_el_volumen_llenado_no_el_pedido(tmp_path):
+    """MT5 devuelve en `result.volume` el volumen CONFIRMADO, que no tiene por
+    que ser el solicitado. El broker informaba el pedido, y como el motor ahora
+    construye el estado con ese numero, el bot creia tener abierto el doble de
+    lo que hay."""
+    _, store, engine, fake = armar(tmp_path, default_lot=0.10, max_lot=0.10)
+    fake.llenado = 0.5  # el broker llena la mitad
+
+    send(engine, SENAL)
+
+    assert fake.posiciones_abiertas()[0].volume == pytest.approx(0.05)
+    assert store.open_positions()[0].lot == pytest.approx(0.05), (
+        "el estado dice 0.10 y en MT5 hay 0.05"
+    )
+
+
+def test_tras_un_llenado_parcial_el_estado_sigue_coincidiendo_con_mt5(tmp_path):
+    """La consecuencia encadenada: si el lote guardado esta inflado, la fraccion
+    que queda tras un cierre parcial tambien lo esta.
+
+    Se afirma el INVARIANTE (lo que dice el estado es lo que hay en MT5) y no
+    numeros fijos: el volumen real depende del paso del instrumento y del
+    redondeo de `_normalize_volume`, que puede dejar 0.02 donde uno esperaria
+    0.025. Clavar el numero probaria el redondeo, no la coherencia."""
+    _, store, engine, fake = armar(tmp_path, default_lot=0.10, max_lot=0.10)
+    fake.llenado = 0.5
+    send(engine, SENAL, message_id=1)
+    lote_original = store.open_positions()[0].lot
+
+    send(engine, "Close half XAUUSD", message_id=2)
+
+    en_mt5 = fake.posiciones_abiertas()[0].volume
+    restante = store.open_positions()[0].remaining_fraction
+    assert restante == pytest.approx(en_mt5 / lote_original), (
+        f"el estado dice que queda {restante:.0%} y en MT5 hay "
+        f"{en_mt5} de {lote_original}"
+    )
+
+
+# --------------------------------------------------------------------------
 # Cierre parcial sobre el lote minimo
 # --------------------------------------------------------------------------
 

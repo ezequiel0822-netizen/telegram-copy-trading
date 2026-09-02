@@ -514,6 +514,14 @@ class Engine:
             # por eso se resuelve por posicion y no una sola vez.
             new_sl = position.entry if event.move_sl_to_breakeven else event.stop_loss
             if new_sl is None:
+                # `evaluate_management` solo rechaza si NINGUNA posicion tiene
+                # entrada. Con una mezcla, las que no la tienen se salteaban en
+                # SILENCIO y el aviso igual decia "SL movido a breakeven en 1
+                # posicion(es)": te ibas creyendo que quedaron todas protegidas.
+                descartadas.append(
+                    f"{position.symbol}: sin precio de entrada registrado, "
+                    "no hay a donde llevar el breakeven"
+                )
                 continue
 
             # El contraste con el precio real, tambien en la gestion. Se

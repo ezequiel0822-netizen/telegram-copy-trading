@@ -192,6 +192,80 @@ def test_nuestras_propias_respuestas_no_cancelan_la_confirmacion(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Los dos silencios peligrosos
+#
+# Simetricos y los dos caros: quedarse armado sin avisar termina cerrando algo
+# que no querias, y cancelar sin avisar te deja creyendo que cerraste.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("basura", ["/", "/   ", "/\t"])
+def test_una_barra_pelada_no_deja_la_confirmacion_armada(tmp_path, basura):
+    """`partes[0]` sobre un "/" solo reventaba con IndexError ANTES de
+    desarmar. En produccion el listener se traga la excepcion: la persona no
+    recibia respuesta, la confirmacion quedaba viva, y el SI siguiente cerraba.
+    Un agujero justo en la propiedad que este modulo garantiza."""
+    _, store, engine, control = _instancia(tmp_path, "demo")
+    send(engine, SENAL)
+    asyncio.run(control.manejar("/cerrar todo"))
+
+    asyncio.run(control.manejar(basura))  # no puede reventar
+
+    assert control._confirmacion is None, "quedo armada tras un comando roto"
+    asyncio.run(control.manejar("SI"))
+    assert len(store.open_positions()) == 1, "el SI cerro despues de un '/'"
+
+
+@pytest.mark.parametrize("intermedio", ["/posiciones", "/estado", "/ayuda", "/loquesea", "/"])
+def test_cancelar_por_otro_comando_se_avisa(tmp_path, intermedio):
+    """Pedis /cerrar todo, mandas un /posiciones para chequear, contestas SI, y
+    no pasa nada sin un solo mensaje. Te vas creyendo que cerraste."""
+    _, store, engine, control = _instancia(tmp_path, "demo")
+    send(engine, SENAL)
+    asyncio.run(control.manejar("/cerrar todo"))
+
+    respuesta = asyncio.run(control.manejar(intermedio))
+
+    assert respuesta is not None, "cancelo el cierre sin decir nada"
+    assert "CANCELADO" in respuesta.upper()
+    assert len(store.open_positions()) == 1
+
+
+def test_repetir_cerrar_no_dice_cancelado(tmp_path):
+    """Lo que no hay que romper: un /cerrar nuevo se rearma y su propio mensaje
+    ya dice como quedo la cosa. Un 'CANCELADO' ahi seria confuso."""
+    _, _, engine, control = _instancia(tmp_path, "demo")
+    send(engine, SENAL)
+    asyncio.run(control.manejar("/cerrar todo"))
+
+    respuesta = asyncio.run(control.manejar("/cerrar todo"))
+
+    assert "CANCELADO" not in respuesta.upper()
+    assert control._confirmacion is not None, "se desarmo cuando tenia que rearmarse"
+
+
+def test_la_instancia_que_no_era_destinataria_avisa_que_desarmo(tmp_path):
+    """Cuando la real desarma por un comando dirigido a la demo, decirlo es lo
+    que permite notar que algo raro estaba pasando. El silencio ahi fue
+    exactamente lo que hizo invisible al peor bug del proyecto."""
+    demo, real, _, _ = dos_instancias_de(tmp_path)
+
+    a_las_dos(demo, real, "/cerrar")
+    _, respuesta_real = a_las_dos(demo, real, "/pausa demo")
+
+    assert respuesta_real is not None and "CANCELADO" in respuesta_real.upper()
+
+
+def dos_instancias_de(tmp_path):
+    """Igual que la fixture, pero invocable desde un test que ya usa tmp_path."""
+    _, store_demo, engine_demo, demo = _instancia(tmp_path, "demo")
+    _, store_real, engine_real, real = _instancia(tmp_path, "real", live=True)
+    send(engine_demo, SENAL, message_id=1)
+    send(engine_real, SENAL, message_id=1)
+    return demo, real, store_demo, store_real
+
+
+# --------------------------------------------------------------------------
 # Un cierre que falla a mitad
 # --------------------------------------------------------------------------
 

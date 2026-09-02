@@ -43,6 +43,23 @@ _ALIAS_DE_BROKER: dict[str, tuple[str, ...]] = {
 }
 
 
+def _volumen_confirmado(result: Any, pedido: float) -> float:
+    """El volumen que el broker dice haber ejecutado, o el pedido si no lo dice.
+
+    `OrderSendResult.volume` es el volumen CONFIRMADO por el broker, y no tiene
+    por que coincidir con el solicitado: un llenado parcial ejecuta menos. El
+    motor arma el estado con este numero, asi que informar el pedido lo dejaba
+    creyendo tener abierto mas de lo que hay, y calculando los cierres
+    parciales sobre un lote que no existe.
+    """
+    ejecutado = getattr(result, "volume", None)
+    try:
+        ejecutado = float(ejecutado) if ejecutado is not None else 0.0
+    except (TypeError, ValueError):
+        ejecutado = 0.0
+    return ejecutado or float(pedido)
+
+
 class MT5NativeBroker(Broker):
     name = "mt5"
 
@@ -320,7 +337,11 @@ class MT5NativeBroker(Broker):
                     reason="orden ejecutada",
                     ticket=int(result.order or result.deal or 0) or None,
                     price=float(result.price or price),
-                    lot=volume,
+                    # El volumen CONFIRMADO por el broker, no el que se pidio.
+                    # MT5 puede llenar menos de lo solicitado, y el motor
+                    # construye el estado con este numero: informar el pedido
+                    # dejaba al bot creyendo tener abierto mas de lo que hay.
+                    lot=_volumen_confirmado(result, volume),
                     symbol=symbol,
                     raw={"retcode": result.retcode, "comment": result.comment},
                 )
@@ -385,7 +406,10 @@ class MT5NativeBroker(Broker):
             if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
                 return OrderResult(
                     ok=True, action=action, reason="cierre ejecutado", ticket=ticket,
-                    price=float(result.price or 0) or None, lot=float(volume), symbol=symbol,
+                    price=float(result.price or 0) or None,
+                    # Igual que al abrir: lo que el broker cerro de verdad. De
+                    # este numero sale la fraccion que el motor da por cerrada.
+                    lot=_volumen_confirmado(result, volume), symbol=symbol,
                     raw={"retcode": result.retcode},
                 )
             if result is not None and result.retcode != getattr(mt5, "TRADE_RETCODE_INVALID_FILL", 10030):

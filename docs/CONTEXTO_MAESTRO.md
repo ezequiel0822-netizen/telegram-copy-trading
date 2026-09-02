@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-02 · v0.7.0 · 303 tests · sobre el commit `80a139d`
+Actualizado: 2026-09-02 · v0.7.1 · 316 tests · sobre el commit `84a1a10`
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -177,6 +177,13 @@ mercado —la mitad de los desastres— pero un stop del lado correcto y
 absurdamente lejos lo **acepta sin chistar**: la posición queda sin protección
 real y nadie se entera. Ese hueco es el que tapa el chequeo de escala.
 
+**`mt5_native.py` — el lote que se informa es `result.volume`, no el pedido.**
+MT5 devuelve en `result.volume` el volumen que el bróker **confirmó**, y puede
+llenar de menos. Todo el estado del bot se arma con ese número: el lote de la
+posición, la fracción que queda tras un parcial, el aviso. Volver a
+`lot=volume` (el solicitado) parece equivalente y deja al bot creyendo tener
+abierto más de lo que hay.
+
 **`control.py` — CUALQUIER comando desarma la confirmación, `/cerrar` incluido.**
 Y se desarma **antes** de mirar `_es_para_mi`. Exceptuar el `cerrar` parecía lo
 lógico (el `/cerrar` es justo el que la arma) y era el peor bug del proyecto: con
@@ -291,9 +298,38 @@ que se guarda es el que aceptó el bróker, y el descuento de un parcial se
 calcula con el volumen realmente cerrado.
 
 La otra pieza que faltaba es `tests/fake_mt5.py`: una terminal MT5 falsa que
-ajusta volúmenes al mínimo del instrumento y sabe rechazar. Todo lo de arriba
-es indetectable contra el bróker de papel. **Cualquier cambio en el volumen o
-en el estado de las posiciones se prueba ahí.**
+ajusta volúmenes al mínimo del instrumento, sabe llenar de menos y sabe
+rechazar. Todo lo de arriba es indetectable contra el bróker de papel.
+**Cualquier cambio en el volumen o en el estado de las posiciones se prueba ahí.**
+
+### Tercera ronda: los cuatro que dejó el arreglo anterior
+
+Una revisión posterior encontró cuatro huecos **en los arreglos de la segunda
+ronda**, que es la moraleja en sí misma: arreglar una familia de bugs no la
+cierra sola.
+
+- **Una barra pelada (`/`) reventaba con `IndexError` antes de desarmar la
+  confirmación.** `partes[0]` sobre un `"/"` solo. En producción el listener se
+  traga la excepción: la persona no recibía respuesta, la confirmación quedaba
+  viva, y el `SI` siguiente cerraba. Un agujero justo en la propiedad que el
+  arreglo anterior había establecido.
+- **Cancelar la confirmación era SILENCIOSO**, y ese es el peligro simétrico:
+  pedís `/cerrar todo`, mandás un `/posiciones` para chequear, contestás `SI`...
+  y no pasa nada, sin un solo mensaje. Te vas creyendo que cerraste.
+- **`mt5_native` informaba el volumen PEDIDO, no el ejecutado.** MT5 devuelve el
+  confirmado en `result.volume` y puede llenar de menos. Como el motor ahora
+  construye el estado con ese número, el arreglo anterior quedaba a medias: el
+  bot creía tener abierto más de lo que hay.
+- **Un breakeven sobre una posición sin entrada registrada se salteaba en
+  silencio.** `evaluate_management` solo rechaza si NINGUNA la tiene; con una
+  mezcla, la que no la tenía quedaba sin tocar mientras el aviso anunciaba
+  éxito.
+
+Los cuatro los encontraron revisores independientes que **murieron por límite
+de uso antes de poder reportar nada**. Se recuperaron de los `git worktree` que
+dejaron atrás, corriendo los tests que habían escrito. Si volvés a quedarte sin
+resultados de una revisión, mirá ahí antes de darla por perdida:
+`git worktree list`.
 
 ---
 
@@ -312,6 +348,21 @@ devuelve el texto intacto sin error. Así se perdió el cableado del control por
 Telegram, y yo lo di por hecho en un commit.
 → **Todo script de parcheo debe hacer `assert viejo in t` antes de reemplazar.**
 Los scripts en el scratchpad ya lo hacen.
+
+**"Sin votos" no es lo mismo que "refutado".** Una revisión en paralelo contó
+los hallazgos que ningún verificador había podido mirar como *descartados*, y
+reportó *"0 confirmados, 14 descartados"* cuando la verdad era *"14 sin
+verificar"*. Exactamente al revés, y con cara de tranquilizador.
+→ **Un resultado agregado tiene que distinguir tres estados: confirmado,
+refutado y sin verificar.** Y si una etapa entera no corrió, decirlo arriba de
+todo.
+
+**Un agente que muere no necesariamente perdió su trabajo.** Los cinco
+revisores de la tercera ronda murieron por límite de uso sin reportar nada, y
+los cuatro bugs que habían encontrado se recuperaron enteros de los `git
+worktree` que dejaron: los tests que escribieron seguían ahí, y correrlos
+mostraba qué habían probado.
+→ Antes de dar por perdida una revisión: `git worktree list`.
 
 **Verificar imports no es verificar comportamiento.** `import tct.cli` pasaba
 con el control desconectado.
@@ -361,19 +412,36 @@ Ordenado por lo que más importa antes de dinero real.
    guarda `precio_mercado`, el precio real del instrumento en el momento de la
    señal. Falta el precio de salida.
 
-### Lo que quedó sin revisar
+### Hallazgos sin verificar, listos para levantar
 
-Una auditoría en paralelo se quedó a mitad de camino por límite de uso. Nunca
-corrieron:
+Los revisores de la tercera ronda dejaron esto reportado en sus worktrees y
+**nadie lo confirmó todavía**. No están arreglados. Van con el nombre del test
+que los reproduce, en `.claude/worktrees/wf_5dafb77b-b43-4/tests/`:
 
-- **Ninguna revisión independiente del contraste con el mercado** (§5 y el
-  commit `b622a4e`). Es código nuevo en el camino que decide si se manda una
-  orden, escrito y verificado por la misma persona. Lo que sí tiene son tests
-  de mutación: romper el cableado pone 11 tests en rojo, y neutralizar la regla
-  en `risk.py`, otros 8.
+- **`metaapi.py` no tiene nada de la segunda ronda.** Ni el techo de `MAX_LOT`,
+  ni el volumen ejecutado en el resultado de un cierre, así que el parcial sobre
+  lote mínimo deja la misma fantasma que se arregló en MT5. Es el camino de
+  macOS, que ya no es el destino, pero sigue existiendo.
+- **`metaapi.py::_to_result` toma una respuesta que no es `dict` como ÉXITO.**
+  `data = {}` → `string_code = ""` → `ok = True`. Un fallo raro del SDK se
+  registraría como orden ejecutada.
+- **El umbral `remaining_fraction <= 0.01` borra posiciones vivas.** Con un lote
+  grande, el 1% restante puede seguir siendo volumen operable.
+- **Una señal sin entrada abre con `entry=None`**, y después el breakeven no
+  tiene a dónde apuntar (ver el arreglo de la tercera ronda, que solo hace que
+  se avise).
+
+### Lo que sigue sin revisión independiente
+
+Dos intentos de revisión adversarial murieron por límite de uso, uno entero y
+otro a medias. Sigue sin mirar nadie más:
+
+- **El contraste con el mercado** (§5, commits `b622a4e` y `84a1a10`). Código
+  nuevo en el camino que decide si se manda una orden, escrito y verificado por
+  la misma persona. Lo que sí tiene son tests de mutación: romper el cableado
+  pone 11 tests en rojo, neutralizar la regla en `risk.py` otros 8, y
+  desconectar el chequeo de escala otros 6.
 - **La investigación del punto como separador de miles** (punto 3 de arriba).
-
-Si retomás esto, son los dos primeros lugares donde mirar.
 
 ---
 

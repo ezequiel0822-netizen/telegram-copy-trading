@@ -198,6 +198,27 @@ def test_el_breakeven_tambien_se_verifica(tmp_path):
     assert resultado["status"] == "sl_movido_parcial"
 
 
+def test_un_breakeven_sin_entrada_no_se_saltea_en_silencio(tmp_path):
+    """`evaluate_management` solo rechaza si NINGUNA posicion tiene entrada. Con
+    una mezcla, las que no la tienen se salteaban sin decir nada y el aviso
+    igual anunciaba exito: te ibas creyendo que quedaron todas en breakeven."""
+    store, engine, _, aviso = armar(tmp_path, {
+        "XAUUSD": {"bid": ORO - 0.5, "ask": ORO + 0.5},
+        "EURUSD": {"bid": 1.0850, "ask": 1.0860},
+    })
+    send(engine, SENAL_ORO, message_id=1)
+    send(engine, SENAL_EUR, message_id=2)
+    for p in store.open_positions():
+        if p.symbol == "EURUSD":
+            p.entry = None
+
+    resultado = send(engine, "Move SL to BE", message_id=3)
+
+    assert resultado["status"] == "sl_movido_parcial", "informo un exito completo"
+    assert any("EURUSD" in d for d in resultado["descartadas"])
+    assert "EURUSD" in aviso.mensajes[-1], "no dijo cual quedo sin proteger"
+
+
 def test_un_move_sl_normal_sigue_funcionando(tmp_path):
     """El caso feliz, que es el 99% de los mensajes."""
     store, engine, _, _ = armar(tmp_path)

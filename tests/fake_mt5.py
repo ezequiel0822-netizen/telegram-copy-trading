@@ -49,11 +49,15 @@ class FakeTick:
 
 
 class FakeResult:
-    def __init__(self, retcode, order=0, deal=0, price=0.0, comment=""):
+    def __init__(self, retcode, order=0, deal=0, price=0.0, comment="", volume=0.0):
         self.retcode = retcode
         self.order = order
         self.deal = deal
         self.price = price
+        # El volumen CONFIRMADO por el broker. MT5 lo devuelve siempre, y no
+        # tiene por que coincidir con el pedido: un llenado parcial ejecuta
+        # menos. Sin este campo, el fake no podia reproducir esa divergencia.
+        self.volume = volume
         self.comment = comment or ("ok" if retcode == TRADE_RETCODE_DONE else "rechazado")
 
 
@@ -103,6 +107,10 @@ class FakeMT5:
         self.enviados: list[dict[str, Any]] = []
         # Si se llena, la proxima order_send devuelve este retcode.
         self.rechazar_con: int | None = None
+        # Fraccion del volumen pedido que se llena de verdad. 1.0 = todo.
+        # Bajarla reproduce un llenado parcial, que es lo que hace que el
+        # volumen pedido y el ejecutado dejen de coincidir.
+        self.llenado = 1.0
 
     # -- Consultas ---------------------------------------------------------
 
@@ -174,19 +182,22 @@ class FakeMT5:
             posicion.volume = round(posicion.volume - cerrado, 8)
             if posicion.volume <= 0:
                 del self._posiciones[request["position"]]
-            return FakeResult(TRADE_RETCODE_DONE, price=request.get("price", 0.0))
+            return FakeResult(TRADE_RETCODE_DONE, price=request.get("price", 0.0),
+                              volume=cerrado)
 
         # Abrir.
         ticket = self._proximo_ticket
         self._proximo_ticket += 1
         es_compra = request["type"] in (self.ORDER_TYPE_BUY, self.ORDER_TYPE_BUY_LIMIT,
                                         self.ORDER_TYPE_BUY_STOP)
+        llenado = round(request["volume"] * self.llenado, 8)
         self._posiciones[ticket] = FakePosition(
-            ticket, request["symbol"], request["volume"],
+            ticket, request["symbol"], llenado,
             self.POSITION_TYPE_BUY if es_compra else self.POSITION_TYPE_SELL,
             sl=request.get("sl", 0.0), tp=request.get("tp", 0.0),
         )
-        return FakeResult(TRADE_RETCODE_DONE, order=ticket, price=request.get("price", 0.0))
+        return FakeResult(TRADE_RETCODE_DONE, order=ticket,
+                          price=request.get("price", 0.0), volume=llenado)
 
     # -- Ayudas para los tests --------------------------------------------
 

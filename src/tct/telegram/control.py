@@ -136,7 +136,13 @@ class ControlTelegram:
             return await self._resolver_confirmacion(texto)
 
         partes = texto[1:].split(maxsplit=1)
-        comando = partes[0].lower()
+        # Una barra pelada ("/", o "/   ") deja `partes` vacia. Con `partes[0]`
+        # a secas eso reventaba con IndexError ANTES de llegar a desarmar la
+        # confirmacion, y en produccion la excepcion se la tragaba el listener:
+        # la persona no recibia respuesta, la confirmacion quedaba armada, y el
+        # "SI" siguiente cerraba. Un agujero justo en la propiedad que este
+        # modulo existe para garantizar.
+        comando = partes[0].lower() if partes else ""
         resto = partes[1] if len(partes) > 1 else ""
 
         # Cualquier comando cancela una confirmacion pendiente, INCLUIDO otro
@@ -150,6 +156,7 @@ class ControlTelegram:
         # Se desarma ANTES de mirar `_es_para_mi`: desarmar de mas es inocuo,
         # desarmar de menos cierra una cuenta. Quien sea el destinatario se
         # vuelve a armar solo, unas lineas mas abajo, en `_cerrar`.
+        habia_confirmacion = self._confirmacion is not None
         self._confirmacion = None
 
         acciones = {
@@ -165,17 +172,34 @@ class ControlTelegram:
             "help": self._ayuda,
         }
         accion = acciones.get(comando)
-        if accion is None:
-            return None
+        es_mio = accion is not None and self._es_para_mi(resto)
 
-        if not self._es_para_mi(resto):
-            return None
+        # Cancelar en SILENCIO es el peligro simetrico al de no cancelar. Pedis
+        # /cerrar todo, mandas un /posiciones para chequear, contestas SI... y
+        # no pasa nada, sin un solo mensaje. Te vas creyendo que cerraste.
+        #
+        # Un /cerrar propio es la excepcion: se vuelve a armar ahi abajo y su
+        # propio mensaje dice como quedo la cosa, asi que avisar "cancelado"
+        # seria confuso.
+        aviso = ""
+        if habia_confirmacion and not (comando == "cerrar" and es_mio):
+            aviso = (
+                f"{self._cabecera()}\n"
+                "Cierre pendiente CANCELADO: llego otro mensaje. NO se cerro nada.\n"
+                "Si querias cerrar, mandame /cerrar todo de nuevo.\n\n"
+            )
+
+        if not es_mio:
+            return aviso or None
 
         try:
-            return await accion(resto)
+            return aviso + await accion(resto)
         except Exception:
             logger.exception("Fallo el comando /%s", comando)
-            return f"[{self.nombre}] El comando /{comando} fallo. El bot sigue vivo."
+            return (
+                f"{aviso}[{self.nombre}] El comando /{comando} fallo. "
+                "El bot sigue vivo."
+            )
 
     async def _resolver_confirmacion(self, texto: str) -> str | None:
         """Atiende un mensaje suelto cuando hay un cierre esperando confirmacion.
