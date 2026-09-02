@@ -30,9 +30,20 @@ posiciones piden confirmacion explicita.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Cuanto vive una confirmacion de cierre pendiente, en segundos.
+#
+# Existe porque una confirmacion sin vencimiento es una bomba de tiempo: pedis
+# /cerrar todo, te arrepentis, no contestas nada, y dos horas despues un "si"
+# sobre cualquier otro tema encuentra la confirmacion todavia armada y cierra
+# la cuenta. Con dos instancias corriendo, la que cierra puede ser la real.
+VENTANA_CONFIRMACION_SEG = 120
+
+_AFIRMATIVOS = frozenset({"SI", "SÍ", "YES", "DALE", "CONFIRMO"})
 
 # Vocabulario CERRADO de destinatarios. Es cerrado a proposito: la primera
 # palabra despues del comando puede ser un destinatario ("/pausa real") o el
@@ -73,9 +84,14 @@ class ControlTelegram:
         self.store = store
         self.engine = engine
         self.nombre = settings.instance_name.lower()
-        # La confirmacion de cierre vive solo en memoria y solo para el
-        # proximo mensaje: no debe sobrevivir a un reinicio ni quedar armada.
-        self._espera_confirmacion = False
+        # Confirmacion de cierre pendiente. None = no hay ninguna.
+        #
+        # Es un dict con CUANDO se armo, y no un bool, por dos motivos que
+        # costaron caro: un bool no puede caducar, y no deja distinguir una
+        # confirmacion propia de una que quedo colgada de un /cerrar anterior
+        # dirigido a otra instancia. Vive solo en memoria: no sobrevive a un
+        # reinicio, y eso es deliberado.
+        self._confirmacion: dict[str, Any] | None = None
 
     # -- Enrutado ----------------------------------------------------------
 
@@ -115,21 +131,26 @@ class ControlTelegram:
         # que ningun comando puede tener: con eso alcanza para cortarlo.
         if texto.startswith("["):
             return None
+
         if not texto.startswith("/"):
-            # Confirmacion pendiente de un /cerrar todo.
-            if self._espera_confirmacion and texto.strip().upper() in {"SI", "SÍ", "YES"}:
-                self._espera_confirmacion = False
-                return await self._cerrar_todo()
-            return None
+            return await self._resolver_confirmacion(texto)
 
         partes = texto[1:].split(maxsplit=1)
         comando = partes[0].lower()
         resto = partes[1] if len(partes) > 1 else ""
 
-        # Cualquier comando nuevo cancela una confirmacion pendiente: si
-        # cambiaste de tema, no queremos que un "si" posterior cierre todo.
-        if comando != "cerrar":
-            self._espera_confirmacion = False
+        # Cualquier comando cancela una confirmacion pendiente, INCLUIDO otro
+        # /cerrar. Antes el /cerrar se exceptuaba, y ahi vivia el peor bug del
+        # sistema: con dos instancias, un "/cerrar" a secas armaba a las DOS;
+        # el "/cerrar demo" siguiente no desarmaba a la real (se salteaba este
+        # reset) y ademas no le contestaba nada, asi que quedaba armada en
+        # silencio; y el "SI" posterior, que no tiene destinatario, le cerraba
+        # la cuenta REAL a alguien que creia estar cerrando la demo.
+        #
+        # Se desarma ANTES de mirar `_es_para_mi`: desarmar de mas es inocuo,
+        # desarmar de menos cierra una cuenta. Quien sea el destinatario se
+        # vuelve a armar solo, unas lineas mas abajo, en `_cerrar`.
+        self._confirmacion = None
 
         acciones = {
             "estado": self._estado,
@@ -155,6 +176,46 @@ class ControlTelegram:
         except Exception:
             logger.exception("Fallo el comando /%s", comando)
             return f"[{self.nombre}] El comando /{comando} fallo. El bot sigue vivo."
+
+    async def _resolver_confirmacion(self, texto: str) -> str | None:
+        """Atiende un mensaje suelto cuando hay un cierre esperando confirmacion.
+
+        Se consume la confirmacion pase lo que pase. El mensaje del bot promete
+        "cualquier otra cosa lo cancela", y esa promesa tiene que ser cierta:
+        antes un "no" explicito no cancelaba nada, porque solo se miraba si el
+        texto era afirmativo y todo lo demas se ignoraba en silencio.
+        """
+        pendiente = self._confirmacion
+        if pendiente is None:
+            return None
+
+        self._confirmacion = None
+        vencida = (time.monotonic() - pendiente["momento"]) > VENTANA_CONFIRMACION_SEG
+
+        if vencida:
+            return (
+                f"{self._cabecera()}\n"
+                f"Esa confirmacion ya vencio (pasaron mas de {VENTANA_CONFIRMACION_SEG} "
+                "segundos). NO se cerro nada.\n"
+                "Si igual queres cerrar, mandame /cerrar todo de nuevo."
+            )
+
+        if texto.strip().upper() not in _AFIRMATIVOS:
+            return f"{self._cabecera()}\nCierre CANCELADO. No se toco ninguna posicion."
+
+        # Este camino no pasa por el try/except de `manejar`, asi que lleva el
+        # suyo: si el broker se corta a mitad de un cierre masivo, la persona
+        # tiene que enterarse. Quedarse sin respuesta mientras las posiciones
+        # quedan a medio cerrar es la peor combinacion posible.
+        try:
+            return await self._cerrar_todo()
+        except Exception:
+            logger.exception("El cierre masivo fallo a mitad")
+            return (
+                f"{self._cabecera()}\n"
+                "El cierre fallo a mitad de camino. Puede haber quedado alguna\n"
+                "posicion abierta: revisala con /posiciones y en MetaTrader."
+            )
 
     # -- Comandos ----------------------------------------------------------
 
@@ -223,13 +284,14 @@ class ControlTelegram:
         if not abiertas:
             return f"{self._cabecera()}\nSin posiciones abiertas."
 
-        self._espera_confirmacion = True
+        self._confirmacion = {"momento": time.monotonic(), "posiciones": len(abiertas)}
         detalle = ", ".join(f"{p.symbol} {p.side}" for p in abiertas)
         real = " en la cuenta REAL" if self.settings.is_live else ""
         return (
             f"{self._cabecera()}\n"
             f"Vas a cerrar {len(abiertas)} posicion(es){real}:\n  {detalle}\n\n"
-            "Respondeme SI para confirmar. Cualquier otra cosa lo cancela."
+            f"Respondeme SI dentro de {VENTANA_CONFIRMACION_SEG} segundos.\n"
+            "Cualquier otra cosa lo cancela, y despues de ese rato tambien."
         )
 
     async def _cerrar_todo(self) -> str:
@@ -238,16 +300,22 @@ class ControlTelegram:
             return f"{self._cabecera()}\nYa no habia nada abierto."
 
         cerradas, fallidas = 0, []
-        for posicion in list(abiertas):
-            resultado = await self.engine.broker.close_position(
-                ticket=posicion.broker_ticket, symbol=posicion.symbol, fraction=1.0
-            )
-            if resultado.ok:
-                self.store.remove_position(posicion.trade_id)
-                cerradas += 1
-            else:
-                fallidas.append(f"{posicion.symbol}: {resultado.reason}")
-        self.store.save_state()
+        try:
+            for posicion in list(abiertas):
+                resultado = await self.engine.broker.close_position(
+                    ticket=posicion.broker_ticket, symbol=posicion.symbol, fraction=1.0
+                )
+                if resultado.ok:
+                    self.store.remove_position(posicion.trade_id)
+                    cerradas += 1
+                else:
+                    fallidas.append(f"{posicion.symbol}: {resultado.reason}")
+        finally:
+            # Se persiste pase lo que pase. Si el broker se corta a mitad del
+            # cierre masivo, lo ya cerrado tiene que quedar escrito: sin esto,
+            # un reinicio resucitaba en el estado posiciones que en MT5 ya no
+            # existian, y el bot las seguia contando contra MAX_OPEN_TRADES.
+            self.store.save_state()
 
         lineas = [self._cabecera(), f"Cerradas {cerradas} de {len(abiertas)}."]
         if fallidas:

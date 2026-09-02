@@ -50,6 +50,34 @@ def _parser_no_entendio(event: SignalEvent | None) -> bool:
     return event.event_type in {EventType.UNKNOWN, EventType.UPDATE}
 
 
+def _restante_tras_cerrar(position, order: OrderResult, fraction: float) -> float:
+    """Que fraccion del lote original queda abierta despues de un parcial.
+
+    Se calcula con el volumen que el broker EFECTIVAMENTE cerro, no con la
+    fraccion que se pidio, y ahi esta la diferencia: con DEFAULT_LOT=0.01 un
+    "close 50%" pide 0.005, el broker lo sube a su lote minimo (0.01) y cierra
+    el 100%. Pediste la mitad y se cerro todo.
+
+    Confiando en la fraccion pedida, el estado creia conservar media posicion
+    que en MT5 ya no existia: ningun cierre posterior la encontraba, quedaba
+    bloqueando el simbolo por la regla de "ya hay una posicion abierta" y
+    ocupando cupo de MAX_OPEN_TRADES para siempre.
+
+    Si el broker no informa el volumen cerrado, se cae a la fraccion pedida:
+    es la mejor estimacion disponible y es lo que se hacia siempre.
+    """
+    pedido = round(position.remaining_fraction * (1 - fraction), 4)
+
+    if order.lot is None or not position.lot:
+        return pedido
+
+    # `remaining_fraction` es sobre el lote ORIGINAL, asi que el descuento
+    # tiene que medirse contra el mismo lote y no contra lo que queda abierto.
+    abierto = position.lot * position.remaining_fraction
+    queda = max(0.0, abierto - float(order.lot))
+    return round(queda / position.lot, 4)
+
+
 class Engine:
     def __init__(
         self,
@@ -285,11 +313,18 @@ class Engine:
 
         # 3) Estado. El ticket es el del broker si hubo, o el sintetico del
         #    paper broker, que igual sirve para atar cierres posteriores.
+        #
+        # El lote que se guarda es el que ACEPTO el broker, no el que se pidio.
+        # `_normalize_volume` lo ajusta al paso y al minimo del instrumento, asi
+        # que los dos numeros pueden diferir. Guardar el pedido dejaba al estado,
+        # a los avisos y sobre todo a la matematica de los cierres parciales
+        # trabajando sobre un lote que en MT5 no existe.
+        lot_abierto = order.lot if (order is not None and order.lot) else lot
         position = OpenPosition(
             trade_id=trade_id,
             symbol=(event.symbol or "").upper(),
             side=event.side.value if event.side else "",
-            lot=lot,
+            lot=lot_abierto,
             entry=event.entry,
             stop_loss=event.stop_loss,
             take_profits=take_profits,
@@ -310,11 +345,11 @@ class Engine:
         })
 
         await self._notify(
-            self._format_open(event, lot, take_profits, order, precio_mercado)
+            self._format_open(event, lot_abierto, take_profits, order, precio_mercado)
         )
         logger.info(
             "Senal aceptada %s %s lote=%s ticket=%s",
-            event.side.value if event.side else "?", event.symbol, lot,
+            event.side.value if event.side else "?", event.symbol, lot_abierto,
             order.ticket if order else "-",
         )
         return {
@@ -407,28 +442,54 @@ class Engine:
 
         fraction = event.close_fraction or 0.5
         results = []
+        aplicadas = 0
+        fallidas: list[str] = []
         for position in targets:
             order = await self.broker.close_position(
                 ticket=position.broker_ticket, symbol=position.symbol, fraction=fraction
             )
-            # La fraccion es sobre lo que QUEDA, no sobre el lote original:
-            # dos "close 50%" seguidos dejan 25%, no 0%.
-            position.remaining_fraction = round(position.remaining_fraction * (1 - fraction), 4)
+            results.append(order.to_dict())
+
+            # Si el broker rechazo, el estado NO se toca. Descontar igual es la
+            # "operacion huerfana" de siempre, en el handler que se habia
+            # quedado sin revisar: un solo "close 99%" rechazado bajaba el
+            # restante por debajo del umbral y borraba del estado una posicion
+            # que sigue viva en MT5. Nadie la volveria a encontrar.
+            if not order.ok:
+                logger.error("No se pudo cerrar parcialmente %s: %s",
+                             position.symbol, order.reason)
+                fallidas.append(f"{position.symbol}: {order.reason}")
+                continue
+
+            position.remaining_fraction = _restante_tras_cerrar(position, order, fraction)
+            aplicadas += 1
             self.store.append_paper_trade({
                 "trade_id": position.trade_id,
                 "status": "PAPER_PARTIAL_CLOSE",
                 "symbol": position.symbol,
                 "fraction_closed": fraction,
+                "lot_cerrado": order.lot,
                 "remaining_fraction": position.remaining_fraction,
                 "order": order.to_dict(),
                 "signal": event.to_dict(),
             })
             if position.remaining_fraction <= 0.01:
                 self.store.remove_position(position.trade_id)
-            results.append(order.to_dict())
 
-        self.store.append_event("cierre_parcial", {"signal": event.to_dict(), "orders": results})
-        await self._notify(f"Cierre parcial {fraction:.0%} en {len(targets)} posicion(es)")
+        self.store.append_event("cierre_parcial", {
+            "signal": event.to_dict(), "orders": results, "fallidas": fallidas,
+        })
+
+        if fallidas:
+            await self._notify(
+                f"Cierre parcial {fraction:.0%}: salio en {aplicadas} de {len(targets)}.\n"
+                "NO se pudo en:\n" + "\n".join(f"  {f}" for f in fallidas)
+                + "\nEsas siguen abiertas enteras, y el bot las sigue contando asi."
+            )
+            return {"status": "cierre_parcial_fallido", "fraction": fraction,
+                    "count": aplicadas, "fallidas": fallidas, "orders": results}
+
+        await self._notify(f"Cierre parcial {fraction:.0%} en {aplicadas} posicion(es)")
         return {"status": "cierre_parcial", "fraction": fraction, "orders": results}
 
     async def _handle_move_sl(self, event: SignalEvent) -> dict[str, Any]:
@@ -440,6 +501,8 @@ class Engine:
             return {"status": "rechazada", "reasons": decision.reasons}
 
         results = []
+        movidas = 0
+        fallidas: list[str] = []
         for position in targets:
             # "a breakeven" significa el precio de entrada de ESA posicion,
             # por eso se resuelve por posicion y no una sola vez.
@@ -456,8 +519,10 @@ class Engine:
             if not order.ok:
                 logger.error("No se pudo mover el SL de %s: %s",
                              position.symbol, order.reason)
+                fallidas.append(f"{position.symbol}: {order.reason}")
                 results.append(order.to_dict())
                 continue
+            movidas += 1
             position.stop_loss = new_sl
             self.store.append_paper_trade({
                 "trade_id": position.trade_id,
@@ -470,10 +535,27 @@ class Engine:
             })
             results.append(order.to_dict())
 
-        self.store.append_event("mover_sl", {"signal": event.to_dict(), "orders": results})
+        self.store.append_event("mover_sl", {
+            "signal": event.to_dict(), "orders": results, "fallidas": fallidas,
+        })
         destino = "breakeven" if event.move_sl_to_breakeven else str(event.stop_loss)
-        await self._notify(f"SL movido a {destino} en {len(results)} posicion(es)")
-        return {"status": "sl_movido", "orders": results}
+
+        # `results` incluye los rechazos, asi que contarlos como movidas decia
+        # "SL movido en 1 posicion(es)" con el broker habiendo rechazado todo.
+        # El estado ya estaba bien; lo que mentia era el aviso, que es lo unico
+        # que la persona ve desde el telefono. Creerte protegido en breakeven
+        # cuando el stop sigue donde estaba es peor que no recibir el aviso.
+        if fallidas:
+            await self._notify(
+                f"SL a {destino}: salio en {movidas} de {len(fallidas) + movidas}.\n"
+                "NO se pudo mover en:\n" + "\n".join(f"  {f}" for f in fallidas)
+                + "\nEsas posiciones siguen con el stop anterior."
+            )
+            return {"status": "sl_movido_parcial", "count": movidas,
+                    "fallidas": fallidas, "orders": results}
+
+        await self._notify(f"SL movido a {destino} en {movidas} posicion(es)")
+        return {"status": "sl_movido", "count": movidas, "orders": results}
 
     async def _handle_update(self, event: SignalEvent) -> dict[str, Any]:
         """Modificacion suelta (SL/TP sin lado).

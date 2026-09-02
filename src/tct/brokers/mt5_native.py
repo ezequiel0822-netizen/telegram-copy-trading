@@ -250,6 +250,28 @@ class MT5NativeBroker(Broker):
                 False, "open", f"Volumen {lot} fuera de los limites de {broker_symbol}", symbol=symbol
             )
 
+        # MAX_LOT es un techo, no una sugerencia, y este es el unico lugar donde
+        # se conoce el numero definitivo. `_normalize_volume` puede SUBIR el
+        # lote hasta el minimo del instrumento: un indice con volume_min=0.1
+        # convierte un DEFAULT_LOT de 0.01 en una posicion diez veces mas
+        # grande, y risk.py no lo ve porque compara default_lot contra max_lot,
+        # nunca el volumen que se manda. Con los ALLOWED_SYMBOLS de fabrica
+        # (NAS100, US30, US500) es una configuracion perfectamente posible.
+        #
+        # Solo aplica al ABRIR. Cerrar por encima del techo tiene que poder
+        # hacerse siempre: negarse a cerrar es mucho peor que abrir de mas, y
+        # ademas ahi la posicion ya existe.
+        max_lot = getattr(self.settings, "max_lot", 0) or 0
+        if max_lot and volume > max_lot + 1e-9:
+            return OrderResult(
+                False, "open",
+                f"El lote minimo de {broker_symbol} es {volume} y supera MAX_LOT={max_lot}. "
+                f"No se abre nada. Para operar este instrumento hay que poner "
+                f"MAX_LOT={volume} en el .env, sabiendo que cada operacion suya va a "
+                f"ser de ese tamano.",
+                symbol=symbol, lot=volume,
+            )
+
         if order_type is OrderType.MARKET or entry is None:
             action = mt5.TRADE_ACTION_DEAL
             mt5_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL

@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-01 · v0.5.0 · 257 tests · sobre el commit `6194380`
+Actualizado: 2026-09-02 · v0.6.0 · 284 tests · sobre el commit `b622a4e`
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -156,6 +156,18 @@ queda mal es el **stop**. Leer "entrada 2345, stop 2335" con el oro en 4438 no
 abre a mal precio, abre con dos mil puntos de riesgo. Por eso el control existe
 aunque la entrada parseada ni siquiera se envíe.
 
+**`control.py` — CUALQUIER comando desarma la confirmación, `/cerrar` incluido.**
+Y se desarma **antes** de mirar `_es_para_mi`. Exceptuar el `cerrar` parecía lo
+lógico (el `/cerrar` es justo el que la arma) y era el peor bug del proyecto: con
+dos instancias, dejaba a la real armada en silencio. Desarmar de más es inocuo;
+desarmar de menos cierra una cuenta.
+
+**`control.py` — el bot se escucha a sí mismo.** Sus respuestas van al mismo
+chat y vuelven a entrar. Empiezan con `[NOMBRE]` y se descartan en la primera
+línea de `manejar`. Esa guarda tiene que quedar **antes** de la lógica que
+cancela la confirmación: si no, el propio pedido de confirmación se cancelaría
+solo al volver.
+
 **`.gitattributes` — `.sh` en LF, `.bat`/`.ps1` en CRLF.** Un `.bat` con LF
 falla en `cmd.exe` de formas difíciles de diagnosticar.
 
@@ -220,6 +232,48 @@ Ahora existe `tests/test_broker_falla.py` con un bróker que rechaza a voluntad.
 instanciaban las clases a mano. Ahora hay tests que verifican por
 introspección que `_run_async` las use.
 
+### Segunda ronda: los handlers que nadie había revisado
+
+Una auditoría posterior encontró seis más. Todos en código que las 230 pruebas
+verdes recorrían sin ejercitar, por el mismo punto ciego de siempre.
+
+- **`/cerrar demo` + `SI` cerraba también la cuenta REAL.** El peor del
+  proyecto, y hacía falta una secuencia normalísima para dispararlo: un
+  `/cerrar` a secas armaba la confirmación en **las dos** instancias; el
+  `/cerrar demo` siguiente no desarmaba a la real —el reset se salteaba justo
+  para el comando `cerrar`— y encima no le contestaba nada, así que quedaba
+  armada **en silencio**; y el `SI`, que no tiene destinatario, disparaba a
+  todas. Con una sola instancia corriendo, invisible.
+- **La confirmación no caducaba nunca**, y el bot prometía *"cualquier otra
+  cosa lo cancela"* siendo mentira: un "no" explícito no cancelaba nada, porque
+  solo se miraba si el texto era afirmativo.
+- **`_handle_partial_close` no miraba `order.ok`.** Descontaba el lote y
+  borraba la posición aunque el bróker rechazara. Es la *operación huérfana* de
+  más arriba, viva en el único handler que no se había revisado: un solo
+  `close 99%` rechazado la borraba del estado y la dejaba corriendo en MT5.
+- **Un cierre parcial sobre el lote mínimo cerraba el 100%** y el estado creía
+  conservar la mitad. Con `DEFAULT_LOT=0.01`, un "close 50%" pide 0.005, el
+  bróker lo sube a 0.01 y cierra todo. La posición fantasma bloqueaba el
+  símbolo y ocupaba cupo de `MAX_OPEN_TRADES` para siempre.
+- **`MAX_LOT` no se aplicaba al volumen que realmente se manda.**
+  `_normalize_volume` sube el lote hasta el mínimo del instrumento, y `risk.py`
+  solo compara `DEFAULT_LOT` contra `MAX_LOT`. Un índice con `volume_min=0.1`
+  abría una posición **diez veces** más grande que el techo configurado.
+- **El aviso de mover el SL mentía.** El estado ya aguantaba (eso estaba
+  arreglado), pero el mensaje contaba los rechazos como movidas y decía *"SL
+  movido en 1 posición(es)"* con el bróker habiendo rechazado todo. Desde el
+  teléfono, eso es creerse protegido en breakeven sin estarlo.
+
+**Causa común de los cuatro últimos: se confiaba en lo que se PIDIÓ, no en lo
+que el bróker HIZO.** Ahora el estado se reconstruye con `OrderResult`: el lote
+que se guarda es el que aceptó el bróker, y el descuento de un parcial se
+calcula con el volumen realmente cerrado.
+
+La otra pieza que faltaba es `tests/fake_mt5.py`: una terminal MT5 falsa que
+ajusta volúmenes al mínimo del instrumento y sabe rechazar. Todo lo de arriba
+es indetectable contra el bróker de papel. **Cualquier cambio en el volumen o
+en el estado de las posiciones se prueba ahí.**
+
 ---
 
 ## 7. Errores de proceso que costaron tiempo
@@ -271,29 +325,49 @@ Ordenado por lo que más importa antes de dinero real.
    `_aparece_en_texto` deja pasar prefijos (`3950` valida contra `39,500`), y
    rechaza números legítimos con separador de miles (el prompt le pide al
    modelo que copie las comas, y después el parseo se rompe con ellas).
-5. **Cierre parcial sobre lote mínimo cierra el 100%.** Con `DEFAULT_LOT=0.01`
-   un "close 50%" calcula 0.005, el bróker lo sube al mínimo y cierra todo,
-   mientras el estado cree que queda la mitad.
-6. **`_normalize_volume` puede superar `MAX_LOT`.** `risk.py` compara
-   `default_lot` contra `max_lot`, nunca el volumen que realmente se envía.
-7. **`/cerrar demo` + `SI` cierra también la real.** La confirmación se arma en
-   la instancia equivocada, y no caduca nunca.
-8. **Dos procesos con el mismo `.env` se pisan.** No hay lockfile.
-9. **Órdenes pendientes no se pueden cancelar.** Solo se usa `positions_get()`.
-10. **Sin P&L de los paper trades.** Es lo que haría falta para saber si el
-    grupo de señales realmente sirve. Ya hay media pieza: cada paper trade
-    guarda `precio_mercado`, el precio real del instrumento en el momento de
-    la señal. Falta el precio de salida.
-11. **El contraste con el mercado no cubre los eventos de gestión.** Un
-    `MOVER SL A 4444` no se compara contra nada: si el número está mal leído,
-    el stop se mueve igual. Solo se valida la apertura.
+5. **El contraste con el mercado no cubre los eventos de gestión.** Un
+   `MOVER SL A 4444` no se compara contra nada: si el número está mal leído, el
+   stop se mueve igual. Solo se valida la apertura. Peor con un `MOVE_SL` sin
+   símbolo, que aplica el número de un instrumento a **todas** las posiciones
+   abiertas —ver la pregunta abierta de §2.
+6. **Dos procesos con el mismo `.env` se pisan.** No hay lockfile.
+7. **Órdenes pendientes no se pueden cancelar.** Solo se usa `positions_get()`.
+8. **Sin P&L de los paper trades.** Es lo que haría falta para saber si el
+   grupo de señales realmente sirve. Ya hay media pieza: cada paper trade
+   guarda `precio_mercado`, el precio real del instrumento en el momento de la
+   señal. Falta el precio de salida.
+
+### Lo que quedó sin revisar
+
+Una auditoría en paralelo se quedó a mitad de camino por límite de uso. Nunca
+corrieron:
+
+- **Ninguna revisión independiente del contraste con el mercado** (§5 y el
+  commit `b622a4e`). Es código nuevo en el camino que decide si se manda una
+  orden, escrito y verificado por la misma persona. Lo que sí tiene son tests
+  de mutación: romper el cableado pone 11 tests en rojo, y neutralizar la regla
+  en `risk.py`, otros 8.
+- **La investigación del punto como separador de miles** (punto 3 de arriba).
+
+Si retomás esto, son los dos primeros lugares donde mirar.
 
 ---
 
 ## 9. Reglas que el código respeta (no romperlas)
 
 - El paper trade se escribe **siempre**, y **antes** de llamar al bróker.
-- El estado solo cambia si el bróker **confirmó**.
+- El estado solo cambia si el bróker **confirmó**. Vale para los cuatro
+  handlers, incluido el cierre parcial, que era el que faltaba.
+- **El estado se escribe con lo que el bróker HIZO, no con lo que se pidió.** El
+  lote que se guarda es `OrderResult.lot`, y el descuento de un cierre parcial
+  se calcula con el volumen realmente cerrado. Pedir la mitad y que se cierre
+  todo es normal cuando el lote mínimo del instrumento manda.
+- **`MAX_LOT` se verifica sobre el volumen que sale**, en el ejecutor, no sobre
+  `DEFAULT_LOT` en la configuración. Al **cerrar** no se aplica nunca: negarse a
+  cerrar es peor que abrir de más.
+- Una confirmación de cierre **caduca** (`VENTANA_CONFIRMACION_SEG`) y
+  **cualquier** mensaje que no sea afirmativo la cancela, contestando que la
+  canceló. Cualquier comando la desarma, `/cerrar` incluido.
 - Un mensaje ambiguo se registra y **no** ejecuta nada.
 - Se registran los rechazos **con su motivo**: es lo que permite contestar
   después "¿por qué no tomó esta señal?".

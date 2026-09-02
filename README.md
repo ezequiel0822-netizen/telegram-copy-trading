@@ -223,6 +223,11 @@ el `.env`, tal como pide el CONTEXTO MAESTRO:
 
 - **Lista blanca** de símbolos (`ALLOWED_SYMBOLS`).
 - **Techo de lote** (`MAX_LOT`): si `DEFAULT_LOT` lo supera, el bot no arranca.
+  Y se vuelve a verificar sobre el volumen que **realmente sale** al bróker, que
+  no es el mismo número: el lote se ajusta al mínimo del instrumento, y un
+  índice con `volume_min=0.1` convertiría un `DEFAULT_LOT` de `0.01` en una
+  posición diez veces más grande. Al **cerrar** el techo no se aplica nunca:
+  negarse a cerrar es peor que abrir de más.
 - **SL y TP obligatorios** (`REQUIRE_STOP_LOSS`, `REQUIRE_TAKE_PROFIT`).
 - **Coherencia geométrica**: rechaza un BUY con el SL por encima de la entrada.
   Eso no es una señal conservadora, es una señal rota.

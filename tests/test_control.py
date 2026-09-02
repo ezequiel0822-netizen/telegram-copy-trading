@@ -158,7 +158,7 @@ def test_otro_comando_cancela_la_confirmacion_pendiente(tmp_path):
 def test_cerrar_sin_posiciones_no_arma_confirmacion(tmp_path):
     _, _, _, control = armar(tmp_path)
     assert "Sin posiciones" in cmd(control, "/cerrar todo")
-    assert control._espera_confirmacion is False
+    assert control._confirmacion is None
 
 
 # --------------------------------------------------------------------------
