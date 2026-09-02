@@ -89,7 +89,15 @@ class Broker(ABC):
     async def close_position(
         self, *, ticket: int | None, symbol: str, fraction: float = 1.0
     ) -> OrderResult:
-        """Cierra una posicion entera (fraction=1.0) o una parte."""
+        """Cierra una posicion entera (fraction=1.0) o una parte.
+
+        El broker informa una posicion AUSENTE con `raw={"ausente": True}`.
+        Que no exista NO es un fallo del cierre: significa que ya esta
+        cerrada. El motor la saca del estado en vez de reintentar para
+        siempre. Sin eso, cerrar una posicion a mano en MetaTrader (que es
+        justo lo que la guia le dice al usuario que haga) dejaba el simbolo
+        bloqueado por la regla de "ya hay una posicion abierta".
+        """
 
     @abstractmethod
     async def modify_stop_loss(

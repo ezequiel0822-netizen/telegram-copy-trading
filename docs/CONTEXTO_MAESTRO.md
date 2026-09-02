@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-02 · v0.7.1 · 316 tests · sobre el commit `84a1a10`
+Actualizado: 2026-09-02 · v0.7.2 · 320 tests · sobre el commit `952af8b`
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -177,6 +177,18 @@ mercado —la mitad de los desastres— pero un stop del lado correcto y
 absurdamente lejos lo **acepta sin chistar**: la posición queda sin protección
 real y nadie se entera. Ese hueco es el que tapa el chequeo de escala.
 
+**`mt5_native.py` — `positions_get()` devolviendo `None` y `()` NO es lo mismo.**
+`None` es un error de consulta (terminal caída, sin conexión) y `()` es "la
+busqué y no está". Confundirlos cuesta caro **en las dos direcciones**: tratar
+el `()` como fallo deja una fantasma eterna, y tratar el `None` como ausencia
+borra del estado una posición que puede estar viva y la deja corriendo sola.
+Solo el `()` lleva la marca `raw={"ausente": True}`.
+
+**El motor RECONCILIA con esa marca: una posición ausente se saca del estado.**
+Vale para cerrar, para el parcial y para mover el SL. No es un cierre —no se
+cerró nada— y por eso el aviso lo dice aparte: *"ya estaban cerradas en el
+broker"*.
+
 **`mt5_native.py` — el lote que se informa es `result.volume`, no el pedido.**
 MT5 devuelve en `result.volume` el volumen que el bróker **confirmó**, y puede
 llenar de menos. Todo el estado del bot se arma con ese número: el lote de la
@@ -325,8 +337,20 @@ cierra sola.
   mezcla, la que no la tenía quedaba sin tocar mientras el aviso anunciaba
   éxito.
 
-Los cuatro los encontraron revisores independientes que **murieron por límite
-de uso antes de poder reportar nada**. Se recuperaron de los `git worktree` que
+Y uno más, que venía de la primera auditoría y quedó sin atender:
+
+- **Una posición cerrada a mano en MetaTrader quedaba imposible de limpiar.**
+  *"Posición inexistente"* se trataba como un rechazo, o sea como *"no pude
+  cerrarla, sigue abierta"*. Es al revés: es la única información capaz de
+  resolver una fantasma. Y el escenario no tiene nada de raro — **la propia
+  guía le pide al usuario que cierre a mano lo que no quiera**. Desde ese
+  momento el bot tenía una posición que no podía cerrar nunca, que bloqueaba el
+  símbolo por la regla de *"ya hay una posición abierta"* y ocupaba cupo de
+  `MAX_OPEN_TRADES`: cada señal de ese instrumento se rechazaba, para siempre.
+  Probablemente era el bug más **probable** de todos los que quedaban.
+
+Los cuatro primeros los encontraron revisores independientes que **murieron por
+límite de uso antes de poder reportar nada**. Se recuperaron de los `git worktree` que
 dejaron atrás, corriendo los tests que habían escrito. Si volvés a quedarte sin
 resultados de una revisión, mirá ahí antes de darla por perdida:
 `git worktree list`.
@@ -449,7 +473,12 @@ otro a medias. Sigue sin mirar nadie más:
 
 - El paper trade se escribe **siempre**, y **antes** de llamar al bróker.
 - El estado solo cambia si el bróker **confirmó**. Vale para los cuatro
-  handlers, incluido el cierre parcial, que era el que faltaba.
+  handlers, incluido el cierre parcial, que era el que faltaba. La única
+  excepción es la reconciliación: si el bróker dice que la posición **no
+  existe**, se saca del estado. No existir no es un fallo del cierre.
+- Y no existir se distingue de **no poder preguntar**: un error de consulta
+  nunca borra una posición.
+
 - **El estado se escribe con lo que el bróker HIZO, no con lo que se pidió.** El
   lote que se guarda es `OrderResult.lot`, y el descuento de un cierre parcial
   se calcula con el volumen realmente cerrado. Pedir la mitad y que se cierre

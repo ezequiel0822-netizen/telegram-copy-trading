@@ -397,6 +397,7 @@ class Engine:
         results = []
         cerradas = 0
         fallidas: list[str] = []
+        ausentes: list[str] = []
         for position in targets:
             order = await self.broker.close_position(
                 ticket=position.broker_ticket, symbol=position.symbol, fraction=1.0
@@ -416,22 +417,37 @@ class Engine:
             if order.ok:
                 self.store.remove_position(position.trade_id)
                 cerradas += 1
+            elif self._reconciliar_ausente(position, order):
+                ausentes.append(position.symbol)
             else:
                 fallidas.append(f"{position.symbol}: {order.reason}")
             results.append(order.to_dict())
 
         self.store.append_event("cierre", {
-            "signal": event.to_dict(), "orders": results, "fallidas": fallidas,
+            "signal": event.to_dict(), "orders": results,
+            "fallidas": fallidas, "ausentes": ausentes,
         })
+
+        ya_estaban = (
+            f"\n\nEstas ya estaban cerradas en el broker: {', '.join(ausentes)}.\n"
+            "Se sacaron del estado, asi que esos simbolos quedan libres de nuevo."
+            if ausentes else ""
+        )
 
         if fallidas:
             await self._notify(
                 f"Cerradas {cerradas} de {len(targets)}. NO se pudieron cerrar:\n"
                 + "\n".join(f"  {f}" for f in fallidas)
                 + "\nSiguen abiertas y el bot las sigue teniendo en cuenta."
+                + ya_estaban
             )
             return {"status": "cierre_parcial_fallido", "count": cerradas,
-                    "fallidas": fallidas, "orders": results}
+                    "fallidas": fallidas, "ausentes": ausentes, "orders": results}
+
+        if ausentes:
+            await self._notify(f"Cerradas {cerradas} de {len(targets)}." + ya_estaban)
+            return {"status": "cerrada", "count": cerradas,
+                    "ausentes": ausentes, "orders": results}
 
         await self._notify(f"Cerradas {cerradas} posicion(es): "
                            f"{', '.join(p.symbol for p in targets)}")
@@ -449,6 +465,7 @@ class Engine:
         results = []
         aplicadas = 0
         fallidas: list[str] = []
+        ausentes: list[str] = []
         for position in targets:
             order = await self.broker.close_position(
                 ticket=position.broker_ticket, symbol=position.symbol, fraction=fraction
@@ -461,6 +478,9 @@ class Engine:
             # restante por debajo del umbral y borraba del estado una posicion
             # que sigue viva en MT5. Nadie la volveria a encontrar.
             if not order.ok:
+                if self._reconciliar_ausente(position, order):
+                    ausentes.append(position.symbol)
+                    continue
                 logger.error("No se pudo cerrar parcialmente %s: %s",
                              position.symbol, order.reason)
                 fallidas.append(f"{position.symbol}: {order.reason}")
@@ -482,7 +502,8 @@ class Engine:
                 self.store.remove_position(position.trade_id)
 
         self.store.append_event("cierre_parcial", {
-            "signal": event.to_dict(), "orders": results, "fallidas": fallidas,
+            "signal": event.to_dict(), "orders": results,
+            "fallidas": fallidas, "ausentes": ausentes,
         })
 
         if fallidas:
@@ -550,10 +571,16 @@ class Engine:
             # bot creeria estar protegido en breakeven mientras el broker lo
             # mantiene donde estaba.
             if not order.ok:
+                results.append(order.to_dict())
+                if self._reconciliar_ausente(position, order):
+                    descartadas.append(
+                        f"{position.symbol}: ya no existia en el broker, "
+                        "se saco del estado"
+                    )
+                    continue
                 logger.error("No se pudo mover el SL de %s: %s",
                              position.symbol, order.reason)
                 fallidas.append(f"{position.symbol}: {order.reason}")
-                results.append(order.to_dict())
                 continue
             movidas += 1
             position.stop_loss = new_sl
@@ -633,6 +660,33 @@ class Engine:
                     "Cuenta: %.2f | apertura del dia: %.2f | caida %.2f%% (tope %.1f%%)",
                     equity, inicial, caida, self.settings.max_daily_loss_pct,
                 )
+
+    def _reconciliar_ausente(self, position, order: OrderResult) -> bool:
+        """Saca del estado una posicion que el broker dice que ya no existe.
+
+        Que no exista NO es un fallo de la operacion: es la unica informacion
+        capaz de resolver una posicion fantasma, y tratarla como rechazo la
+        volvia eterna.
+
+        El caso que lo hace probable no tiene nada de exotico: la propia guia le
+        dice al usuario que revise las posiciones en MetaTrader y las cierre a
+        mano si no las quiere. Desde ese momento el bot tenia una posicion que
+        no podia cerrar nunca, que bloqueaba el simbolo por la regla de "ya hay
+        una posicion abierta" y que ocupaba cupo de MAX_OPEN_TRADES: cada senal
+        de ese instrumento se rechazaba, para siempre.
+
+        El broker solo pone la marca cuando PREGUNTO y no estaba. Un error de
+        consulta (terminal caida) no la lleva: ahi la posicion puede estar
+        perfectamente viva, y borrarla la dejaria corriendo sin registro.
+        """
+        if not order.raw.get("ausente"):
+            return False
+        logger.info(
+            "%s ya no existia en el broker (%s): se saca del estado.",
+            position.symbol, order.reason,
+        )
+        self.store.remove_position(position.trade_id)
+        return True
 
     async def _precio_de_mercado(self, symbol: str | None) -> float | None:
         """Trae la cotizacion real de un instrumento.

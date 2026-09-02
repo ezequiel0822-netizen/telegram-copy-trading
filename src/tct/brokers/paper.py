@@ -91,7 +91,9 @@ class PaperBroker(Broker):
         position = self._positions.get(ticket) if ticket else None
         if ticket is not None and position is None:
             return OrderResult(
-                ok=False, action="close", reason=f"Ticket simulado {ticket} inexistente", symbol=symbol
+                ok=False, action="close",
+                reason=f"El ticket simulado {ticket} ya no existe",
+                ticket=ticket, symbol=symbol, raw={"ausente": True},
             )
 
         closed_lot = round((position or {}).get("lot", 0.0) * fraction, 4) if position else None
@@ -117,7 +119,9 @@ class PaperBroker(Broker):
         position = self._positions.get(ticket) if ticket else None
         if ticket is not None and position is None:
             return OrderResult(
-                ok=False, action="modify_sl", reason=f"Ticket simulado {ticket} inexistente", symbol=symbol
+                ok=False, action="modify_sl",
+                reason=f"El ticket simulado {ticket} ya no existe",
+                ticket=ticket, symbol=symbol, raw={"ausente": True},
             )
         if position is not None:
             position["stop_loss"] = stop_loss

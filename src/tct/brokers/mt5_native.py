@@ -369,8 +369,24 @@ class MT5NativeBroker(Broker):
         action = "close" if fraction >= 1.0 else "partial_close"
 
         positions = mt5.positions_get(ticket=ticket)
+        # None y () NO son lo mismo, y confundirlos cuesta caro en las dos
+        # direcciones. None es un error de consulta (terminal caida, sin
+        # conexion): ahi la posicion puede estar perfectamente viva y darla por
+        # cerrada la dejaria corriendo sin registro. () es "la busque y no
+        # esta", que es informacion buena.
+        if positions is None:
+            return OrderResult(
+                False, action,
+                f"No se pudo consultar la posicion {ticket}: {mt5.last_error()}",
+                ticket=ticket, symbol=symbol,
+            )
         if not positions:
-            return OrderResult(False, action, f"Posicion {ticket} inexistente", symbol=symbol)
+            return OrderResult(
+                False, action,
+                f"La posicion {ticket} ya no existe en MT5: la cerro el SL o el TP, "
+                "o la cerraste a mano. No habia nada que cerrar.",
+                ticket=ticket, symbol=symbol, raw={"ausente": True},
+            )
         position = positions[0]
 
         info = self._ensure_symbol(position.symbol)
@@ -434,8 +450,18 @@ class MT5NativeBroker(Broker):
     def _modify_sl_sync(self, ticket: int, symbol: str, stop_loss: float) -> OrderResult:
         mt5 = self._mt5
         positions = mt5.positions_get(ticket=ticket)
+        if positions is None:
+            return OrderResult(
+                False, "modify_sl",
+                f"No se pudo consultar la posicion {ticket}: {mt5.last_error()}",
+                ticket=ticket, symbol=symbol,
+            )
         if not positions:
-            return OrderResult(False, "modify_sl", f"Posicion {ticket} inexistente", symbol=symbol)
+            return OrderResult(
+                False, "modify_sl",
+                f"La posicion {ticket} ya no existe en MT5: no hay stop que mover.",
+                ticket=ticket, symbol=symbol, raw={"ausente": True},
+            )
         position = positions[0]
 
         result = mt5.order_send({

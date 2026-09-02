@@ -284,6 +284,68 @@ def test_el_aviso_de_un_parcial_fallido_dice_que_sigue_abierto(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# La posicion que el usuario cerro a mano en MetaTrader
+#
+# El escenario mas probable de todos, porque la propia guia se lo pide: "revisa
+# las posiciones en MetaTrader y cerralas a mano si no las queres". Desde ese
+# momento el bot tenia una posicion que no podia cerrar nunca.
+# --------------------------------------------------------------------------
+
+
+def test_una_posicion_cerrada_a_mano_se_saca_del_estado(tmp_path):
+    """"Posicion inexistente" se trataba como un rechazo, o sea como "no pude
+    cerrarla, sigue abierta". Es al reves: es la unica informacion capaz de
+    resolver una fantasma."""
+    _, store, engine, fake = armar(tmp_path)
+    send(engine, SENAL, message_id=1)
+    fake._posiciones.clear()  # el usuario la cerro en MetaTrader
+
+    resultado = send(engine, "Close XAUUSD now", message_id=2)
+
+    assert store.open_positions() == [], "quedo una fantasma imposible de limpiar"
+    assert resultado["status"] == "cerrada"
+    assert resultado["ausentes"] == ["XAUUSD"]
+
+
+def test_y_el_simbolo_queda_libre_para_la_proxima_senal(tmp_path):
+    """La consecuencia real: sin esto, cada senal de oro se rechazaba con 'ya
+    hay una posicion abierta' para siempre."""
+    _, _, engine, fake = armar(tmp_path)
+    send(engine, SENAL, message_id=1)
+    fake._posiciones.clear()
+    send(engine, "Close XAUUSD now", message_id=2)
+
+    assert send(engine, SENAL, message_id=3)["status"] == "aceptada"
+
+
+def test_un_parcial_sobre_una_posicion_que_ya_no_esta_tambien_reconcilia(tmp_path):
+    _, store, engine, fake = armar(tmp_path, default_lot=0.10, max_lot=0.10)
+    send(engine, SENAL, message_id=1)
+    fake._posiciones.clear()
+
+    send(engine, "Close half XAUUSD", message_id=2)
+
+    assert store.open_positions() == []
+
+
+def test_un_error_de_consulta_NO_borra_la_posicion(tmp_path):
+    """La direccion opuesta, y es la peligrosa. Si MT5 no puede contestar
+    (terminal caida), la posicion puede estar perfectamente viva: darla por
+    cerrada la dejaria corriendo sola y sin registro. MT5 distingue los dos
+    casos, None es error y () es 'no esta', y hay que respetarlo."""
+    _, store, engine, fake = armar(tmp_path)
+    send(engine, SENAL, message_id=1)
+    fake.positions_get = lambda ticket=None: None  # error de consulta
+
+    resultado = send(engine, "Close XAUUSD now", message_id=2)
+
+    assert len(store.open_positions()) == 1, (
+        "se borro una posicion que puede estar viva en MT5"
+    )
+    assert resultado["status"] != "cerrada"
+
+
+# --------------------------------------------------------------------------
 # Mover el SL: el estado ya no mentia, el aviso si
 # --------------------------------------------------------------------------
 
