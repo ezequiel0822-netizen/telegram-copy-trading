@@ -207,11 +207,21 @@ class Engine:
         # motivos por los que se puede rechazar la senal.
         await self._actualizar_equity()
 
-        decision = evaluate_open(self.settings, self.store, event)
+        # Y el contraste con el precio real necesita saber cuanto vale el
+        # instrumento AHORA, por el mismo motivo.
+        precio_mercado = await self._precio_de_mercado(event)
+
+        decision = evaluate_open(
+            self.settings, self.store, event, market_price=precio_mercado
+        )
 
         if not decision.ok:
             self.store.append_event(
-                "rechazada", {"signal": event.to_dict(), "reasons": decision.reasons}
+                "rechazada", {
+                    "signal": event.to_dict(),
+                    "reasons": decision.reasons,
+                    "precio_mercado": precio_mercado,
+                },
             )
             logger.info("Senal rechazada: %s", decision.reason_text)
             await self._notify(
@@ -235,6 +245,11 @@ class Engine:
             "entry": event.entry,
             "entry_low": event.entry_low,
             "entry_high": event.entry_high,
+            # Precio real del instrumento en el momento de la senal, o None si
+            # el broker no lo dio. Es lo que despues va a permitir calcular el
+            # P&L de los paper trades contra algo que existio de verdad, en vez
+            # de contra la entrada que dijo el mensaje.
+            "precio_mercado": precio_mercado,
             "stop_loss": event.stop_loss,
             "take_profits": take_profits,
             "signal": event.to_dict(),
@@ -294,7 +309,9 @@ class Engine:
             "warnings": event.warnings,
         })
 
-        await self._notify(self._format_open(event, lot, take_profits, order))
+        await self._notify(
+            self._format_open(event, lot, take_profits, order, precio_mercado)
+        )
         logger.info(
             "Senal aceptada %s %s lote=%s ticket=%s",
             event.side.value if event.side else "?", event.symbol, lot,
@@ -499,6 +516,32 @@ class Engine:
                     equity, inicial, caida, self.settings.max_daily_loss_pct,
                 )
 
+    async def _precio_de_mercado(self, event: SignalEvent) -> float | None:
+        """Trae la cotizacion real del instrumento de la senal.
+
+        Nunca lanza: si el broker no responde, el control contra el mercado se
+        queda sin dato y no opina. Es la misma politica que el freno diario, y
+        por el mismo motivo: un broker lento no puede dejar al bot sin operar.
+
+        Se pide con el simbolo CANONICO (XAUUSD) y es el broker el que lo
+        traduce a como se llame en esa cuenta, igual que al mandar la orden.
+        """
+        if not event.symbol:
+            return None
+        # Si los dos controles estan apagados, la llamada es puro costo.
+        if (
+            self.settings.max_spread_from_entry_pct <= 0
+            and self.settings.max_pending_distance_pct <= 0
+        ):
+            return None
+        try:
+            return await self.broker.market_price(event.symbol)
+        except Exception:
+            logger.warning(
+                "No se pudo leer el precio de mercado de %s", event.symbol, exc_info=True
+            )
+            return None
+
     async def _consultar_ia(self, text: str, metadata: dict[str, Any]) -> SignalEvent | None:
         """Consulta al interprete local. Nunca lanza: es una capa opcional."""
         try:
@@ -532,7 +575,12 @@ class Engine:
             await self.notifier.send(text)
 
     def _format_open(
-        self, event: SignalEvent, lot: float, take_profits: list[float], order: OrderResult | None
+        self,
+        event: SignalEvent,
+        lot: float,
+        take_profits: list[float],
+        order: OrderResult | None,
+        precio_mercado: float | None = None,
     ) -> str:
         lines = [
             f"SENAL ACEPTADA  {event.side.value if event.side else '?'} {event.symbol}",
@@ -540,6 +588,9 @@ class Engine:
             f"Entrada : {event.entry}" + (
                 f"  (rango {event.entry_low}-{event.entry_high})" if event.has_entry_range else ""
             ),
+            # Al lado de la entrada del mensaje, para poder comparar de un
+            # vistazo desde el telefono sin abrir MT5.
+            f"Mercado : {precio_mercado if precio_mercado is not None else 'sin dato'}",
             f"SL      : {event.stop_loss}",
             f"TPs     : {', '.join(str(tp) for tp in take_profits) or '-'}",
             f"Lote    : {lot}",

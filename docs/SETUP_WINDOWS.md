@@ -789,6 +789,21 @@ Todo en el `.env`, y todo editable:
 | `MAX_OPEN_TRADES` | Máximo de operaciones abiertas a la vez. |
 | `MAX_SIGNALS_PER_DAY` | Freno por si el grupo empieza a mandar 50 señales. |
 | `REQUIRE_STOP_LOSS` | Rechazar señales sin SL. **Dejalo en true.** |
+| `MAX_SPREAD_FROM_ENTRY_PCT` | Cuánto puede alejarse la entrada del mensaje del precio **real** del instrumento, en órdenes a mercado. Ataja símbolos mal leídos y mensajes viejos. |
+| `MAX_PENDING_DISTANCE_PCT` | Lo mismo para órdenes pendientes, que se ponen lejos del mercado a propósito y necesitan más aire. |
+
+Los dos últimos son los únicos que comparan la señal contra el mundo real. Si
+no sabés qué número poner, no adivines: dejá que el bot te lo diga con los
+mensajes de tu propio grupo (solo lee cotizaciones, no opera):
+
+```
+.\.venv\Scripts\python.exe -m tct simular --horas 2 --con-precios
+```
+
+Al final te muestra a qué distancia del precio real quedó cada señal y, si
+rechazó alguna, qué número tendrías que poner para que entrara. **Ojo:** compara
+contra el precio de *ahora*, así que usá pocas horas o los números no
+significan nada.
 
 ### Que arranque solo al prender la PC
 

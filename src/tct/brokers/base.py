@@ -109,6 +109,26 @@ class Broker(ABC):
         """
         return None
 
+    async def market_price(self, symbol: str) -> float | None:
+        """Precio actual del instrumento, o None si no se puede leer.
+
+        Es el unico dato del mundo real que entra a la evaluacion de riesgo.
+        Todas las demas validaciones miran el mensaje contra si mismo, y por
+        eso no pueden distinguir un precio coherente de un precio CORRECTO:
+        un SL 10 puntos por debajo de una entrada de 2345 es geometricamente
+        impecable aunque el oro este cotizando a 4438.
+
+        Devolver None significa "no se pudo leer", y `risk.py` lo interpreta
+        como "no opinar": misma politica que `account_equity()`. Sin dato no
+        se inventa un motivo de rechazo, porque hacerlo dejaria al bot sin
+        operar cada vez que el broker tarda en responder.
+
+        El precio que se espera es el medio (bid+ask)/2: comparar contra bid o
+        ask meteria el spread del broker adentro de una tolerancia que se mide
+        en puntos porcentuales.
+        """
+        return None
+
     async def health(self) -> dict[str, Any]:
         """Info de diagnostico para el comando `status`. Nunca incluye secretos."""
         return {"broker": self.name, "ready": await self.is_ready()}

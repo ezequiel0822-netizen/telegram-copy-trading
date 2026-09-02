@@ -226,6 +226,13 @@ el `.env`, tal como pide el CONTEXTO MAESTRO:
 - **SL y TP obligatorios** (`REQUIRE_STOP_LOSS`, `REQUIRE_TAKE_PROFIT`).
 - **Coherencia geométrica**: rechaza un BUY con el SL por encima de la entrada.
   Eso no es una señal conservadora, es una señal rota.
+- **Contraste con el precio real** (`MAX_SPREAD_FROM_ENTRY_PCT` para órdenes a
+  mercado, `MAX_PENDING_DISTANCE_PCT` para pendientes). Es la única validación
+  que mira **afuera** del mensaje: todas las demás lo comparan consigo mismo, y
+  por eso no distinguen un precio coherente de uno *correcto*. Si el bot lee
+  "oro, entrada 2345, stop 2335" con el oro en 4438, la geometría cierra
+  perfecto y la operación se abre igual, con el stop a dos mil puntos.
+  Si el bróker no puede cotizar, no opina: sin dato no se rechaza nada.
 - **Tope de posiciones abiertas** y **una sola posición por símbolo**.
 - **Cupo diario** de señales (`MAX_SIGNALS_PER_DAY`).
 - **Solo cuentas demo**: la barrera real está en el ejecutor, no en la config.

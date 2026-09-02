@@ -28,6 +28,12 @@ class PaperBroker(Broker):
         # Valor de cuenta ficticio. Existe para poder probar el tope de
         # perdida diaria sin un broker real.
         self.equity_simulado: float | None = 10_000.0
+        # Cotizaciones ficticias, por simbolo. Vacio a proposito: en papel no
+        # hay ninguna fuente de precios de verdad, y devolver un numero
+        # inventado haria que el control contra el mercado rechazara senales
+        # buenas o dejara pasar malas segun el humor del valor elegido.
+        # Vacio = None = "no se pudo leer" = el control no opina.
+        self.precios_simulados: dict[str, float] = {}
 
     async def connect(self) -> bool:
         return True
@@ -41,6 +47,11 @@ class PaperBroker(Broker):
     async def account_equity(self) -> float | None:
         """Equity simulado. Los tests lo mueven para ejercitar el freno diario."""
         return self.equity_simulado
+
+    async def market_price(self, symbol: str) -> float | None:
+        """Cotizacion simulada, si alguien la cargo. Los tests la usan para
+        ejercitar el control contra el mercado sin un broker de verdad."""
+        return self.precios_simulados.get((symbol or "").upper())
 
     async def open_order(
         self,

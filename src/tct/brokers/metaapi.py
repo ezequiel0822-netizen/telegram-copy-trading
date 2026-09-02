@@ -149,6 +149,39 @@ class MetaApiBroker(Broker):
         valor = info.get("equity")
         return float(valor) if valor is not None else None
 
+    async def market_price(self, symbol: str) -> float | None:
+        """Precio medio del instrumento segun MetaApi.
+
+        Se resuelve por `getattr` como el resto del modulo: si esta version
+        del SDK no expone `get_symbol_price`, el control contra el mercado se
+        queda sin dato y no opina, en vez de romper la senal entera.
+        """
+        if not await self.is_ready():
+            return None
+
+        method = getattr(self._connection, "get_symbol_price", None)
+        if method is None:
+            logger.warning(
+                "El SDK de MetaApi no expone get_symbol_price: el control "
+                "contra el precio de mercado queda sin dato."
+            )
+            return None
+
+        broker_symbol = to_broker_symbol(symbol, self.settings.mt5_broker_profile)
+        try:
+            precio = await method(broker_symbol) or {}
+        except Exception:
+            logger.warning("No se pudo leer la cotizacion de %s", symbol, exc_info=True)
+            return None
+
+        if not isinstance(precio, dict):
+            return None
+        bid = float(precio.get("bid") or 0.0)
+        ask = float(precio.get("ask") or 0.0)
+        if bid > 0 and ask > 0:
+            return (bid + ask) / 2
+        return bid or ask or None
+
     # -- Operaciones -------------------------------------------------------
 
     async def open_order(

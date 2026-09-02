@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-01 · v0.4.0 · 230 tests · commit `3ee4dcb`
+Actualizado: 2026-09-01 · v0.5.0 · 257 tests · sobre el commit `6194380`
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -70,6 +70,7 @@ Telegram (Telethon, sesión de usuario)
    ↓  [si falla] ollama.py    IA local, SOLO avisa, nunca opera
    ↓  engine.py         orquesta; serializa con un Lock
    ↓  risk.py           todas las validaciones, cada una con su motivo
+   ↑  broker.market_price()   el unico dato de afuera que entra al riesgo
    ↓  brokers/          paper | mt5_native (Windows) | metaapi (macOS)
    →  store.py          JSONL + estado atómico
 ```
@@ -81,7 +82,7 @@ Módulos en `src/tct/`. La CLI (`cli.py`) expone:
 | `check` | Diagnóstico. Lo primero en una máquina nueva. |
 | `mt5` | Lee la cuenta MT5 abierta y dice qué poner en el `.env`. |
 | `chatid` | Averigua el chat id para las notificaciones. |
-| `simular` | **Reproduce los mensajes reales del grupo.** Sin `--ejecutar` no toca nada. |
+| `simular` | **Reproduce los mensajes reales del grupo.** Sin `--ejecutar` no toca nada. Con `--con-precios` compara cada entrada contra el precio real de MT5 y sugiere el límite, sin operar. |
 | `probar` | Verifica la cadena contra MT5. Con `--operar` abre y cierra una posición mínima. |
 | `chats` / `test` / `status` / `run` | Listar grupos / probar el parser / ver estado / arrancar. |
 
@@ -135,6 +136,25 @@ básicas, devolvía `es_senal`/`tipo`/`confianza` y omitía todos los precios.
 **`control.py` — vocabulario cerrado de destinatarios.** `{demo, real, papel,
 paper}`. Sin lista fija, `/pausa mercado feo` se leía como dirigido a una
 instancia llamada "mercado".
+
+**`risk.py` — el contraste con el mercado son DOS límites, no uno.** Una orden
+a mercado entra al precio de *ahora*, así que una entrada lejana significa que
+se leyó mal algo (`MAX_SPREAD_FROM_ENTRY_PCT`, estricto). Una pendiente se pone
+lejos del mercado **a propósito**: esperar a que el precio vuelva o rompa es su
+razón de ser (`MAX_PENDING_DISTANCE_PCT`, ancho). Medir las dos con el número
+estricto rechaza señales buenas todos los días. Unificarlos parece una
+simplificación y no lo es.
+
+**`risk.py` — con un rango de entrada se mide contra el borde más cercano.**
+`Entry 4400-4480` con el mercado en 4402 da distancia **0**, no la distancia al
+punto medio (4440). El rango es una banda de precios que el grupo declaró
+válidos, no un punto.
+
+**El daño de una entrada mal leída no es el precio de entrada.** Con una orden
+a mercado, MT5 entra al precio actual e ignora la entrada del mensaje: lo que
+queda mal es el **stop**. Leer "entrada 2345, stop 2335" con el oro en 4438 no
+abre a mal precio, abre con dos mil puntos de riesgo. Por eso el control existe
+aunque la entrada parseada ni siquiera se envíe.
 
 **`.gitattributes` — `.sh` en LF, `.bat`/`.ps1` en CRLF.** Un `.bat` con LF
 falla en `cmd.exe` de formas difíciles de diagnosticar.
@@ -231,16 +251,22 @@ mientras corría el viejo. Si algo no tiene sentido, limpiar `__pycache__`.
 
 Ordenado por lo que más importa antes de dinero real.
 
-1. **`MAX_SPREAD_FROM_ENTRY_PCT` está declarado y no se usa.** Es la red que
-   atajaría toda una clase de errores de parseo: símbolo equivocado, entrada
-   corrida, escala 1000×. Compararía el precio parseado contra el de mercado.
-   **Es lo más valioso que queda por hacer.**
+1. **Calibrar los dos límites del contraste con el mercado contra el grupo
+   real.** El control ya existe y está conectado (ver §5), pero `0.5%` a
+   mercado y `3%` en pendientes son números elegidos a mano, no medidos. Con
+   el oro en 4438, `0.5%` son 22 puntos: durante una noticia eso se mueve en
+   minutos, y una señal procesada tarde se rechazaría siendo buena.
+   `tct simular --horas 2 --con-precios` mide las señales reales del grupo
+   contra el precio de MT5 sin operar y sugiere el número. **Es lo primero que
+   hay que hacer con este cambio, antes de confiar en él.**
 2. **Primera orden real contra MT5.** Todas las constantes están verificadas
    contra el paquete instalado, pero un `order_send` de verdad no. El punto
    delicado es el *filling mode*, que cada bróker acepta distinto.
    `tct probar --operar` existe para eso.
 3. **Punto como separador de miles.** `"DAX SELL 18.500"` → 18.5. Los tres
-   números escalan juntos, así que la geometría no lo nota.
+   números escalan juntos, así que la geometría no lo nota. El contraste con
+   el mercado ahora lo ataja *si el bróker cotiza ese símbolo*, pero eso es una
+   red debajo del error, no el arreglo del parser.
 4. **`ollama.py`: la guarda antialucinaciones tiene dos fallas.** El `0*` de
    `_aparece_en_texto` deja pasar prefijos (`3950` valida contra `39,500`), y
    rechaza números legítimos con separador de miles (el prompt le pide al
@@ -255,7 +281,12 @@ Ordenado por lo que más importa antes de dinero real.
 8. **Dos procesos con el mismo `.env` se pisan.** No hay lockfile.
 9. **Órdenes pendientes no se pueden cancelar.** Solo se usa `positions_get()`.
 10. **Sin P&L de los paper trades.** Es lo que haría falta para saber si el
-    grupo de señales realmente sirve.
+    grupo de señales realmente sirve. Ya hay media pieza: cada paper trade
+    guarda `precio_mercado`, el precio real del instrumento en el momento de
+    la señal. Falta el precio de salida.
+11. **El contraste con el mercado no cubre los eventos de gestión.** Un
+    `MOVER SL A 4444` no se compara contra nada: si el número está mal leído,
+    el stop se mueve igual. Solo se valida la apertura.
 
 ---
 
@@ -272,6 +303,12 @@ Ordenado por lo que más importa antes de dinero real.
 - Si el control por Telegram no se puede activar y la instancia es real, el bot
   **no arranca**.
 - La pausa **persiste**: un reinicio no reanuda solo.
+- **Sin dato no se inventa un rechazo.** Vale para el equity (freno diario) y
+  para la cotización (contraste con el mercado): si el bróker no responde, esa
+  capa no opina y la señal sigue su curso. Un bróker lento no puede dejar al
+  bot sin operar.
+- `tct simular` **sin** `--ejecutar` no manda una sola orden, ni siquiera con
+  `--con-precios`: ahí el bróker se conecta únicamente para leer cotizaciones.
 
 ---
 

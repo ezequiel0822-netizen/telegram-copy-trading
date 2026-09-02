@@ -121,7 +121,13 @@ class Settings:
     max_signals_per_day: int
     require_stop_loss: bool
     require_take_profit: bool
+    # Cuanto puede alejarse la entrada del mensaje del precio REAL del
+    # instrumento. Son dos numeros porque son dos situaciones distintas:
+    # una orden a mercado entra al precio de ahora (una entrada lejana
+    # significa que se leyo mal algo), y una pendiente se pone lejos a
+    # proposito. 0 en cualquiera de los dos apaga ese control.
     max_spread_from_entry_pct: float
+    max_pending_distance_pct: float
     allow_live_trading: bool
 
     # --- Comportamiento ---
@@ -189,6 +195,25 @@ class Settings:
         rol = "puede OPERAR" if self.ollama_auto_execute else "solo avisa"
         return f"{self.ollama_model} ({rol})"
 
+    def _describe_distancia(self) -> str:
+        """Como se muestra el control contra el precio real al arrancar.
+
+        Se imprime aunque este apagado. El freno por perdida diaria estuvo un
+        tiempo escrito y desconectado mientras el arranque lo anunciaba como
+        activo: un numero en pantalla no prueba que la proteccion exista, pero
+        callarlo garantiza que nadie note que falta.
+        """
+        partes = []
+        partes.append(
+            f"a mercado {self.max_spread_from_entry_pct}%"
+            if self.max_spread_from_entry_pct > 0 else "a mercado sin control"
+        )
+        partes.append(
+            f"pendientes {self.max_pending_distance_pct}%"
+            if self.max_pending_distance_pct > 0 else "pendientes sin control"
+        )
+        return " / ".join(partes)
+
     @property
     def broker_kind(self) -> str:
         return {
@@ -214,6 +239,7 @@ class Settings:
             f"Max abiertas    : {self.max_open_trades}",
             f"Max senales/dia : {self.max_signals_per_day}",
             f"Exige SL / TP   : {self.require_stop_loss} / {self.require_take_profit}",
+            f"Dist. al mercado: {self._describe_distancia()}",
             f"Tope perdida dia: "
             + (f"{self.max_daily_loss_pct}%" if self.max_daily_loss_pct else "sin tope"),
             f"OCR imagenes    : {self.enable_ocr}",
@@ -323,6 +349,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         require_stop_loss=env.bool("REQUIRE_STOP_LOSS", True),
         require_take_profit=env.bool("REQUIRE_TAKE_PROFIT", True),
         max_spread_from_entry_pct=env.float("MAX_SPREAD_FROM_ENTRY_PCT", 0.5),
+        max_pending_distance_pct=env.float("MAX_PENDING_DISTANCE_PCT", 3.0),
         allow_live_trading=allow_live,
         enable_ocr=env.bool("ENABLE_OCR", False),
         dry_run=env.bool("DRY_RUN", False),

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import math
 import platform
 import sys
 from pathlib import Path
@@ -421,33 +422,69 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
 
     # --- Modo mirada: solo el parser, sin motor ni broker -----------------
     if not args.ejecutar:
+        from tct.signals.models import EventType
+
+        # Con --con-precios se conecta el broker UNICAMENTE para leer
+        # cotizaciones. Sigue sin registrar ni ejecutar nada, y es la unica
+        # forma de calibrar MAX_SPREAD_FROM_ENTRY_PCT contra los mensajes
+        # reales del grupo antes de que el filtro empiece a rechazar en serio.
+        broker = None
+        if args.con_precios and not settings.executes_orders:
+            # En papel no hay ninguna fuente de precios: el broker simulado no
+            # cotiza nada. Sin este aviso, la salida repetiria "el broker no
+            # cotiza este simbolo" una vez por senal y nadie entenderia por que.
+            print("[AVISO] Estas en modo papel, donde no hay precios de mercado.")
+            print("        Para comparar contra precios reales hace falta MT5")
+            print("        conectado (completar MT5_LOGIN/PASSWORD/SERVER en el .env).\n")
+        elif args.con_precios:
+            broker = build_broker(settings)
+            if not await broker.connect():
+                print(f"[AVISO] No se pudo conectar el broker '{broker.name}'.")
+                print("        Se sigue sin comparar contra precios.")
+                print("        Para ver que pasa:  python -m tct mt5\n")
+                broker = None
+
         interpretados = 0
-        for texto, meta in con_texto:
-            evento = parse_signal(texto, **{
-                k: v for k, v in meta.items()
-                if k in {"message_id", "chat_id", "is_edit", "reply_to_message_id", "source"}
-            })
-            resumen = " ".join(texto.split())[:58]
-            if evento is None:
-                if args.todos:
-                    print(f"  .  {resumen}")
-                continue
-            interpretados += 1
-            lado = evento.side.value if evento.side else "-"
-            print(f"  >  {resumen}")
-            print(f"     -> {evento.event_type.value} {evento.symbol or '?'} {lado} "
-                  f"e={evento.entry} sl={evento.stop_loss} tp={evento.take_profits}")
-            for aviso in evento.warnings:
-                print(f"        aviso: {aviso}")
+        distancias: list[tuple[str, float, bool, str]] = []
+        try:
+            for texto, meta in con_texto:
+                evento = parse_signal(texto, **{
+                    k: v for k, v in meta.items()
+                    if k in {"message_id", "chat_id", "is_edit", "reply_to_message_id", "source"}
+                })
+                resumen = " ".join(texto.split())[:58]
+                if evento is None:
+                    if args.todos:
+                        print(f"  .  {resumen}")
+                    continue
+                interpretados += 1
+                lado = evento.side.value if evento.side else "-"
+                print(f"  >  {resumen}")
+                print(f"     -> {evento.event_type.value} {evento.symbol or '?'} {lado} "
+                      f"e={evento.entry} sl={evento.stop_loss} tp={evento.take_profits}")
+                for aviso in evento.warnings:
+                    print(f"        aviso: {aviso}")
+                if broker is not None and evento.event_type is EventType.OPEN:
+                    await _mostrar_distancia(broker, settings, evento, distancias)
+        finally:
+            if broker is not None:
+                await broker.disconnect()
 
         print("\n" + "=" * 66)
         print(f"  {interpretados} de {len(con_texto)} mensajes se interpretaron como senal")
         print("=" * 66)
+
+        if distancias:
+            _resumen_de_distancias(settings, distancias)
+
         print("\n  Esto fue solo una mirada: no se registro ni ejecuto nada.")
         print("  Para correrlo de verdad contra la cuenta demo:")
         print(f"      python -m tct simular --horas {args.horas} --ejecutar")
         if not args.todos:
             print("\n  Para ver tambien los mensajes descartados, agrega --todos")
+        if not args.con_precios:
+            print("  Para comparar cada entrada contra el precio real de MT5,")
+            print("  agrega --con-precios (solo lee cotizaciones, no opera)")
         return 0
 
     # --- Modo ejecucion: el ciclo completo, con broker real ---------------
@@ -500,6 +537,107 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
         print("\n  Si operaste contra MT5 demo, revisalas en la pestana 'Operaciones'")
         print("  de MetaTrader y cerralas a mano si no las queres.")
     return 0
+
+
+async def _mostrar_distancia(broker, settings: Settings, evento, distancias: list) -> None:
+    """Muestra a que distancia del precio real quedo la entrada de una senal.
+
+    Usa `risk.distancia_al_mercado`, la misma cuenta que despues aplica el
+    filtro. Calibrar el numero mirando otra formula seria calibrarlo contra
+    algo que no es lo que se ejecuta.
+    """
+    from tct.risk import distancia_al_mercado
+    from tct.signals.models import OrderType
+
+    if not evento.symbol or evento.entry is None:
+        return
+
+    try:
+        precio = await broker.market_price(evento.symbol)
+    except Exception:
+        precio = None
+    if precio is None:
+        print("        precio: el broker no cotiza este simbolo ahora")
+        return
+
+    distancia = distancia_al_mercado(evento, precio)
+    if distancia is None:
+        return
+
+    a_mercado = evento.order_type is OrderType.MARKET
+    limite = (
+        settings.max_spread_from_entry_pct if a_mercado
+        else settings.max_pending_distance_pct
+    )
+    llave = (
+        "MAX_SPREAD_FROM_ENTRY_PCT" if a_mercado else "MAX_PENDING_DISTANCE_PCT"
+    )
+    rechaza = limite > 0 and distancia > limite
+    print(f"        precio: mercado {precio} | distancia {distancia:.2f}% | "
+          f"limite {limite}% -> {'RECHAZA' if rechaza else 'pasa'}")
+    distancias.append((evento.symbol, distancia, rechaza, llave))
+
+
+# Por encima de esta distancia no hay senal buena: es un simbolo mal leido o
+# una escala cambiada. Sugerir un limite que la deje pasar seria sugerir
+# apagar la proteccion.
+_TOPE_SUGERENCIA_PCT = 5.0
+
+
+def _resumen_de_distancias(settings: Settings, distancias: list) -> None:
+    """Traduce las distancias medidas en algo accionable para el .env.
+
+    A proposito NO propone un limite que deje pasar todo. El rechazo mas
+    grande suele ser justamente el mensaje mal leido, y un numero que lo
+    dejara entrar apagaria la proteccion entera; alguien que no programa lo
+    copiaria sin poder notarlo. La sugerencia se calcula sobre el rechazo MAS
+    CHICO, que es el unico candidato razonable a falso positivo.
+    """
+    rechazadas = sorted(
+        (distancia, simbolo, llave)
+        for simbolo, distancia, rechaza, llave in distancias if rechaza
+    )
+    peor = max(d for _, d, _, _ in distancias)
+
+    print("\n" + "-" * 66)
+    print(f"  DISTANCIA AL PRECIO REAL  ({len(distancias)} senales medidas)")
+    print("-" * 66)
+
+    if not rechazadas:
+        print(f"  Ninguna se habria rechazado. La mas lejos quedo a {peor:.2f}%.")
+    else:
+        print(f"  Se habrian rechazado {len(rechazadas)}, a estas distancias:")
+        for distancia, simbolo, _ in rechazadas:
+            print(f"      {simbolo:<8} {distancia:7.2f}%")
+
+        menor, _, llave_menor = rechazadas[0]
+        print("\n  Anda a ver arriba que decian esos mensajes:")
+        print("    - Si el bot los leyo MAL, el filtro hizo su trabajo. No toques nada.")
+        if menor <= _TOPE_SUGERENCIA_PCT:
+            print("    - Si alguno estaba BIEN, el limite quedo corto. Para que")
+            print(f"      entrara el de {menor:.2f}%, en el .env:")
+            print(f"          {llave_menor}={_limite_holgado(menor)}")
+        else:
+            print(f"    - Todos quedaron a mas de {_TOPE_SUGERENCIA_PCT}% del precio real.")
+            print("      A esa distancia no hay senal buena que valga: no subas el")
+            print("      limite, fijate que esta leyendo mal el parser.")
+        print("\n  No subas el limite para que entre una senal que el bot leyo mal.")
+        print("  Ese es exactamente el caso que este filtro existe para frenar.")
+
+    # Sin esta aclaracion el numero enganaria: reproducir mensajes viejos
+    # contra precios de hoy da distancias enormes que en su momento no
+    # existieron. El resultado solo es representativo con pocas horas.
+    print("\n  OJO: la distancia se mide contra el precio de AHORA, no contra")
+    print("  el de cuando llego el mensaje. Una senal de ayer va a dar una")
+    print("  distancia grande aunque en su momento fuera perfecta.")
+    print("  Para que este numero signifique algo, usa pocas horas:")
+    print("      python -m tct simular --horas 2 --con-precios")
+
+
+def _limite_holgado(pct: float) -> float:
+    """El limite mas chico que dejaria pasar esa distancia, con un poco de
+    aire para no quedar justo en el borde."""
+    return math.ceil(pct * 10 + 1) / 10
 
 
 # --------------------------------------------------------------------------
@@ -581,6 +719,35 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
                 print(f"      sin cotizacion: {canonico}  (mercado cerrado?)")
         if not con_precio:
             fallos.append("Ningun simbolo tiene cotizacion (puede ser el mercado cerrado)")
+
+        # El control que compara la entrada del mensaje contra el precio real
+        # se alimenta de `broker.market_price()`, que resuelve el simbolo por
+        # su cuenta. Se prueba ese camino y no el tick de arriba: un simbolo
+        # que cotiza pero que `market_price` no resuelve dejaria la proteccion
+        # muda, y muda se ve igual que activa.
+        controlando = (
+            settings.max_spread_from_entry_pct > 0
+            or settings.max_pending_distance_pct > 0
+        )
+        if controlando and con_precio:
+            mudos = [c for c, _, _ in con_precio if await broker.market_price(c) is None]
+            if mudos:
+                print(f"      AVISO No hay precio medio para: {', '.join(mudos)}")
+                print("            El control contra el precio de mercado no va a")
+                print("            opinar sobre esos simbolos: van a pasar sin ese filtro.")
+                fallos.append(
+                    "El control contra el precio de mercado se queda sin datos en "
+                    + ", ".join(mudos)
+                )
+            else:
+                print(
+                    f"      OK    control contra el precio de mercado con datos "
+                    f"({settings.max_spread_from_entry_pct}% a mercado, "
+                    f"{settings.max_pending_distance_pct}% pendientes)"
+                )
+        elif not controlando:
+            print("      AVISO el control contra el precio de mercado esta APAGADO")
+            print("            (MAX_SPREAD_FROM_ENTRY_PCT y MAX_PENDING_DISTANCE_PCT en 0)")
 
         # --- 4. Volumen minimo -------------------------------------------
         paso("4/5", "Verificando el lote configurado...")
@@ -902,6 +1069,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Ejecutar de verdad. Sin esto solo muestra que pasaria.")
     simular.add_argument("--todos", action="store_true",
                          help="Mostrar tambien los mensajes que se descartan")
+    simular.add_argument("--con-precios", action="store_true", dest="con_precios",
+                         help="Comparar cada entrada contra el precio real de MT5 "
+                              "(solo lee cotizaciones, no opera)")
 
     probar = sub.add_parser(
         "probar", help="Verifica la cadena completa contra MetaTrader 5")

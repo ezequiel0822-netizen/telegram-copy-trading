@@ -157,6 +157,42 @@ class MT5NativeBroker(Broker):
             return None
         return float(cuenta.equity) if cuenta is not None else None
 
+    async def market_price(self, symbol: str) -> float | None:
+        if not await self.is_ready():
+            return None
+        return await asyncio.to_thread(self._market_price_sync, symbol)
+
+    def _market_price_sync(self, symbol: str) -> float | None:
+        """Precio medio del instrumento, o None si el broker no lo da.
+
+        Se resuelve el nombre igual que al abrir (`_resolver_contra_broker`,
+        que ademas cachea), asi el control contra el mercado y la orden miran
+        exactamente el mismo simbolo. Si divergieran, el control validaria un
+        instrumento y la orden entraria en otro, que es justo el error que
+        este chequeo existe para atajar.
+        """
+        try:
+            broker_symbol = self._resolver_contra_broker(symbol) or to_broker_symbol(
+                symbol, self.settings.mt5_broker_profile
+            )
+            if self._ensure_symbol(broker_symbol) is None:
+                return None
+            tick = self._mt5.symbol_info_tick(broker_symbol)
+        except Exception:
+            logger.warning("No se pudo leer la cotizacion de %s", symbol, exc_info=True)
+            return None
+
+        if tick is None:
+            return None
+
+        bid = float(getattr(tick, "bid", 0.0) or 0.0)
+        ask = float(getattr(tick, "ask", 0.0) or 0.0)
+        # Fuera de horario un lado puede venir en cero. Con uno solo alcanza:
+        # la tolerancia se mide en puntos porcentuales y el spread no la mueve.
+        if bid > 0 and ask > 0:
+            return (bid + ask) / 2
+        return bid or ask or None
+
     # -- Operaciones -------------------------------------------------------
 
     async def open_order(

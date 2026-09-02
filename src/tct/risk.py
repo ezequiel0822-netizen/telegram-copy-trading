@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tct.config import Settings
-from tct.signals.models import EventType, SignalEvent, Side
+from tct.signals.models import EventType, OrderType, SignalEvent, Side
 from tct.store import Store
 
 
@@ -27,8 +27,18 @@ class RiskDecision:
         return "; ".join(self.reasons) if self.reasons else "ok"
 
 
-def evaluate_open(settings: Settings, store: Store, event: SignalEvent) -> RiskDecision:
-    """Decide si una senal de apertura puede ejecutarse."""
+def evaluate_open(
+    settings: Settings,
+    store: Store,
+    event: SignalEvent,
+    market_price: float | None = None,
+) -> RiskDecision:
+    """Decide si una senal de apertura puede ejecutarse.
+
+    `market_price` es el precio real del instrumento AHORA, o None si no se
+    pudo leer. Lo trae el motor porque pedirlo es una llamada al broker y esta
+    funcion es sincrona y pura a proposito: se puede probar entera sin red.
+    """
     reasons: list[str] = []
 
     if event.event_type is not EventType.OPEN:
@@ -61,6 +71,12 @@ def evaluate_open(settings: Settings, store: Store, event: SignalEvent) -> RiskD
     # Un SL del lado equivocado no es una senal conservadora: es una senal
     # rota. Ejecutarla abriria una posicion que se cierra al instante.
     reasons.extend(_geometry_reasons(event))
+
+    # --- Contraste con el precio real ------------------------------------
+    # La unica validacion que mira afuera del mensaje. Todas las anteriores
+    # comparan el mensaje contra si mismo y por eso no distinguen un precio
+    # coherente de uno correcto.
+    reasons.extend(_market_distance_reasons(settings, event, market_price))
 
     # --- Exposicion ------------------------------------------------------
     open_count = len(store.open_positions())
@@ -109,6 +125,90 @@ def _daily_loss_reasons(settings: Settings, store: Store) -> list[str]:
             f"(limite {settings.max_daily_loss_pct}%). Se reanuda manana."
         ]
     return []
+
+
+def _market_distance_reasons(
+    settings: Settings, event: SignalEvent, market_price: float | None
+) -> list[str]:
+    """Rechaza una entrada que no se parece al precio real del instrumento.
+
+    Es la red que ataja una clase entera de errores de lectura que todas las
+    demas validaciones dejan pasar, porque el mensaje mal leido queda
+    internamente coherente:
+
+    - Simbolo equivocado: "mientras el gold descansa, BTC BUY 65000" leido
+      como oro. La geometria cierra perfecto; el precio esta 15 veces afuera.
+    - Escala cambiada: "DAX SELL 18.500" leido como 18.5. Los tres numeros
+      escalan juntos, asi que SL y TP siguen del lado correcto.
+    - Digitos comidos: "US30 SELL 39,500" leido como entrada 30.
+    - Mensaje viejo: un recap con los precios de la semana pasada.
+
+    Con una orden A MERCADO el dano ademas es concreto y no teorico: la orden
+    entra al precio de AHORA pero el SL y el TP son los del mensaje. Una
+    entrada leida 2345 con el oro en 4438 no abre la posicion a un precio
+    malo: abre una posicion con el stop a dos mil puntos.
+
+    Devuelve lista vacia si no hay precio (sin dato no se inventa un motivo de
+    rechazo, misma politica que el freno diario) o si el control esta en 0.
+    """
+    if market_price is None or market_price <= 0:
+        return []
+
+    distancia = distancia_al_mercado(event, market_price)
+    if distancia is None:
+        return []
+
+    # Una pendiente se pone lejos del mercado a proposito: esperar a que el
+    # precio vuelva (LIMIT) o que rompa (STOP) es su razon de ser. Medirla con
+    # la tolerancia de una orden a mercado rechazaria senales buenas.
+    if event.order_type is OrderType.MARKET:
+        limite, llave = settings.max_spread_from_entry_pct, "MAX_SPREAD_FROM_ENTRY_PCT"
+    else:
+        limite, llave = settings.max_pending_distance_pct, "MAX_PENDING_DISTANCE_PCT"
+
+    if limite <= 0 or distancia <= limite:
+        return []
+
+    return [
+        f"La entrada {_num(event.entry)} esta a {distancia:.1f}% del precio real de "
+        f"{event.symbol} ({_num(market_price)}), y el limite es {limite}% ({llave}). "
+        "Casi siempre es un simbolo mal leido, un mensaje viejo o un precio con la "
+        f"escala cambiada. Si el precio del mensaje estaba bien, subi {llave} en el .env."
+    ]
+
+
+def distancia_al_mercado(event: SignalEvent, market_price: float) -> float | None:
+    """Cuanto se aleja la entrada del precio real, en porcentaje.
+
+    Publica porque `tct simular --con-precios` la usa para mostrar la misma
+    cuenta que hace el filtro sin ejecutar nada. Calibrar el numero mirando
+    otra formula seria calibrarlo contra algo que despues no se aplica.
+
+    Con un rango ("Entry 2345-2347") se mide contra el borde mas cercano, y un
+    mercado adentro del rango da 0: el rango es una banda de precios que el
+    grupo declaro validos, no un punto.
+    """
+    entry = event.entry
+    if entry is None or entry <= 0:
+        return None
+
+    low = event.entry_low if event.entry_low is not None else entry
+    high = event.entry_high if event.entry_high is not None else entry
+    if low > high:
+        low, high = high, low
+
+    if low <= market_price <= high:
+        return 0.0
+
+    borde = low if market_price < low else high
+    return abs(borde - market_price) / market_price * 100
+
+
+def _num(valor: float | None) -> str:
+    """Precio legible: 4438.5 y no 4438.500000000001; 1.0855 y no 1.09."""
+    if valor is None:
+        return "?"
+    return f"{valor:.5f}".rstrip("0").rstrip(".")
 
 
 def _geometry_reasons(event: SignalEvent) -> list[str]:
