@@ -22,6 +22,7 @@ import logging
 import math
 import platform
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from tct.config import (
@@ -465,7 +466,9 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
                 for aviso in evento.warnings:
                     print(f"        aviso: {aviso}")
                 if broker is not None and evento.event_type is EventType.OPEN:
-                    await _mostrar_distancia(broker, settings, evento, distancias)
+                    await _mostrar_distancia(
+                        broker, settings, evento, distancias, _edad_en_minutos(meta)
+                    )
         finally:
             if broker is not None:
                 await broker.disconnect()
@@ -580,14 +583,17 @@ async def _avisar_simbolos_que_el_broker_no_opera(settings: Settings, broker) ->
     )
 
 
-async def _mostrar_distancia(broker, settings: Settings, evento, distancias: list) -> None:
+async def _mostrar_distancia(
+    broker, settings: Settings, evento, distancias: list,
+    edad_min: float | None = None,
+) -> None:
     """Muestra a que distancia del precio real quedo la entrada de una senal.
 
     Usa `risk.distancia_al_mercado`, la misma cuenta que despues aplica el
     filtro. Calibrar el numero mirando otra formula seria calibrarlo contra
     algo que no es lo que se ejecuta.
     """
-    from tct.risk import distancia_al_mercado
+    from tct.risk import _num, distancia_al_mercado
     from tct.signals.models import OrderType
 
     if not evento.symbol or evento.entry is None:
@@ -614,9 +620,38 @@ async def _mostrar_distancia(broker, settings: Settings, evento, distancias: lis
         "MAX_SPREAD_FROM_ENTRY_PCT" if a_mercado else "MAX_PENDING_DISTANCE_PCT"
     )
     rechaza = limite > 0 and distancia > limite
-    print(f"        precio: mercado {precio} | distancia {distancia:.2f}% | "
-          f"limite {limite}% -> {'RECHAZA' if rechaza else 'pasa'}")
-    distancias.append((evento.symbol, distancia, rechaza, llave))
+    print(f"        precio: mercado {_num(precio)} | distancia {distancia:.2f}% | "
+          f"limite {limite}%{_antiguedad(edad_min)} -> "
+          f"{'RECHAZA' if rechaza else 'pasa'}")
+    distancias.append((evento.symbol, distancia, rechaza, llave, edad_min))
+
+
+def _edad_en_minutos(meta: dict, ahora: datetime | None = None) -> float | None:
+    """Hace cuanto llego el mensaje, en minutos. None si no se sabe.
+
+    Es el dato que decide si una distancia significa algo: el oro se mueve, y
+    una senal de ayer va a estar lejos del precio de hoy sin que eso diga nada
+    sobre si estaba bien leida.
+    """
+    crudo = meta.get("date")
+    if not crudo:
+        return None
+    try:
+        cuando = datetime.fromisoformat(str(crudo))
+    except ValueError:
+        return None
+    if cuando.tzinfo is None:
+        cuando = cuando.replace(tzinfo=timezone.utc)
+    ahora = ahora or datetime.now(timezone.utc)
+    return max(0.0, (ahora - cuando).total_seconds() / 60)
+
+
+def _antiguedad(edad_min: float | None) -> str:
+    if edad_min is None:
+        return ""
+    if edad_min < 90:
+        return f" | hace {edad_min:.0f} min"
+    return f" | hace {edad_min / 60:.0f} h"
 
 
 # Por encima de esta distancia no hay senal buena: es un simbolo mal leido o
@@ -624,25 +659,57 @@ async def _mostrar_distancia(broker, settings: Settings, evento, distancias: lis
 # apagar la proteccion.
 _TOPE_SUGERENCIA_PCT = 5.0
 
+# Cuanto puede tener una senal para que su distancia al precio actual signifique
+# algo. Pasado ese rato, lo que se esta midiendo es cuanto se movio el mercado
+# desde entonces, no si la senal estaba bien leida: el oro se mueve 0.5% en una
+# noticia. Medir con senales viejas y sugerir un limite a partir de eso lleva
+# derecho a aflojar la proteccion por un problema que no existe.
+_FRESCURA_MAX_MIN = 90.0
+
 
 def _resumen_de_distancias(settings: Settings, distancias: list) -> None:
     """Traduce las distancias medidas en algo accionable para el .env.
 
-    A proposito NO propone un limite que deje pasar todo. El rechazo mas
-    grande suele ser justamente el mensaje mal leido, y un numero que lo
-    dejara entrar apagaria la proteccion entera; alguien que no programa lo
-    copiaria sin poder notarlo. La sugerencia se calcula sobre el rechazo MAS
-    CHICO, que es el unico candidato razonable a falso positivo.
+    Dos cuidados, los dos por el mismo motivo: quien lo lee no programa y va a
+    copiar el numero que aparezca.
+
+    1. Solo se calcula sobre senales RECIENTES. Una de ayer siempre va a estar
+       lejos del precio de hoy, y sugerir un limite que la deje entrar es
+       aflojar la proteccion por un problema inventado.
+    2. La sugerencia sale del rechazo MAS CHICO, no del mas grande. El mas
+       grande suele ser justamente el mensaje mal leido, y un numero que lo
+       dejara pasar apagaria la proteccion entera.
     """
-    rechazadas = sorted(
-        (distancia, simbolo, llave)
-        for simbolo, distancia, rechaza, llave in distancias if rechaza
-    )
-    peor = max(d for _, d, _, _ in distancias)
+    frescas = [d for d in distancias if d[4] is not None and d[4] <= _FRESCURA_MAX_MIN]
+    viejas = len(distancias) - len(frescas)
 
     print("\n" + "-" * 66)
     print(f"  DISTANCIA AL PRECIO REAL  ({len(distancias)} senales medidas)")
     print("-" * 66)
+
+    if viejas:
+        print(f"  {viejas} de {len(distancias)} tienen mas de "
+              f"{_FRESCURA_MAX_MIN / 60:.0f}h y NO se usan para calibrar:")
+        print("  a esa altura se esta midiendo cuanto se movio el mercado desde")
+        print("  entonces, no si la senal estaba bien leida.")
+
+    if not frescas:
+        print("\n  No hay ninguna senal lo bastante reciente para sacar un numero.")
+        print("  Dos formas de conseguirlo:")
+        print("    - Correr esto de nuevo poco despues de que llegue una senal:")
+        print("          python -m tct simular --horas 2 --con-precios")
+        print("    - O dejar el bot corriendo unos dias: cada paper trade guarda")
+        print("      el precio de mercado del momento exacto en que llego la")
+        print("      senal, que es el dato sin este problema.")
+        return
+
+    rechazadas = sorted(
+        (distancia, simbolo, llave)
+        for simbolo, distancia, rechaza, llave, _edad in frescas if rechaza
+    )
+    peor = max(d[1] for d in frescas)
+
+    print(f"\n  Sobre las {len(frescas)} recientes:")
 
     if not rechazadas:
         print(f"  Ninguna se habria rechazado. La mas lejos quedo a {peor:.2f}%.")
@@ -665,14 +732,12 @@ def _resumen_de_distancias(settings: Settings, distancias: list) -> None:
         print("\n  No subas el limite para que entre una senal que el bot leyo mal.")
         print("  Ese es exactamente el caso que este filtro existe para frenar.")
 
-    # Sin esta aclaracion el numero enganaria: reproducir mensajes viejos
-    # contra precios de hoy da distancias enormes que en su momento no
-    # existieron. El resultado solo es representativo con pocas horas.
-    print("\n  OJO: la distancia se mide contra el precio de AHORA, no contra")
-    print("  el de cuando llego el mensaje. Una senal de ayer va a dar una")
-    print("  distancia grande aunque en su momento fuera perfecta.")
-    print("  Para que este numero signifique algo, usa pocas horas:")
-    print("      python -m tct simular --horas 2 --con-precios")
+    # Antes aca habia un parrafo avisando que las senales viejas enganan. Era
+    # poner la advertencia DESPUES del numero que ya estaba mal calculado: lo
+    # correcto es no calcularlo con senales viejas, que es lo que se hace
+    # ahora. Queda solo la nota de que el filtro se aplico.
+    print(f"\n  Medido contra el precio de AHORA, solo con senales de menos de "
+          f"{_FRESCURA_MAX_MIN / 60:.0f}h.")
 
 
 def _limite_holgado(pct: float) -> float:

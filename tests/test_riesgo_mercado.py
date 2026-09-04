@@ -321,8 +321,8 @@ def test_la_sugerencia_sale_del_rechazo_mas_chico_no_del_mas_grande(tmp_path, ca
     Sugerir el numero que los deja pasar a los dos es sugerir apagar todo."""
     settings = build_settings(tmp_path)
     salida = _resumen(settings, [
-        ("XAUUSD", 0.83, True, "MAX_SPREAD_FROM_ENTRY_PCT"),
-        ("XAUUSD", 47.16, True, "MAX_SPREAD_FROM_ENTRY_PCT"),
+        ("XAUUSD", 0.83, True, "MAX_SPREAD_FROM_ENTRY_PCT", 5.0),
+        ("XAUUSD", 47.16, True, "MAX_SPREAD_FROM_ENTRY_PCT", 5.0),
     ], capsys)
 
     # 0.83% redondeado hacia arriba con un tick de aire.
@@ -335,7 +335,7 @@ def test_no_sugiere_ningun_numero_si_todos_los_rechazos_son_absurdos(tmp_path, c
     un numero, es mirar por que el parser leyo eso."""
     settings = build_settings(tmp_path)
     salida = _resumen(
-        settings, [("XAUUSD", 47.16, True, "MAX_SPREAD_FROM_ENTRY_PCT")], capsys
+        settings, [("XAUUSD", 47.16, True, "MAX_SPREAD_FROM_ENTRY_PCT", 5.0)], capsys
     )
 
     assert "MAX_SPREAD_FROM_ENTRY_PCT=" not in salida
@@ -348,7 +348,7 @@ def test_la_sugerencia_nombra_la_llave_de_la_orden_que_se_rechazo(tmp_path, caps
     filtro esta roto."""
     settings = build_settings(tmp_path)
     salida = _resumen(
-        settings, [("XAUUSD", 3.4, True, "MAX_PENDING_DISTANCE_PCT")], capsys
+        settings, [("XAUUSD", 3.4, True, "MAX_PENDING_DISTANCE_PCT", 5.0)], capsys
     )
 
     assert "MAX_PENDING_DISTANCE_PCT=3.5" in salida
@@ -359,7 +359,7 @@ def test_el_resumen_avisa_que_compara_contra_el_precio_de_ahora(tmp_path, capsys
     contra precios de hoy da distancias enormes que nunca existieron."""
     settings = build_settings(tmp_path)
     salida = _resumen(
-        settings, [("XAUUSD", 0.2, False, "MAX_SPREAD_FROM_ENTRY_PCT")], capsys
+        settings, [("XAUUSD", 0.2, False, "MAX_SPREAD_FROM_ENTRY_PCT", 5.0)], capsys
     )
 
     assert "AHORA" in salida
@@ -393,3 +393,102 @@ def test_calibrar_no_manda_ninguna_orden(tmp_path, capsys):
     assert len(distancias) == 1
     assert distancias[0][2] is True, "no marco el rechazo"
     assert "RECHAZA" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# Una senal vieja no sirve para calibrar
+#
+# El caso que lo motivo, con datos reales: el usuario corrio
+# `simular --horas 23 --con-precios` y la herramienta le sugirio subir
+# MAX_SPREAD_FROM_ENTRY_PCT a 1.2 porque una senal de 21 horas antes quedaba a
+# 1.06% del precio de ahora. Esa senal estaba perfecta cuando llego; lo que se
+# midio fue cuanto se movio el oro desde entonces. Seguir la sugerencia habria
+# aflojado la proteccion por un problema que no existia.
+# --------------------------------------------------------------------------
+
+
+VIEJA = 21 * 60.0    # minutos
+RECIENTE = 5.0
+
+
+def test_una_senal_vieja_no_genera_ninguna_sugerencia(tmp_path, capsys):
+    settings = build_settings(tmp_path)
+    salida = _resumen(
+        settings, [("XAUUSD", 1.06, True, "MAX_SPREAD_FROM_ENTRY_PCT", VIEJA)], capsys
+    )
+
+    assert "MAX_SPREAD_FROM_ENTRY_PCT=" not in salida, (
+        "sugirio aflojar el limite por una senal de hace 21 horas"
+    )
+    assert "reciente" in salida, "no explica por que no da un numero"
+
+
+def test_dice_cuantas_dejo_afuera_por_viejas(tmp_path, capsys):
+    """Callarlas seria peor: la persona veria menos senales de las que mando y
+    no sabria por que."""
+    settings = build_settings(tmp_path)
+    salida = _resumen(settings, [
+        ("XAUUSD", 1.06, True, "MAX_SPREAD_FROM_ENTRY_PCT", VIEJA),
+        ("XAUUSD", 0.37, False, "MAX_SPREAD_FROM_ENTRY_PCT", VIEJA),
+    ], capsys)
+
+    assert "2 de 2" in salida
+
+
+def test_solo_las_recientes_cuentan_para_el_numero(tmp_path, capsys):
+    """Con una vieja lejos y una reciente cerca, el numero sale de la reciente."""
+    settings = build_settings(tmp_path)
+    salida = _resumen(settings, [
+        ("XAUUSD", 1.06, True, "MAX_SPREAD_FROM_ENTRY_PCT", VIEJA),
+        ("XAUUSD", 0.62, True, "MAX_SPREAD_FROM_ENTRY_PCT", RECIENTE),
+    ], capsys)
+
+    # 0.62% redondeado hacia arriba con un tick de aire.
+    assert "MAX_SPREAD_FROM_ENTRY_PCT=0.8" in salida
+    assert "1.2" not in salida, "uso la senal vieja para sugerir el limite"
+
+
+def test_sin_senales_recientes_manda_a_los_paper_trades(tmp_path, capsys):
+    """Es el camino que no tiene este problema: el paper trade guarda el precio
+    de mercado del instante exacto en que llego la senal."""
+    settings = build_settings(tmp_path)
+    salida = _resumen(
+        settings, [("XAUUSD", 1.06, True, "MAX_SPREAD_FROM_ENTRY_PCT", VIEJA)], capsys
+    )
+
+    assert "paper trade" in salida
+
+
+def test_una_senal_sin_fecha_no_se_usa_para_calibrar(tmp_path, capsys):
+    """Sin fecha no se puede saber si es fresca, y suponer que si lo es seria
+    justo el error que este filtro evita."""
+    settings = build_settings(tmp_path)
+    salida = _resumen(
+        settings, [("XAUUSD", 1.06, True, "MAX_SPREAD_FROM_ENTRY_PCT", None)], capsys
+    )
+
+    assert "MAX_SPREAD_FROM_ENTRY_PCT=" not in salida
+
+
+# --------------------------------------------------------------------------
+# La edad de un mensaje
+# --------------------------------------------------------------------------
+
+
+def test_la_edad_sale_de_la_fecha_del_mensaje():
+    from datetime import datetime, timedelta, timezone
+
+    from tct.cli import _edad_en_minutos
+
+    ahora = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
+    hace_media_hora = (ahora - timedelta(minutes=30)).isoformat()
+
+    assert _edad_en_minutos({"date": hace_media_hora}, ahora) == pytest.approx(30.0)
+
+
+def test_sin_fecha_la_edad_es_desconocida():
+    from tct.cli import _edad_en_minutos
+
+    assert _edad_en_minutos({}) is None
+    assert _edad_en_minutos({"date": None}) is None
+    assert _edad_en_minutos({"date": "no es una fecha"}) is None
