@@ -668,6 +668,10 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
     from tct.signals.models import OrderType, Side
 
     fallos: list[str] = []
+    # Lo que no impide operar pero el usuario tiene que saber. Sin este cajon,
+    # un simbolo que este broker no expone se imprimia como "FALTA" a mitad de
+    # la salida y el resumen final igual decia TODO EN ORDEN.
+    avisos: list[str] = []
 
     def paso(numero: str, titulo: str) -> None:
         print(f"\n[{numero}] {titulo}")
@@ -702,6 +706,16 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
                 print(f"      OK    {simbolo}{marca}")
             else:
                 print(f"      FALTA {simbolo}  <- este broker no lo expone")
+                # No es cosmetico: ninguna senal de ese simbolo va a poder
+                # operar nunca, y cada una igual consume cupo diario, porque
+                # el contador se incrementa antes de llamar al broker.
+                avisos.append(
+                    f"{simbolo} no existe en este broker. Ninguna senal suya va a "
+                    "poder operar, y cada una igual gasta cupo de "
+                    "MAX_SIGNALS_PER_DAY.\n"
+                    "     Sacalo de ALLOWED_SYMBOLS en el .env, o activalo en "
+                    "Market Watch si tu broker si lo tiene."
+                )
         if not resueltos:
             fallos.append("El broker no expone ninguno de los simbolos configurados")
             print("\n      Ninguno resolvio. Revisa ALLOWED_SYMBOLS en el .env.")
@@ -709,6 +723,7 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
         # --- 3. Cotizaciones ---------------------------------------------
         paso("3/5", "Pidiendo cotizaciones...")
         con_precio: list[tuple[str, str, float]] = []
+        sin_precio: list[str] = []
         for canonico, real in resueltos.items():
             info = await asyncio.to_thread(broker._ensure_symbol, real)
             tick = mt5.symbol_info_tick(real) if info else None
@@ -717,8 +732,20 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
                 print(f"      OK    {canonico:<8} bid={tick.bid} ask={tick.ask}")
             else:
                 print(f"      sin cotizacion: {canonico}  (mercado cerrado?)")
+                sin_precio.append(canonico)
         if not con_precio:
             fallos.append("Ningun simbolo tiene cotizacion (puede ser el mercado cerrado)")
+        elif sin_precio:
+            # La consecuencia que no era evidente: sin cotizacion,
+            # `market_price()` devuelve None y el contraste con el precio real
+            # NO opina. Es la politica correcta (sin dato no se inventa un
+            # rechazo), pero significa que esos simbolos entran sin ese filtro.
+            avisos.append(
+                "Sin cotizacion ahora: " + ", ".join(sin_precio) + ".\n"
+                "     Suele ser el horario del instrumento y se arregla solo. Pero\n"
+                "     mientras dure, el control contra el precio real NO puede opinar\n"
+                "     sobre ellos: una senal de esos simbolos entra sin ese filtro."
+            )
 
         # El control que compara la entrada del mensaje contra el precio real
         # se alimenta de `broker.market_price()`, que resuelve el simbolo por
@@ -811,8 +838,14 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
             print(f"  {i}. {f}")
         return 1
 
-    print("  TODO EN ORDEN")
+    # "TODO EN ORDEN" con avisos sin nombrar es como decia antes que estaba
+    # todo bien mientras un simbolo entero no existia en el broker.
+    print("  TODO EN ORDEN" if not avisos else "  EN ORDEN, CON AVISOS")
     print("=" * 66)
+    for i, aviso in enumerate(avisos, 1):
+        print(f"  {i}. {aviso}")
+    if avisos:
+        print()
     if args.operar:
         print("  La cadena completa funciona: conexion, simbolos, cotizaciones,")
         print("  y una orden real que se abrio y se cerro contra tu cuenta demo.")
