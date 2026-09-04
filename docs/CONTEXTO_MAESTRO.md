@@ -76,13 +76,50 @@ Eso viene del pedido original y sigue vigente.
 3. **Suele quedar en un commit viejo.** Cuando reporte un comportamiento ya
    arreglado, lo primero es pedirle `git pull` y confirmar el commit.
 
-### Preguntas abiertas que le hice y no contestó
+### Cómo escribe el canal (medido, no supuesto)
 
-- ¿El canal opera **solo oro**? Importa porque `MOVER SL A 4444` no nombra
-  instrumento, y sin símbolo el bot aplica el cambio a **todas** las posiciones
-  abiertas.
-- El mensaje textual de una señal que salió con entrada 4438 y stop 4436 (2
-  puntos de stop en oro, sospechosamente ajustado).
+Un `tct simular --horas 23` sobre **David 💵 Forex | PRO** el 2026-09-04 dio
+15 mensajes, 14 con texto, y **7 interpretados como señal**. El formato es
+consistente:
+
+```
+DEAL | GOLD (XAU/USD) BUY XAUUSD 4432 Parameters: 🟢TP1: 4436 ...
+```
+
+y el parser lo lee bien: símbolo, lado, entrada, SL y **tres** TPs. Las tres
+señales de esas 23 horas fueron:
+
+| | Entrada | SL | TPs |
+|---|---|---|---|
+| BUY | 4432 | 4424 | 4436 / 4438 / 4440 |
+| BUY | 4496 | 4488 | 4500 / 4502 / 4504 |
+| SELL | 4478 | 4482 | 4474 / 4472 / 4470 |
+
+**Patrón: scalping de oro, 8 puntos de stop, TPs a +4 / +6 / +8.** Eso corrige
+la sospecha vieja de "2 puntos de stop": son 8, y son consistentes.
+
+**Detrás de cada señal viene un `MOVER SL A <la entrada>`.** O sea: el canal
+manda a breakeven, pero escribiendo el número en vez de decir "BE". El parser
+lo lee como `MOVE_SL` con precio explícito, que es correcto.
+
+**Ese `MOVER SL` NO nombra instrumento**, así que aplica a todas las posiciones
+abiertas. En estas 23 horas el canal operó **solo oro**, con lo cual no hizo
+daño. Pero el usuario confirmó que **también opera BTCUSD**, y ahí sí importa:
+con una posición de oro y una de BTC abiertas, un `MOVER SL A 4432` iría a las
+dos. Lo ataja el chequeo de escala de §5 —4432 contra un BTC de seis cifras
+queda fuera del factor 2— y esa es exactamente la situación para la que se
+escribió.
+
+Un mensaje narrativo (*"La línea blanca que ves es nuestro SL 4424"*) se
+clasificó como `UPDATE`. No ejecuta nada, así que es inofensivo, pero genera
+una notificación por Telegram cada vez. Es un casi-acierto de `_NARRATIVA_RE`:
+lo agarró antes de que pudiera hacer daño, no antes de hacer ruido.
+
+### Preguntas abiertas
+
+- **Qué son los 7 mensajes que NO se interpretaron.** Hace falta correr
+  `tct simular --horas 23 --todos` para verlos. Pueden ser charla y media
+  (inofensivo) o señales que se están perdiendo.
 
 ---
 
