@@ -48,6 +48,13 @@ Eso viene del pedido original y sigue vigente.
   presente:** se conecta a la que haya, así que la cuenta con la que opera
   depende de en cuál esté logueada esa ventana.
 - Ollama con `llama3.2:3b` funcionando.
+- **El 2026-09-04 el bot mandó su primera orden de verdad.**
+  `tct probar --operar` abrió y cerró 0.01 de XAUUSD contra MetaQuotes-Demo
+  sin un solo tropiezo. Es el hito que cierra el punto 2 de §8.
+- **El canal opera BTCUSD y `MetaQuotes-Demo` no tiene cripto.** Se decidió
+  **dejarlo** en `ALLOWED_SYMBOLS`: las señales igual se registran como paper
+  trade —que es lo que sirve para evaluar el canal— y ya no gastan cupo
+  diario. Se resuelve solo cuando conecte FxPro, que sí lo opera.
 - La cuenta **real no está configurada**. Existe `.env.real.example` pero no
   la ha completado.
 - Tiene `MAX_DAILY_LOSS_PCT` sin poner (el arranque dice "sin tope"), y
@@ -427,10 +434,16 @@ Ordenado por lo que más importa antes de dinero real.
    `tct simular --horas 2 --con-precios` mide las señales reales del grupo
    contra el precio de MT5 sin operar y sugiere el número. **Es lo primero que
    hay que hacer con este cambio, antes de confiar en él.**
-2. **Primera orden real contra MT5.** Todas las constantes están verificadas
-   contra el paquete instalado, pero un `order_send` de verdad no. El punto
-   delicado es el *filling mode*, que cada bróker acepta distinto.
-   `tct probar --operar` existe para eso.
+2. **Primera orden real contra FxPro.** ✅ El `order_send` de verdad **ya
+   ocurrió**: el 2026-09-04, `tct probar --operar` abrió y cerró una posición
+   de 0.01 en XAUUSD contra `MetaQuotes-Demo`
+   (`ticket=10356633241 precio=4483.3`), y la negociación de *filling mode*
+   funcionó a la primera. La cadena completa —conectar, resolver el símbolo,
+   cotizar, normalizar el volumen, `order_send`, cerrar— está probada contra
+   una terminal real.
+   **Lo que sigue faltando es repetirlo en FxPro**, que es donde va a operar:
+   el *filling mode* es justamente lo que cada bróker acepta distinto, así que
+   este resultado no se traslada.
 3. **Punto como separador de miles.** `"DAX SELL 18.500"` → 18.5. Los tres
    números escalan juntos, así que la geometría no lo nota. El contraste con
    el mercado ahora lo ataja *si el bróker cotiza ese símbolo*, pero eso es una

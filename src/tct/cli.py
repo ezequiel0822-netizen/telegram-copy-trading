@@ -751,11 +751,15 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
                 # operar nunca, y cada una igual consume cupo diario, porque
                 # el contador se incrementa antes de llamar al broker.
                 avisos.append(
-                    f"{simbolo} no existe en este broker. Ninguna senal suya va a "
-                    "poder operar, y cada una igual gasta cupo de "
-                    "MAX_SIGNALS_PER_DAY.\n"
-                    "     Sacalo de ALLOWED_SYMBOLS en el .env, o activalo en "
-                    "Market Watch si tu broker si lo tiene."
+                    f"{simbolo} no existe en este broker: ninguna senal suya va a "
+                    "poder ejecutarse.\n"
+                    "     Pero se registran igual como paper trade, asi que no se "
+                    "pierden y\n"
+                    "     sirven para evaluar el canal. Tampoco gastan cupo diario.\n"
+                    "     Dejalo si queres ese registro; sacalo de ALLOWED_SYMBOLS "
+                    "si preferis\n"
+                    "     no ver el aviso. Si tu broker si lo tiene, activalo en "
+                    "Market Watch."
                 )
         if not resueltos:
             fallos.append("El broker no expone ninguno de los simbolos configurados")
