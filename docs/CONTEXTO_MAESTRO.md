@@ -129,11 +129,35 @@ clasificó como `UPDATE`. No ejecuta nada, así que es inofensivo, pero genera
 una notificación por Telegram cada vez. Es un casi-acierto de `_NARRATIVA_RE`:
 lo agarró antes de que pudiera hacer daño, no antes de hacer ruido.
 
+### Los 7 mensajes descartados: el parser acertó los 14
+
+`--todos` mostró los descartes, y **ninguno era una señal**. Pero cuatro de
+ellos son exactamente las trampas que costaron los catorce bugs de §6, vistas
+por primera vez en el canal real:
+
+| Mensaje descartado | Qué habría hecho sin la guarda |
+|---|---|
+| *"Abrí un par de operaciones de prueba…"* | crónica → abrir |
+| *"Si hubieran comprado en 4428 (captura…"* | **hipotético con precio** → BUY a 4428 |
+| *"¿Pero por qué no compramos en 4428?"* | **pregunta con precio** → BUY a 4428 |
+| *"aquí están nuestros resultados de la oper…"* | recap → abrir |
+
+Los otros tres son charla (*"ya estoy en línea"*, *"intenté explicarlo"*,
+*"esperemos por ahora"*).
+
+**14 de 14: siete señales leídas completas, siete descartes correctos, cero
+falsos positivos y cero señales perdidas.** Es la primera validación del parser
+contra datos reales de este canal, y confirma que `_NARRATIVA_RE` y el orden de
+`_classify` (§5) hacen falta de verdad: este canal produce ese tipo de mensaje
+todo el tiempo, con precios adentro.
+
+Volumen: **3 señales en 23 horas**. Con `MAX_SIGNALS_PER_DAY=10` sobra lugar.
+
 ### Preguntas abiertas
 
-- **Qué son los 7 mensajes que NO se interpretaron.** Hace falta correr
-  `tct simular --horas 23 --todos` para verlos. Pueden ser charla y media
-  (inofensivo) o señales que se están perdiendo.
+- Ninguna sobre el canal. La próxima duda concreta es cuánto conviene apretar
+  `MAX_SPREAD_FROM_ENTRY_PCT`, y eso se mide con
+  `tct simular --horas 2 --con-precios` **con el mercado abierto**.
 
 ---
 
