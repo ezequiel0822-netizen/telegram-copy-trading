@@ -95,8 +95,22 @@ señales de esas 23 horas fueron:
 | BUY | 4496 | 4488 | 4500 / 4502 / 4504 |
 | SELL | 4478 | 4482 | 4474 / 4472 / 4470 |
 
-**Patrón: scalping de oro, 8 puntos de stop, TPs a +4 / +6 / +8.** Eso corrige
-la sospecha vieja de "2 puntos de stop": son 8, y son consistentes.
+**Patrón: scalping de oro, TPs siempre a 4 / 6 / 8 puntos.** Eso corrige la
+sospecha vieja de "2 puntos de stop": son 8 en los BUY y 4 en el SELL.
+
+Vale mirar la relación riesgo/beneficio que sale de esos números, porque no es
+simétrica y el objetivo de todo esto es decidir si el canal sirve:
+
+| | Riesgo | TP1 | En TP1 |
+|---|---|---|---|
+| Los dos BUY | 8 | +4 | arriesga **el doble** de lo que busca |
+| El SELL | 4 | +4 | 1:1 |
+
+Con tres TPs, cuánto se cierra en cada uno cambia el resultado por completo, y
+el canal no lo dice: el bot manda el TP más cercano a MT5 y los demás quedan
+para los mensajes de cierre parcial. **Esto no se decide mirando la geometría,
+se decide con el P&L de los paper trades** —que es el punto 8 de §8, todavía
+pendiente, y la razón por la que importa.
 
 **Detrás de cada señal viene un `MOVER SL A <la entrada>`.** O sea: el canal
 manda a breakeven, pero escribiendo el número en vez de decir "BE". El parser
