@@ -287,7 +287,6 @@ class Engine:
             "take_profits": take_profits,
             "signal": event.to_dict(),
         })
-        self.store.bump_daily_counter()
 
         # 2) Broker, solo si el modo lo permite.
         order = await self._send_open(event, lot, take_profits)
@@ -315,6 +314,18 @@ class Engine:
                 "paper_trade": paper,
                 "signal": event.to_dict(),
             }
+
+        # El cupo diario se consume ACA, no antes de llamar al broker.
+        # MAX_SIGNALS_PER_DAY limita cuantas OPERACIONES toma el bot en un dia,
+        # y una senal que el broker rechazo no es una operacion.
+        #
+        # Contarla igual tenia una consecuencia concreta: si el canal opera un
+        # instrumento que el broker conectado no expone (BTCUSD en una demo sin
+        # cripto, por ejemplo), cada senal de ese simbolo fallaba al abrir y
+        # aun asi ocupaba un lugar del cupo, dejando sin lugar a las que si
+        # podian operar. El paper trade ya quedo escrito unas lineas arriba,
+        # asi que la senal no se pierde: lo unico que no se gasta es el cupo.
+        self.store.bump_daily_counter()
 
         # 3) Estado. El ticket es el del broker si hubo, o el sintetico del
         #    paper broker, que igual sirve para atar cierres posteriores.

@@ -539,6 +539,47 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+async def _avisar_simbolos_que_el_broker_no_opera(settings: Settings, broker) -> None:
+    """Avisa al arrancar que simbolos de ALLOWED_SYMBOLS este broker no expone.
+
+    Se sabe en el arranque y se callaba hasta que llegaba la primera senal de
+    ese instrumento. Recien ahi aparecia un "apertura_fallida" suelto, sin
+    contexto, y la persona no tenia como saber que iba a pasar SIEMPRE con ese
+    simbolo y no era un problema de esa senal en particular.
+
+    Es solo un aviso: la senal se sigue registrando como paper trade, que es
+    justamente lo que permite evaluar despues si el canal sirve. Lo unico que
+    no se puede es ejecutarla.
+
+    No aborta ni bloquea nada: un broker que no expone un instrumento es una
+    situacion normal, no un error de configuracion.
+    """
+    logger = logging.getLogger("tct")
+    resolver = getattr(broker, "_resolver_contra_broker", None)
+    if resolver is None:
+        return  # el broker de papel y metaapi no resuelven contra un catalogo
+
+    faltantes = []
+    for simbolo in sorted(settings.allowed_symbols):
+        try:
+            if not await asyncio.to_thread(resolver, simbolo):
+                faltantes.append(simbolo)
+        except Exception:
+            logger.debug("No se pudo resolver %s al arrancar", simbolo, exc_info=True)
+            return
+
+    if not faltantes:
+        return
+
+    logger.warning(
+        "Este broker no opera: %s\n"
+        "        Las senales de esos simbolos se van a REGISTRAR igual (quedan en\n"
+        "        el paper trade, con su motivo), pero no van a poder ejecutarse.\n"
+        "        Si tu broker si los tiene, activalos en Market Watch.",
+        ", ".join(faltantes),
+    )
+
+
 async def _mostrar_distancia(broker, settings: Settings, evento, distancias: list) -> None:
     """Muestra a que distancia del precio real quedo la entrada de una senal.
 
@@ -1007,6 +1048,8 @@ async def _run_async(settings: Settings) -> None:
             logger.error("No se pudo conectar el broker '%s'. Abortando.", broker.name)
             return
         logger.warning("El broker '%s' no conecto, se sigue en modo papel.", broker.name)
+
+    await _avisar_simbolos_que_el_broker_no_opera(settings, broker)
 
     # Interprete de respaldo. Si no esta disponible se avisa y se sigue: el
     # sistema funciona identico sin el, solo pierde los mensajes raros.

@@ -219,3 +219,52 @@ def test_dos_senales_simultaneas_respetan_el_tope_de_abiertas(tmp_path):
     assert len(store.open_positions()) <= 1, (
         f"se abrieron {len(store.open_positions())} con MAX_OPEN_TRADES=1"
     )
+
+
+# --------------------------------------------------------------------------
+# Una senal que nunca llego a operar no puede gastar el cupo del dia
+# --------------------------------------------------------------------------
+
+
+def test_una_apertura_fallida_no_gasta_cupo_diario(tmp_path):
+    """MAX_SIGNALS_PER_DAY limita cuantas OPERACIONES toma el bot por dia. Una
+    senal que el broker rechazo no es una operacion.
+
+    El caso real: el canal manda senales de BTCUSD y el broker conectado no
+    expone ese instrumento. Cada una fallaba al abrir y aun asi consumia un
+    lugar del cupo, dejando sin lugar a las senales que si podian operar.
+    """
+    _, store, engine = armar(tmp_path, BrokerQueRechaza(abrir=False))
+
+    send(engine, SENAL)
+
+    assert store.signals_today() == 0, (
+        "una senal que no abrio ninguna posicion gasto cupo del dia"
+    )
+
+
+def test_una_apertura_exitosa_si_gasta_cupo(tmp_path):
+    """Lo que no hay que romper: el tope tiene que seguir frenando de verdad."""
+    _, store, engine = armar(tmp_path)
+
+    send(engine, SENAL)
+
+    assert store.signals_today() == 1
+
+
+def test_un_simbolo_que_el_broker_no_opera_no_agota_el_dia(tmp_path):
+    """La consecuencia practica, con el cupo chico que usa el usuario."""
+    _, store, engine = armar(
+        tmp_path, BrokerQueRechaza(abrir=False),
+        max_signals_per_day=2, allowed_symbols={"XAUUSD", "EURUSD"},
+    )
+
+    for i in range(5):
+        send(engine, SENAL, message_id=100 + i)
+
+    engine.broker.permite["abrir"] = True
+    resultado = send(engine, "EURUSD BUY\nEntry 1.08\nSL 1.07\nTP 1.09", message_id=200)
+
+    assert resultado["status"] == "aceptada", (
+        "cinco senales que nunca operaron agotaron el cupo de las que si podian"
+    )
