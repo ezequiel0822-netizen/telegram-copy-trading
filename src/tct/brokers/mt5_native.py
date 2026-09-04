@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 from tct.brokers.base import Broker, OrderResult
@@ -60,6 +61,43 @@ def _volumen_confirmado(result: Any, pedido: float) -> float:
     return ejecutado or float(pedido)
 
 
+# Codigo que devuelve MT5 cuando no pudo lanzar la terminal. Es el unico que
+# apunta a un problema de RUTA y no de estado de la terminal.
+_IPC_INITIALIZE_FAILED = -10003
+
+
+def _pistas_de_initialize(codigo: int, mt5_path: str) -> list[str]:
+    """Que hacer ante un initialize() fallido, en castellano y accionable.
+
+    El mensaje crudo de MT5 nombra funciones internas ("IPC initialize failed")
+    y no sugiere nada. Quien lo lee no programa: necesita saber que apretar, no
+    como se llama la capa que fallo.
+    """
+    if codigo == _IPC_INITIALIZE_FAILED:
+        if mt5_path:
+            return [
+                "No se pudo ARRANCAR MetaTrader desde esa ruta.",
+                "Casi siempre la ruta esta mal escrita, o MetaTrader se instalo",
+                "en otra carpeta. Para encontrar la verdadera: clic derecho en el",
+                "acceso directo de MetaTrader 5 -> Propiedades -> 'Destino'.",
+                "O directamente dejá MT5_PATH vacio en el .env y abri MetaTrader",
+                "a mano antes de arrancar el bot.",
+            ]
+        return [
+            "No se encontro ninguna terminal MetaTrader 5 para arrancar.",
+            "Abri MetaTrader 5 a mano y volve a intentar, o completá MT5_PATH",
+            "en el .env con la ruta a terminal64.exe.",
+        ]
+
+    return [
+        "Casi siempre es una de estas tres:",
+        "  1. MetaTrader 5 no esta abierto. Abrilo.",
+        "  2. Esta abierto pero sin loguear en ninguna cuenta.",
+        "  3. Se abrio 'como administrador' y el bot no. Los dos tienen que",
+        "     correr con el mismo nivel de permisos.",
+    ]
+
+
 class MT5NativeBroker(Broker):
     name = "mt5"
 
@@ -89,10 +127,30 @@ class MT5NativeBroker(Broker):
         self._mt5 = mt5
         kwargs: dict[str, Any] = {}
         if self.settings.mt5_path:
+            # Se verifica ANTES de llamar a initialize(), porque el error que
+            # devuelve MT5 cuando la ruta no existe es
+            #     (-10003, "IPC initialize failed, Process create failed '<ruta>'")
+            # que no dice que el problema sea la ruta, ni que la ruta salga del
+            # .env, ni que se pueda dejar vacia. Una sola letra de menos en el
+            # nombre de la carpeta ("MetaTrade 5") produce exactamente eso.
+            if not Path(self.settings.mt5_path).exists():
+                logger.error(
+                    "MT5_PATH apunta a un archivo que no existe:\n"
+                    "            %s\n"
+                    "        Corregilo en el .env, o dejalo VACIO (MT5_PATH=) y abri\n"
+                    "        MetaTrader 5 a mano antes de arrancar el bot: sin ruta, se\n"
+                    "        conecta a la terminal que ya este abierta y no hace falta\n"
+                    "        acertarle a la ruta.",
+                    self.settings.mt5_path,
+                )
+                return False
             kwargs["path"] = self.settings.mt5_path
 
         if not mt5.initialize(**kwargs):
-            logger.error("mt5.initialize() fallo: %s", mt5.last_error())
+            codigo, mensaje = mt5.last_error()
+            logger.error("mt5.initialize() fallo: %s (codigo %s)", mensaje, codigo)
+            for linea in _pistas_de_initialize(codigo, self.settings.mt5_path):
+                logger.error("        %s", linea)
             return False
 
         if self.settings.mt5_login and self.settings.mt5_password and self.settings.mt5_server:
