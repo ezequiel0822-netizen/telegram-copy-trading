@@ -608,10 +608,16 @@ class MT5NativeBroker(Broker):
                         logger.info("Simbolo %s resuelto como '%s' en este broker", canonico, nombre)
                         return nombre
 
-        logger.error(
-            "El broker no expone ningun simbolo para %s. Revisa que este en Market Watch.",
-            canonico,
-        )
+        # INFO y no ERROR: que un broker no tenga un instrumento es un hecho
+        # sobre ese broker, no una falla. Quien SI tiene que gritar es el que
+        # necesitaba el simbolo: al abrir, `_open_sync` devuelve un OrderResult
+        # con el motivo y el motor lo loguea como error; al arrancar,
+        # `tct run` avisa la lista completa de una sola vez.
+        #
+        # Estaba en ERROR y salia una linea roja alarmante justo antes del
+        # aviso bueno, diciendo lo mismo peor. Un ERROR que no es un error
+        # entrena a la persona a ignorar los que si lo son.
+        logger.info("El broker no expone ningun simbolo para %s", canonico)
         self._symbol_cache[canonico] = None
         return None
 
