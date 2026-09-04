@@ -800,6 +800,22 @@ mensajes de tu propio grupo (solo lee cotizaciones, no opera):
 .\.venv\Scripts\python.exe -m tct simular --horas 2 --con-precios
 ```
 
+### Si escribir esa ruta larga te cansa
+
+Hacé doble clic en **`scripts\consola.bat`**. Abre una ventana con el entorno
+del bot ya activado, y ahí los comandos se escriben cortos:
+
+```
+tct check
+tct status
+tct simular --horas 2 --con-precios
+```
+
+**Por qué hace falta:** `python -m tct` a secas NO funciona, y el error que da
+(`No module named tct`) no explica nada. Ese `python` es el de Windows; el bot
+está instalado en el Python de la carpeta `.venv` del proyecto, que es otro.
+Son dos cajas de herramientas distintas y el bot está en una sola.
+
 Al final te muestra a qué distancia del precio real quedó cada señal y, si
 rechazó alguna, qué número tendrías que poner para que entrara. **Ojo:** compara
 contra el precio de *ahora*, así que usá pocas horas o los números no

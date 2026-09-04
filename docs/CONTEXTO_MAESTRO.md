@@ -42,8 +42,11 @@ Eso viene del pedido original y sigue vigente.
 ### Fricciones recurrentes que va a tener de nuevo
 
 1. **Escribe `python -m tct` en vez de `.\.venv\Scripts\python.exe -m tct`.**
-   Le pasó cinco veces. El `python` a secas usa el Python del sistema, que no
+   Le pasó seis veces. El `python` a secas usa el Python del sistema, que no
    tiene el paquete. Si reporta `No module named tct`, es esto.
+   → Existe `scripts\consola.bat`: doble clic y abre una ventana con el entorno
+   activado, donde `tct check` funciona escrito corto. **Mandalo ahí en vez de
+   volver a dictarle la ruta larga**, que es lo que no se le queda pegado.
 2. **Bajó el proyecto como ZIP, no clonado.** Ya se convirtió a repo git, pero
    si vuelve a bajar un ZIP hay que repetir la conversión (`git init` +
    `remote add` + `fetch` + `reset --hard origin/main`). Verificado que
