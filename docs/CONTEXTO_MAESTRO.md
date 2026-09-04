@@ -32,12 +32,27 @@ Eso viene del pedido original y sigue vigente.
 ## 2. Dónde está el usuario ahora mismo
 
 - Windows 10 configurado, `check` da **"todo listo para arrancar"**.
-- MT5 **demo** conectado (bróker FxPro), Telegram configurado, grupo elegido.
+- **El 2026-09-04 el bot arrancó por primera vez de punta a punta.** Las cuatro
+  patas conectadas a la vez: MT5, Telegram leyendo el grupo, el control por
+  Telegram en Mensajes Guardados, y Ollama. Lo dejó correr medio minuto y lo
+  paró; el cierre fue limpio.
+- **El bróker conectado es `MetaQuotes-Demo`, NO FxPro.** Es la cuenta demo
+  genérica que MetaTrader crea sola, y la eligió a propósito para probar. Sirve
+  para validar la cañería —parser, motor, riesgo, control— pero **no** valida
+  nada específico de FxPro: nombres de instrumentos con sufijo, lotes mínimos,
+  spreads, ni el *filling mode*. Correr `tct probar` en las dos cuentas y
+  comparar es lo que muestra qué cambia.
+- `MT5_PATH` quedó **vacío** en su `.env`, a propósito. Tenía una ruta con un
+  error de tipeo (`MetaTrade 5`, sin la "r") y vacío es más robusto: el bot se
+  engancha a la terminal que esté abierta. **Efecto secundario a tener
+  presente:** se conecta a la que haya, así que la cuenta con la que opera
+  depende de en cuál esté logueada esa ventana.
 - Ollama con `llama3.2:3b` funcionando.
-- **Todavía no arrancó el bot en modo automático.** Está probando con
-  `tct simular`, que es lo correcto.
 - La cuenta **real no está configurada**. Existe `.env.real.example` pero no
   la ha completado.
+- Tiene `MAX_DAILY_LOSS_PCT` sin poner (el arranque dice "sin tope"), y
+  `MAX_OPEN_TRADES=10` / `MAX_SIGNALS_PER_DAY=10`. En demo da igual; antes de
+  real, el freno diario no se deja en 0.
 
 ### Fricciones recurrentes que va a tener de nuevo
 
