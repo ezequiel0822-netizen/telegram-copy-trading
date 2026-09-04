@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-02 · v0.7.2 · 320 tests · sobre el commit `952af8b`
+Actualizado: 2026-09-04 · v0.8.0 · 344 tests · sobre el commit `2f10deb`
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
