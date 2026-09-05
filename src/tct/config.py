@@ -48,6 +48,15 @@ VALID_MODES = {AUTO, PAPER_ONLY, PAPER_AND_METAAPI_DEMO, PAPER_AND_MT5_DEMO, LIV
 
 _DEFAULT_SYMBOLS = "XAUUSD,XAGUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,NAS100,US30,US500"
 
+# Nombres que siempre significan "todas las instancias". Ninguna instancia
+# puede llamarse asi, o "/pausa todos" quedaria ambiguo.
+NOMBRES_RESERVADOS = frozenset({"todo", "todos", "all", "ambos", "ambas"})
+
+# El roster de fabrica. Existe para que quien corre una sola instancia no tenga
+# que declarar nada, y para que los `.env` escritos antes de que esto fuera
+# configurable sigan funcionando igual.
+ROSTER_POR_DEFECTO = ("demo", "real", "papel", "paper")
+
 
 class _Env:
     """Lector tipado sobre un diccionario de configuracion."""
@@ -146,6 +155,10 @@ class Settings:
     # Nombre de esta instancia. Con dos bots corriendo (uno demo y uno real),
     # es lo que permite dirigirles ordenes por separado desde Telegram.
     instance_name: str = "demo"
+    # El roster completo: todas las instancias que corren en esta
+    # instalacion. Cada bot lo necesita para reconocer los nombres de los
+    # OTROS y saber que un comando dirigido no es para el.
+    instance_names: tuple[str, ...] = ROSTER_POR_DEFECTO
     enable_telegram_control: bool = True
     # Donde escuchar los comandos. "me" son tus Mensajes Guardados: privado,
     # siempre disponible y sin configurar nada.
@@ -230,6 +243,8 @@ class Settings:
         )
         lines = [
             f"Instancia       : {self.instance_name.upper()}"
+            + (f"  (de {len(self.instance_names)}: "
+               f"{', '.join(self.instance_names)})" if len(self.instance_names) > 1 else "")
             + ("   <<< DINERO REAL >>>" if self.is_live else ""),
             f"Modo            : {modo}",
             f"Broker          : {self.broker_kind}",
@@ -314,16 +329,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         )
 
     instance_name = env.str("INSTANCE_NAME", "real" if mode == LIVE else "demo").lower()
-    # Se valida contra el vocabulario de destinatarios de los comandos de
-    # Telegram. Un nombre fuera de esa lista haria que "/pausa <nombre>" se
-    # interprete como texto libre y el comando no llegue a destino.
-    _NOMBRES_VALIDOS = {"demo", "real", "papel", "paper"}
-    if instance_name not in _NOMBRES_VALIDOS:
-        raise ConfigError(
-            f"INSTANCE_NAME='{instance_name}' no es valido. "
-            f"Tiene que ser uno de: {', '.join(sorted(_NOMBRES_VALIDOS))}.\n"
-            "Es el nombre con el que le hablas por Telegram (ej: /pausa real)."
-        )
+    instance_names = _resolver_roster(env, instance_name)
 
     settings = Settings(
         trading_mode=mode,
@@ -360,6 +366,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         state_path=Path(env.str("STATE_PATH", str(data_dir / "state.json"))),
         log_path=Path(env.str("LOG_PATH", "logs/tct.log")),
         instance_name=instance_name,
+        instance_names=instance_names,
         enable_telegram_control=env.bool("ENABLE_TELEGRAM_CONTROL", True),
         telegram_control_chat=env.str("TELEGRAM_CONTROL_CHAT", "me"),
         max_daily_loss_pct=env.float("MAX_DAILY_LOSS_PCT", 0.0),
@@ -374,6 +381,58 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
 
     _validate_mode_requirements(settings)
     return settings
+
+
+def _resolver_roster(env: _Env, instance_name: str) -> tuple[str, ...]:
+    """La lista COMPLETA de instancias que existen en esta instalacion.
+
+    POR QUE HACE FALTA DECLARARLA
+    -----------------------------
+    Los comandos de Telegram aceptan destinatario (`/pausa fxpro`), y la
+    primera palabra despues del comando puede ser un nombre de instancia o el
+    principio de un texto libre (`/pausa mercado feo`). Distinguirlos sin
+    ambiguedad solo se puede con un vocabulario CERRADO, y ese vocabulario
+    tiene que ser el mismo en todas las instancias: cada bot necesita
+    reconocer los nombres de los OTROS para saber que un comando no es para el.
+
+    Por eso no alcanza con que cada `.env` diga como se llama el suyo. Todos
+    tienen que declarar la misma lista en INSTANCE_NAMES.
+
+    Si dos `.env` declaran listas distintas, el error se cae para el lado
+    seguro: un `/pausa <nombre-que-no-conozco>` se lee como texto libre y esa
+    instancia se pausa de mas (pausar nunca pierde plata), y un
+    `/cerrar <nombre-que-no-conozco>` no se entiende y se rechaza. Igual
+    conviene que coincidan, y por eso el roster se imprime al arrancar.
+    """
+    declarado = env.list("INSTANCE_NAMES", "")
+    roster = tuple(dict.fromkeys(n.lower() for n in declarado)) or ROSTER_POR_DEFECTO
+
+    for nombre in roster:
+        if not nombre.isalnum():
+            raise ConfigError(
+                f"INSTANCE_NAMES tiene un nombre invalido: '{nombre}'.\n"
+                "Los nombres son una sola palabra de letras y numeros, sin "
+                "espacios ni guiones:\n"
+                "    INSTANCE_NAMES=demo,fxpro,real"
+            )
+        if nombre in NOMBRES_RESERVADOS:
+            raise ConfigError(
+                f"Una instancia no se puede llamar '{nombre}': esa palabra ya "
+                "significa 'todas'.\n"
+                f"Reservadas: {', '.join(sorted(NOMBRES_RESERVADOS))}."
+            )
+
+    if instance_name not in roster:
+        raise ConfigError(
+            f"INSTANCE_NAME='{instance_name}' no esta en INSTANCE_NAMES.\n"
+            f"El roster declarado es: {', '.join(roster)}.\n\n"
+            "INSTANCE_NAME es como se llama ESTE bot; INSTANCE_NAMES es la lista\n"
+            "de todos los que corren, y tiene que ser la MISMA en cada .env.\n"
+            "Si agregaste una instancia nueva, agregala en los dos archivos:\n"
+            f"    INSTANCE_NAMES={','.join(roster)},{instance_name}"
+        )
+
+    return roster
 
 
 def _resolve_auto(env: _Env, warnings: list[str]) -> str:

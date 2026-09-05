@@ -56,7 +56,14 @@ _AFIRMATIVOS = frozenset({"SI", "SÍ", "YES", "DALE", "CONFIRMO"})
 # motivo. Con una lista fija, cada instancia sabe con certeza si un token es un
 # nombre de instancia o texto libre.
 #
-# `config.py` valida INSTANCE_NAME contra esta misma lista.
+# La lista dejo de estar clavada aca: ahora sale de INSTANCE_NAMES en el .env,
+# porque los nombres los elige quien monta las instancias ("fxpro", "exness").
+# Lo que NO cambio es que sea cerrada, ni que tenga que ser LA MISMA en todas:
+# cada bot necesita reconocer los nombres de los otros para saber que un
+# comando dirigido no es para el. `config.py` lo valida al arrancar.
+#
+# Este valor sigue existiendo como respaldo para codigo que instancie
+# `ControlTelegram` sin settings completos.
 NOMBRES_DE_INSTANCIA = frozenset({"demo", "real", "papel", "paper"})
 _TODOS = frozenset({"todo", "todos", "all", "ambos", "ambas"})
 
@@ -84,6 +91,12 @@ class ControlTelegram:
         self.store = store
         self.engine = engine
         self.nombre = settings.instance_name.lower()
+        # El roster de TODAS las instancias, no solo la mia. Sin los nombres de
+        # las otras, esta instancia no puede distinguir "/pausa fxpro" (no es
+        # para mi) de "/pausa mercado feo" (es para mi, con motivo).
+        self.nombres = frozenset(
+            getattr(settings, "instance_names", None) or NOMBRES_DE_INSTANCIA
+        )
         # Confirmacion de cierre pendiente. None = no hay ninguna.
         #
         # Es un dict con CUANDO se armo, y no un bool, por dos motivos que
@@ -105,7 +118,7 @@ class ControlTelegram:
         if not palabras:
             return "", ""
         primera = palabras[0].lower()
-        if primera in NOMBRES_DE_INSTANCIA or primera in _TODOS:
+        if primera in self.nombres or primera in _TODOS:
             return primera, " ".join(palabras[1:])
         # No es un nombre de instancia: es texto libre (un motivo, por ejemplo).
         return "", resto.strip()
