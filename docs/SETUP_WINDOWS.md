@@ -824,15 +824,48 @@ significan nada.
 
 ### Que arranque solo al prender la PC
 
-El instalador te lo ofrece. Para cambiarlo después:
+Doble clic en:
 
-- **Activar**: `Win + R`, escribí `shell:startup`, Enter. Copiá ahí el acceso
-  directo "Bot de Trading" del escritorio.
-- **Desactivar**: borrá ese acceso directo de esa carpeta.
+```
+scripts\autoarranque.bat
+```
 
-> **MetaTrader también tiene que arrancar solo.** En MT5:
-> **Herramientas → Opciones → Servidor**, y tildá guardar la contraseña de la
-> cuenta. Si no, el bot arranca y se queda sin terminal a la que hablarle.
+Te dice cómo está ahora y te deja activarlo o apagarlo. También busca
+MetaTrader en la máquina y te ofrece ponerlo en el inicio, que hace falta
+igual.
+
+> **Por qué no alcanza con copiar el acceso directo del escritorio.** Ese apunta
+> a `iniciar_bot.bat`, que aborta si MetaTrader no está listo. Al iniciar
+> sesión, MetaTrader y el bot arrancan casi al mismo tiempo, pero MetaTrader
+> tarda en levantar la interfaz, conectarse y loguear la cuenta — y el bot gana
+> esa carrera casi siempre. `autoarranque.bat` usa `iniciar_auto.bat`, que
+> **espera hasta 5 minutos** a que MetaTrader esté listo, y además vuelve a
+> levantar el bot si se cae.
+
+**Hacen falta tres cosas, no una.** El bot necesita MetaTrader abierto y
+logueado, y MetaTrader es un programa de escritorio: vive en tu sesión de
+Windows. Así que "al prender la PC" en realidad significa **"al iniciar
+sesión"**.
+
+| | Qué | Quién lo hace |
+|---|---|---|
+| 1 | El bot en el inicio | `scripts\autoarranque.bat` |
+| 2 | MetaTrader en el inicio | el mismo script te lo ofrece |
+| 3 | Windows entrando solo a tu usuario | **vos** |
+
+Sin el punto 3, si la PC se reinicia sola por un corte de luz queda en la
+pantalla de contraseña y no arranca nada.
+
+Para hacerlo: `Win + R` → escribí `netplwiz` → Enter → destildá *"Los usuarios
+deben escribir su nombre y contraseña"*.
+
+> ⚠️ Hacelo **solo si esa PC está en un lugar de confianza**: cualquiera que la
+> prenda entra a tu sesión sin contraseña.
+
+**Y en MetaTrader**, para que no te pida la contraseña en cada arranque:
+**Herramientas → Opciones → Servidor**, y tildá guardar la contraseña de la
+cuenta. El botón **Algo Trading** también queda como lo dejaste entre
+reinicios.
 
 ### Actualizar el bot
 

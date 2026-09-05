@@ -1149,7 +1149,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        asyncio.run(_run_async(settings))
+        asyncio.run(_run_async(settings, getattr(args, 'esperar_mt5', 0)))
     except KeyboardInterrupt:
         logger.info("Detenido por el usuario")
     finally:
@@ -1157,7 +1157,53 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _run_async(settings: Settings) -> None:
+async def _conectar_broker(broker, esperar_segundos: int) -> bool:
+    """Conecta el broker, reintentando hasta `esperar_segundos`.
+
+    POR QUE EXISTE
+    --------------
+    Es lo que hace posible el arranque automatico al prender la PC. Al iniciar
+    sesion, MetaTrader y el bot arrancan casi al mismo tiempo, pero MetaTrader
+    tarda: tiene que levantar la interfaz, conectarse al broker y loguear la
+    cuenta. El bot gana esa carrera casi siempre, y como un broker caido lo
+    hace abortar, el arranque automatico fallaba en silencio en casi todos los
+    encendidos.
+
+    Sin espera (0) se comporta como siempre: un solo intento. La regla de "si
+    no hay broker, no arranco" no cambia; lo unico que cambia es cuanto se
+    espera antes de darla por perdida.
+    """
+    logger = logging.getLogger("tct")
+
+    if await broker.connect():
+        return True
+    if esperar_segundos <= 0:
+        return False
+
+    espera = 10
+    limite = asyncio.get_running_loop().time() + esperar_segundos
+    logger.warning(
+        "El broker '%s' todavia no esta listo. Reintentando hasta %s minutos.\n"
+        "        Si es el arranque automatico, MetaTrader probablemente todavia\n"
+        "        se esta abriendo y logueando: es normal.",
+        broker.name, round(esperar_segundos / 60),
+    )
+
+    while asyncio.get_running_loop().time() < limite:
+        await asyncio.sleep(espera)
+        if await broker.connect():
+            logger.info("El broker '%s' conecto. Siguiendo.", broker.name)
+            return True
+        logger.info("Sigue sin conectar. Reintentando...")
+
+    logger.error(
+        "Pasaron %s minutos y el broker '%s' no conecto.",
+        round(esperar_segundos / 60), broker.name,
+    )
+    return False
+
+
+async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
     from tct.brokers.base import build_broker
     from tct.engine import Engine
     from tct.store import Store
@@ -1170,7 +1216,7 @@ async def _run_async(settings: Settings) -> None:
     broker = build_broker(settings)
     notifier = Notifier(settings)
 
-    if not await broker.connect():
+    if not await _conectar_broker(broker, esperar_segundos):
         if settings.executes_orders:
             # En un modo que ejecuta, un broker caido significa senales
             # aceptadas que no llegan a ningun lado: mejor no arrancar.
@@ -1322,7 +1368,13 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("message", nargs="*", help="Mensaje (si se omite, se lee de stdin)")
 
     sub.add_parser("status", help="Posiciones abiertas y estadisticas")
-    sub.add_parser("run", help="Arranca el bot")
+    run = sub.add_parser("run", help="Arranca el bot")
+    run.add_argument(
+        "--esperar-mt5", type=int, default=0, dest="esperar_mt5", metavar="SEGUNDOS",
+        help="Reintentar la conexion con el broker hasta N segundos antes de "
+             "rendirse. Lo usa el arranque automatico, cuando MetaTrader todavia "
+             "se esta abriendo y logueando.",
+    )
     return parser
 
 

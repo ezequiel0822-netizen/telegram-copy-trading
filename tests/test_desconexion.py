@@ -77,3 +77,92 @@ def test_avisar_del_corte_no_puede_tapar_el_cierre_ordenado():
     assert "except Exception" in fuente[aviso:finally_], (
         "el aviso no esta protegido: si falla, se salta el guardado del estado"
     )
+
+
+# --------------------------------------------------------------------------
+# Arranque automatico: esperar a que MetaTrader este listo
+#
+# Al iniciar sesion, MetaTrader y el bot arrancan casi al mismo tiempo, pero
+# MetaTrader tarda en levantar la interfaz, conectarse y loguear la cuenta. El
+# bot gana esa carrera casi siempre, y como sin broker no arranca, el arranque
+# automatico fallaba en silencio en casi todos los encendidos.
+# --------------------------------------------------------------------------
+
+
+class BrokerLento:
+    """Conecta recien despues de N intentos, como MetaTrader al arrancar."""
+
+    name = "mt5"
+
+    def __init__(self, intentos_hasta_listo: int) -> None:
+        self.faltan = intentos_hasta_listo
+        self.intentos = 0
+
+    async def connect(self) -> bool:
+        self.intentos += 1
+        self.faltan -= 1
+        return self.faltan < 0
+
+
+def test_sin_espera_se_rinde_al_primer_intento(monkeypatch):
+    """El comportamiento de siempre no cambia: 0 es un solo intento."""
+    import asyncio
+
+    from tct.cli import _conectar_broker
+
+    broker = BrokerLento(intentos_hasta_listo=3)
+    assert asyncio.run(_conectar_broker(broker, 0)) is False
+    assert broker.intentos == 1
+
+
+def test_con_espera_reintenta_hasta_que_metatrader_aparece(monkeypatch):
+    import asyncio
+
+    from tct import cli
+
+    # Se acorta el sleep: lo que se prueba es el bucle, no el reloj.
+    dormidas = []
+
+    async def sin_esperar(segundos):
+        dormidas.append(segundos)
+
+    monkeypatch.setattr(cli.asyncio, "sleep", sin_esperar)
+
+    broker = BrokerLento(intentos_hasta_listo=3)
+    assert asyncio.run(cli._conectar_broker(broker, 300)) is True
+    assert broker.intentos == 4, "no reintento hasta que el broker estuvo listo"
+    assert dormidas, "no espero entre intentos"
+
+
+def test_si_nunca_aparece_se_rinde_y_no_queda_colgado(monkeypatch):
+    """Rendirse tiene que seguir siendo posible: un bucle infinito dejaria el
+    bot 'arrancando' para siempre sin operar ni avisar."""
+    import asyncio
+
+    from tct import cli
+
+    reloj = {"t": 0.0}
+
+    async def avanzar(segundos):
+        reloj["t"] += segundos
+
+    class LoopFalso:
+        def time(self):
+            return reloj["t"]
+
+    monkeypatch.setattr(cli.asyncio, "sleep", avanzar)
+    monkeypatch.setattr(cli.asyncio, "get_running_loop", lambda: LoopFalso())
+
+    broker = BrokerLento(intentos_hasta_listo=10_000)
+    assert asyncio.run(cli._conectar_broker(broker, 60)) is False
+    assert reloj["t"] >= 60
+
+
+def test_run_le_pasa_la_espera_al_broker():
+    """El cableado: que el flag llegue de verdad hasta la conexion."""
+    import inspect
+
+    from tct import cli
+
+    assert "esperar_mt5" in inspect.getsource(cli.cmd_run)
+    assert "_conectar_broker(broker, esperar_segundos)" in inspect.getsource(cli._run_async)
