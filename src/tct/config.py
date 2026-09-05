@@ -198,6 +198,16 @@ class Settings:
         return self.configured_mode == AUTO
 
     @property
+    def roster_declarado(self) -> bool:
+        """True si INSTANCE_NAMES se escribio a mano en el .env.
+
+        El roster de fabrica no es una declaracion de intencion: lo tiene todo
+        el mundo por no haber escrito nada. Distinguirlos evita avisarle de
+        varias instancias a quien corre una sola.
+        """
+        return self.instance_names != ROSTER_POR_DEFECTO
+
+    @property
     def is_live(self) -> bool:
         """True solo si esto opera con dinero real."""
         return self.trading_mode == LIVE and self.allow_live_trading
@@ -243,8 +253,13 @@ class Settings:
         )
         lines = [
             f"Instancia       : {self.instance_name.upper()}"
+            # El roster se muestra solo si se declaro a mano. Asi, con dos bots
+            # corriendo, los dos arranques imprimen su lista y un roster
+            # distinto en cada uno salta a la vista: es la unica forma de que
+            # un "/pausa fxpro" no llegue a destino.
             + (f"  (de {len(self.instance_names)}: "
-               f"{', '.join(self.instance_names)})" if len(self.instance_names) > 1 else "")
+               f"{', '.join(self.instance_names)})"
+               if self.roster_declarado and len(self.instance_names) > 1 else "")
             + ("   <<< DINERO REAL >>>" if self.is_live else ""),
             f"Modo            : {modo}",
             f"Broker          : {self.broker_kind}",
@@ -380,7 +395,42 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     )
 
     _validate_mode_requirements(settings)
+    warnings.extend(_avisos_de_varias_instancias(settings))
     return settings
+
+
+def _avisos_de_varias_instancias(settings: Settings) -> list[str]:
+    """Lo que se vuelve peligroso recien cuando corren dos bots a la vez.
+
+    Con UNA sola instancia, dejar MT5_PATH vacio es lo mas robusto: el bot se
+    engancha a la terminal que este abierta y no hay que acertarle a la ruta.
+
+    Con DOS es exactamente al reves. MetaTrader admite una cuenta por terminal,
+    asi que dos cuentas son dos terminales abiertas; y "engancharse a la que
+    encuentre" deja de tener una respuesta correcta. Los dos bots podrian ir a
+    la misma cuenta, o cada uno a la del otro. Nadie se daria cuenta hasta ver
+    las operaciones en la cuenta equivocada.
+    """
+    # El roster de fabrica NO es una declaracion de intencion: lo tiene todo el
+    # mundo por no haber escrito INSTANCE_NAMES, y avisarle a quien corre un
+    # solo bot seria mandarlo a poner una ruta que para el es peor. Solo cuenta
+    # haberla declarado a mano.
+    if not settings.roster_declarado or len(settings.instance_names) < 2:
+        return []
+    if settings.broker_kind != "mt5" or settings.mt5_path:
+        return []
+
+    return [
+        "Hay varias instancias declaradas (INSTANCE_NAMES="
+        + ",".join(settings.instance_names)
+        + ") y MT5_PATH esta VACIO.\n"
+        "            Vacio significa 'engancharse a la terminal que encuentre', y con dos\n"
+        "            MetaTrader abiertos eso no tiene una respuesta correcta: los dos bots\n"
+        "            pueden terminar en la misma cuenta, o cada uno en la del otro.\n"
+        "            Ponele a CADA .env la ruta de SU terminal:\n"
+        "                MT5_PATH=C:\\Program Files\\MetaTrader 5\\terminal64.exe\n"
+        "            Y mira siempre la linea 'MT5 listo | servidor=...' del arranque."
+    ]
 
 
 def _resolver_roster(env: _Env, instance_name: str) -> tuple[str, ...]:

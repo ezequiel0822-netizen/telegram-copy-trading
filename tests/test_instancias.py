@@ -207,3 +207,139 @@ def test_una_instancia_no_reconoce_un_nombre_fuera_de_su_roster(tmp_path):
 
     assert respuesta is not None and "No entendi" in respuesta
     assert control._confirmacion is None, "quedo armada por un comando ajeno"
+
+
+# --------------------------------------------------------------------------
+# MT5_PATH deja de poder estar vacio cuando hay dos instancias
+# --------------------------------------------------------------------------
+
+
+BASE_MT5 = (
+    "TRADING_MODE=PAPER_AND_MT5_DEMO\n"
+    "MT5_LOGIN=1\nMT5_PASSWORD=p\nMT5_SERVER=s\n"
+)
+
+
+def test_avisa_si_hay_dos_instancias_y_mt5_path_vacio(tmp_path, monkeypatch):
+    """Con UNA instancia, vacio es lo mas robusto. Con DOS es al reves:
+    'enganchate a la que encuentres' deja de tener respuesta correcta."""
+    monkeypatch.setattr("sys.platform", "win32")
+    env = escribir_env(
+        tmp_path, BASE_MT5 + "INSTANCE_NAMES=fxpro,exness\nINSTANCE_NAME=fxpro\nMT5_PATH=\n"
+    )
+
+    aviso = " ".join(load_settings(env).warnings)
+
+    assert "MT5_PATH" in aviso
+    assert "misma cuenta" in aviso, "no explica el dano concreto"
+
+
+def test_con_una_sola_instancia_no_avisa_nada_de_eso(tmp_path, monkeypatch):
+    """Seria un aviso molesto y equivocado: para un solo bot, vacio es mejor."""
+    monkeypatch.setattr("sys.platform", "win32")
+    env = escribir_env(tmp_path, BASE_MT5 + "INSTANCE_NAME=demo\nMT5_PATH=\n")
+
+    aviso = " ".join(load_settings(env).warnings)
+
+    assert "MT5_PATH" not in aviso
+
+
+def test_con_la_ruta_puesta_no_avisa(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    env = escribir_env(
+        tmp_path,
+        BASE_MT5 + "INSTANCE_NAMES=fxpro,exness\nINSTANCE_NAME=fxpro\n"
+        r"MT5_PATH=C:\MT5-fxpro\terminal64.exe" + "\n",
+    )
+
+    aviso = " ".join(load_settings(env).warnings)
+
+    assert "MT5_PATH" not in aviso
+
+
+def test_en_papel_no_aplica(tmp_path):
+    """Sin MetaTrader de por medio, la ruta no significa nada."""
+    env = escribir_env(
+        tmp_path, "TRADING_MODE=PAPER_ONLY\nINSTANCE_NAMES=a,b\nINSTANCE_NAME=a\n"
+    )
+
+    aviso = " ".join(load_settings(env).warnings)
+
+    assert "MT5_PATH" not in aviso
+
+
+# --------------------------------------------------------------------------
+# El error mas facil de cometer: editar un .env y olvidar el otro
+# --------------------------------------------------------------------------
+
+
+def _avisar(tmp_path, monkeypatch, settings, env_file):
+    import logging
+
+    from tct.cli import _avisar_rosters_desparejos
+
+    monkeypatch.chdir(tmp_path)
+    logger = logging.getLogger("tct")
+    capturado = []
+
+    class Handler(logging.Handler):
+        def emit(self, record):
+            # getMessage() YA aplica los args. Volver a aplicarlos revienta y
+            # logging se traga la excepcion, dejando el test en verde falso.
+            capturado.append(record.getMessage())
+
+    h = Handler(level=logging.WARNING)
+    logger.addHandler(h)
+    try:
+        _avisar_rosters_desparejos(settings, env_file)
+    finally:
+        logger.removeHandler(h)
+    return " ".join(capturado)
+
+
+def test_avisa_si_el_otro_env_declara_otro_roster(tmp_path, monkeypatch):
+    """El sintoma sin este aviso es silencioso: un '/pausa fxpro' no le llega
+    al bot fxpro y en cambio pausa al principal."""
+    escribir_env(tmp_path, "INSTANCE_NAMES=demo\nINSTANCE_NAME=demo\n", ".env")
+    escribir_env(tmp_path, "INSTANCE_NAMES=demo,fxpro\nINSTANCE_NAME=fxpro\n", ".env.segunda")
+    settings = load_settings(tmp_path / ".env.segunda")
+
+    aviso = _avisar(tmp_path, monkeypatch, settings, str(tmp_path / ".env.segunda"))
+
+    assert ".env" in aviso
+    assert "IDENTICOS" in aviso
+
+
+def test_no_avisa_si_los_dos_declaran_lo_mismo(tmp_path, monkeypatch):
+    escribir_env(tmp_path, "INSTANCE_NAMES=demo,fxpro\nINSTANCE_NAME=demo\n", ".env")
+    escribir_env(tmp_path, "INSTANCE_NAMES=demo,fxpro\nINSTANCE_NAME=fxpro\n", ".env.segunda")
+    settings = load_settings(tmp_path / ".env.segunda")
+
+    assert _avisar(tmp_path, monkeypatch, settings, str(tmp_path / ".env.segunda")) == ""
+
+
+def test_las_plantillas_de_ejemplo_no_cuentan(tmp_path, monkeypatch):
+    """Los .example estan para copiarse, no para correrse: compararse contra
+    ellos daria un aviso permanente y falso."""
+    escribir_env(tmp_path, "INSTANCE_NAMES=demo,fxpro\nINSTANCE_NAME=fxpro\n", ".env")
+    escribir_env(tmp_path, "INSTANCE_NAMES=otra,cosa\n", ".env.segunda.example")
+    settings = load_settings(tmp_path / ".env")
+
+    assert _avisar(tmp_path, monkeypatch, settings, str(tmp_path / ".env")) == ""
+
+
+def test_con_una_sola_instancia_no_compara_nada(tmp_path, monkeypatch):
+    escribir_env(tmp_path, "INSTANCE_NAME=demo\n", ".env")
+    escribir_env(tmp_path, "INSTANCE_NAMES=otra,cosa\n", ".env.vieja")
+    settings = load_settings(tmp_path / ".env")
+
+    assert _avisar(tmp_path, monkeypatch, settings, str(tmp_path / ".env")) == ""
+
+
+def test_run_compara_los_rosters():
+    """El cableado, que es lo que este proyecto olvida."""
+    import inspect
+
+    from tct import cli
+
+    assert "_avisar_rosters_desparejos" in inspect.getsource(cli.cmd_run)

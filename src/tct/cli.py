@@ -542,6 +542,50 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _avisar_rosters_desparejos(settings: Settings, env_file: str | None) -> None:
+    """Avisa si otro `.env` de esta carpeta declara un roster distinto.
+
+    Es el error mas facil de cometer al agregar una instancia: se edita
+    INSTANCE_NAMES en el archivo nuevo y se olvida el viejo. El sintoma es
+    silencioso y desconcertante: un "/pausa fxpro" desde el telefono no le
+    llega al bot fxpro, y en cambio pausa al principal, que leyo "fxpro" como
+    texto libre porque no conoce ese nombre.
+
+    Se detecta mirando los otros `.env` en vez de esperar a que la persona
+    compare dos ventanas de arranque. Es solo lectura y nunca aborta: un
+    archivo raro en la carpeta no puede impedir que el bot arranque.
+    """
+    logger = logging.getLogger("tct")
+    if not settings.roster_declarado:
+        return
+
+    try:
+        from dotenv import dotenv_values
+
+        actual = Path(env_file or ".env").resolve()
+        mio = set(settings.instance_names)
+        for otro in sorted(Path(".").glob(".env*")):
+            if otro.name.endswith(".example") or otro.resolve() == actual:
+                continue
+            declarado = (dotenv_values(otro) or {}).get("INSTANCE_NAMES")
+            if not declarado:
+                continue
+            suyo = {n.strip().lower() for n in declarado.split(",") if n.strip()}
+            if suyo == mio:
+                continue
+            logger.warning(
+                "%s declara otro roster:\n"
+                "            aca:  INSTANCE_NAMES=%s\n"
+                "            alla: INSTANCE_NAMES=%s\n"
+                "        Tienen que ser IDENTICOS. Si no, un comando dirigido a una\n"
+                "        instancia no le llega: la otra no reconoce ese nombre y lo lee\n"
+                "        como texto libre, aplicandose el comando a si misma.",
+                otro.name, ",".join(settings.instance_names), ",".join(sorted(suyo)),
+            )
+    except Exception:  # pragma: no cover - es un aviso, no una validacion
+        logger.debug("No se pudieron comparar los rosters", exc_info=True)
+
+
 async def _avisar_simbolos_que_el_broker_no_opera(settings: Settings, broker) -> None:
     """Avisa al arrancar que simbolos de ALLOWED_SYMBOLS este broker no expone.
 
@@ -1087,6 +1131,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.warning(warning)
 
     logger.info("Arrancando\n%s", settings.describe())
+    _avisar_rosters_desparejos(settings, args.env_file)
     if settings.dry_run:
         logger.warning("DRY_RUN=true: se va a observar y registrar, sin operar ni siquiera en papel.")
 
