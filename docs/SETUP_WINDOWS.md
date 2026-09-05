@@ -43,7 +43,8 @@ nativa, sin intermediarios ni servicios de pago. En una Mac eso no es posible.
 12. [Paso 11 — Arrancar](#paso-11--arrancar)
 13. [La IA local](#la-ia-local-en-criollo)
 14. [Uso diario](#uso-diario)
-15. [Problemas frecuentes](#problemas-frecuentes)
+15. [Dos cuentas a la vez](#dos-cuentas-de-metatrader-al-mismo-tiempo)
+16. [Problemas frecuentes](#problemas-frecuentes)
 
 ---
 
@@ -843,6 +844,118 @@ git pull
 
 Si lo bajaste como ZIP, volvé a bajarlo y **conservá tu archivo `.env`**:
 copialo aparte antes de reemplazar la carpeta, y pegalo de vuelta después.
+
+---
+
+## Dos cuentas de MetaTrader al mismo tiempo
+
+Sirve para comparar dos brókers con las mismas señales, o para tener la demo y
+la real conviviendo. Son **dos bots corriendo en paralelo**, cada uno en su
+ventana.
+
+> **Por qué dos bots y no uno con dos cuentas.** MetaTrader admite **una cuenta
+> por terminal**, y el paquete de Python admite **una terminal por proceso**.
+> No hay forma de que un solo bot opere dos cuentas: `login()` en MT5 *cambia*
+> de cuenta, no agrega. Por eso son dos MetaTrader abiertos y dos procesos.
+
+### Paso 1 — Instalar el segundo MetaTrader
+
+**No reinstales el que ya tenés.** Necesitás una segunda instalación, en su
+propia carpeta.
+
+La forma fácil es bajar el MetaTrader **del otro bróker**: cada uno publica el
+suyo, con su marca, y se instala en una carpeta distinta sin pisar al primero.
+Por ejemplo, el de FxPro suele quedar en `C:\Program Files\FxPro MetaTrader 5\`.
+
+1. Entrá a la web del segundo bróker y bajá **su** MetaTrader 5.
+2. Instalalo. Si el instalador te deja elegir carpeta, **fijate que sea
+   distinta** de la del primero.
+3. Abrilo y logueate en la cuenta de ese bróker.
+4. Activá **Algo Trading** (el botón verde de la barra, o `Ctrl+E`).
+
+Ahora tenés que tener **dos MetaTrader abiertos**, cada uno en su cuenta.
+
+### Paso 2 — Anotar la ruta de cada uno
+
+Con dos terminales, `MT5_PATH` **deja de poder estar vacío**. Vacío significa
+"engancháte a la que encuentres", y con dos abiertas eso no tiene una respuesta
+correcta: los dos bots podrían ir a la misma cuenta, o cada uno a la del otro.
+
+Para encontrar cada ruta: **clic derecho en el acceso directo** de ese
+MetaTrader → **Propiedades** → mirá el campo **"Destino"**.
+
+O pedile la lista a Windows, desde `scripts\consola.bat`:
+
+```bash
+Get-ChildItem "C:\Program Files" -Filter terminal64.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+```
+
+### Paso 3 — Armar el segundo `.env`
+
+```bash
+copy .env.segunda.example .env.segunda
+```
+
+Abrilo con el Bloc de notas: adentro está marcado con `<<< DISTINTO >>>` todo
+lo que **no** puede quedar igual que en el `.env` principal.
+
+Y **acordate del que se olvida siempre**: en tu `.env` de siempre, poné la
+misma línea `INSTANCE_NAMES` que en el nuevo.
+
+| | `.env` (el de siempre) | `.env.segunda` |
+|---|---|---|
+| `INSTANCE_NAMES` | `demo,fxpro` | `demo,fxpro` — **idénticos** |
+| `INSTANCE_NAME` | `demo` | `fxpro` |
+| `TELEGRAM_SESSION_NAME` | `telegram_copy_trading` | `telegram_copy_trading_fxpro` |
+| `DATA_DIR` y sus rutas | `data/` | `data/fxpro/` |
+| `LOG_PATH` | `logs/tct.log` | `logs/tct-fxpro.log` |
+| `MT5_PATH` | ruta del primer MT5 | ruta del segundo |
+
+Si dos bots comparten la carpeta de datos, el segundo **se niega a arrancar** y
+te dice por qué. Si los `INSTANCE_NAMES` no coinciden, te avisa también.
+
+### Paso 4 — Arrancar los dos
+
+Doble clic en cada uno, en su propia ventana:
+
+```
+scripts\iniciar_bot.bat        <- el de siempre
+scripts\iniciar_segunda.bat    <- el nuevo
+```
+
+**En cada ventana, mirá esta línea antes de dejarlo corriendo:**
+
+```
+MT5 listo | servidor=XXX balance=YYY
+```
+
+Esa línea dice contra qué cuenta va a operar **de verdad**. Si las dos ventanas
+dicen el mismo servidor, algo está mal en `MT5_PATH`.
+
+### Manejarlos por separado desde Telegram
+
+Los dos escuchan tus Mensajes Guardados, así que los comandos aceptan a quién
+van dirigidos:
+
+```
+/estado              los dos contestan, cada uno firmado
+/pausa fxpro         solo el de FxPro
+/pausa               los dos
+/cerrar demo         pide confirmar solo al de la demo
+```
+
+Cada respuesta viene firmada con `[DEMO]` o `[FXPRO]`, así que se distinguen
+sin esfuerzo.
+
+> **Ojo con `/cerrar`.** La confirmación (`SI`) caduca a los 2 minutos y
+> cualquier otra cosa la cancela. Si mandás `/cerrar` sin nombre, se arma en
+> **las dos** instancias y el `SI` siguiente cierra todo. Nombrá siempre a cuál
+> le hablás.
+
+### Para una tercera
+
+Igual que la segunda: copiá `scripts\iniciar_segunda.bat` cambiándole el
+`.env`, y agregá el nombre nuevo a `INSTANCE_NAMES` en **todos** los archivos.
 
 ---
 

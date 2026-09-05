@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-04 · v0.8.0 · 344 tests · sobre el commit `2f10deb`
+Actualizado: 2026-09-04 · v0.9.0 · 380 tests · sobre el commit `1d5861c`
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -109,7 +109,7 @@ simétrica y el objetivo de todo esto es decidir si el canal sirve:
 Con tres TPs, cuánto se cierra en cada uno cambia el resultado por completo, y
 el canal no lo dice: el bot manda el TP más cercano a MT5 y los demás quedan
 para los mensajes de cierre parcial. **Esto no se decide mirando la geometría,
-se decide con el P&L de los paper trades** —que es el punto 8 de §8, todavía
+se decide con el P&L de los paper trades** —que es el punto 7 de §8, todavía
 pendiente, y la razón por la que importa.
 
 **Detrás de cada señal viene un `MOVER SL A <la entrada>`.** O sea: el canal
@@ -201,7 +201,7 @@ Los `.bat` de `scripts/` envuelven todo esto para no depender de la terminal.
 | **Modo `AUTO` por defecto** | Mira las credenciales del `.env` y decide. Completar `MT5_LOGIN/PASSWORD/SERVER` es lo único que separa papel de demo. |
 | **Un modelo de 3B, no 7B** | Medido: en CPU sin GPU un 3B tarda ~25 s por mensaje y un 7B **varios minutos**. La tarea es acotada y el schema fuerza el formato. |
 | **La IA avisa, no opera** | `risk.py` valida que un precio sea *coherente*, no que sea el *correcto*. Un 2345 leído donde decía 2355 pasa todos los controles. |
-| **Demo y real = dos procesos** | MT5 solo admite una cuenta por proceso: `login()` reemplaza, no agrega. Verificado contra la API. Dos `.env`, dos carpetas de datos, dos sesiones. |
+| **Una instancia por cuenta = un proceso** | MT5 admite una cuenta por terminal y el paquete de Python una terminal por proceso: `login()` reemplaza, no agrega. Verificado contra la API. Cada instancia necesita su `.env`, su carpeta de datos, su sesion de Telethon y **su `MT5_PATH`**. Los nombres salen de `INSTANCE_NAMES`, que tiene que ser identico en todos los `.env`. |
 | **Equity y no balance** | Para el freno diario. El balance solo ve lo cerrado; con una posición abierta perdiendo, no se movería. |
 
 ---
@@ -535,9 +535,8 @@ Ordenado por lo que más importa antes de dinero real.
    aplicando a **todas** las posiciones cuya escala coincida —si el canal opera
    oro y otro instrumento de precio parecido, el filtro no los separa. Ver la
    pregunta abierta de §2.
-6. **Dos procesos con el mismo `.env` se pisan.** No hay lockfile.
-7. **Órdenes pendientes no se pueden cancelar.** Solo se usa `positions_get()`.
-8. **Sin P&L de los paper trades.** Es lo que haría falta para saber si el
+6. **Órdenes pendientes no se pueden cancelar.** Solo se usa `positions_get()`.
+7. **Sin P&L de los paper trades.** Es lo que haría falta para saber si el
    grupo de señales realmente sirve. Ya hay media pieza: cada paper trade
    guarda `precio_mercado`, el precio real del instrumento en el momento de la
    señal. Falta el precio de salida.
