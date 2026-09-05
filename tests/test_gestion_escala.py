@@ -228,3 +228,66 @@ def test_un_move_sl_normal_sigue_funcionando(tmp_path):
 
     assert resultado["status"] == "sl_movido"
     assert store.open_positions()[0].stop_loss == 4438.0
+
+
+# --------------------------------------------------------------------------
+# "No changes" no es un rechazo: es la prueba de que ya estaba puesto
+#
+# Caso real del canal (2026-09-05). Llego "MOVER SL A 4467", el bot lo movio
+# bien, y despues el canal EDITO ese mensaje dos veces. Las ediciones se
+# reprocesan a proposito, asi que el bot pidio el mismo cambio dos veces mas y
+# MT5 contesto 10025 (NO_CHANGES). El bot lo conto como fallo y aviso "NO se
+# pudo mover el SL de XAUUSD" justo despues de haberlo movido.
+# --------------------------------------------------------------------------
+
+
+TRADE_RETCODE_NO_CHANGES = 10025
+
+
+def test_sin_cambios_cuenta_como_exito(tmp_path):
+    store, engine, fake, _ = armar(tmp_path)
+    send(engine, SENAL_ORO, message_id=1)
+
+    fake.rechazar_con = TRADE_RETCODE_NO_CHANGES
+    resultado = send(engine, "Move SL to 4430", message_id=2)
+
+    assert resultado["status"] == "sl_movido", (
+        "informo un fallo cuando el stop ya estaba donde se pedia"
+    )
+    assert store.open_positions()[0].stop_loss == 4430.0
+
+
+def test_no_se_avisa_un_fallo_que_no_ocurrio(tmp_path):
+    """Leer 'NO se pudo mover el SL' cuando el stop SI esta puesto es peor que
+    no recibir nada: te deja creyendo que quedaste sin proteccion."""
+    _, engine, fake, aviso = armar(tmp_path)
+    send(engine, SENAL_ORO, message_id=1)
+
+    fake.rechazar_con = TRADE_RETCODE_NO_CHANGES
+    send(engine, "Move SL to 4430", message_id=2)
+
+    assert not any("NO se pudo mover" in a for a in aviso.mensajes), aviso.mensajes
+
+
+def test_el_motivo_explica_que_ya_estaba(tmp_path):
+    _, engine, fake, _ = armar(tmp_path)
+    send(engine, SENAL_ORO, message_id=1)
+
+    fake.rechazar_con = TRADE_RETCODE_NO_CHANGES
+    resultado = send(engine, "Move SL to 4430", message_id=2)
+
+    motivo = " ".join(str(o.get("reason", "")) for o in resultado["orders"])
+    assert "ya estaba" in motivo
+
+
+def test_un_rechazo_de_verdad_sigue_siendo_un_rechazo(tmp_path):
+    """Lo que no hay que romper: 10016 (stop invalido) sigue fallando."""
+    store, engine, fake, aviso = armar(tmp_path)
+    send(engine, SENAL_ORO, message_id=1)
+
+    fake.rechazar_con = 10016
+    resultado = send(engine, "Move SL to 4430", message_id=2)
+
+    assert resultado["status"] == "sl_movido_parcial"
+    assert store.open_positions()[0].stop_loss == 4420.0
+    assert any("NO se pudo mover" in a for a in aviso.mensajes)

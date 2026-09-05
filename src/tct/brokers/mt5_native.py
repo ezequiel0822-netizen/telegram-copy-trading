@@ -553,11 +553,31 @@ class MT5NativeBroker(Broker):
                 False, "modify_sl", f"order_send devolvio None: {mt5.last_error()}",
                 ticket=ticket, symbol=symbol,
             )
-        ok = result.retcode == mt5.TRADE_RETCODE_DONE
+        # 10025 (NO_CHANGES) NO es un fallo: significa que el stop YA estaba en
+        # ese precio. O sea, la prueba de que el movimiento se hizo.
+        #
+        # Pasa siempre y por un motivo normal: este canal EDITA sus mensajes, y
+        # las ediciones se reprocesan a proposito (para captar un SL corregido).
+        # Asi que un "MOVER SL A 4467" se ejecuta una vez de verdad y otras dos
+        # sobre un stop que ya vale 4467. Contarlo como rechazo hacia que el bot
+        # avisara "NO se pudo mover el SL" justo despues de haberlo movido bien:
+        # la persona lee que quedo sin proteccion cuando en realidad esta
+        # protegida. Es exactamente el tipo de mentira que este proyecto viene
+        # sacando.
+        sin_cambios = result.retcode == getattr(mt5, "TRADE_RETCODE_NO_CHANGES", 10025)
+        ok = result.retcode == mt5.TRADE_RETCODE_DONE or sin_cambios
+
+        if sin_cambios:
+            reason = f"el stop ya estaba en {stop_loss}: no habia nada que cambiar"
+        elif ok:
+            reason = "SL modificado"
+        else:
+            reason = f"rechazado: retcode={result.retcode} {result.comment}"
+
         return OrderResult(
-            ok=ok, action="modify_sl",
-            reason="SL modificado" if ok else f"rechazado: retcode={result.retcode} {result.comment}",
-            ticket=ticket, price=stop_loss, symbol=symbol, raw={"retcode": result.retcode},
+            ok=ok, action="modify_sl", reason=reason,
+            ticket=ticket, price=stop_loss, symbol=symbol,
+            raw={"retcode": result.retcode, "sin_cambios": sin_cambios},
         )
 
     # -- Auxiliares (portados de tradingalertaIA) --------------------------
