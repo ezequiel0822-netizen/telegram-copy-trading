@@ -1090,10 +1090,25 @@ def cmd_run(args: argparse.Namespace) -> int:
     if settings.dry_run:
         logger.warning("DRY_RUN=true: se va a observar y registrar, sin operar ni siquiera en papel.")
 
+    # Un solo proceso por carpeta de datos. Se toma ANTES de conectar nada:
+    # dos bots sobre el mismo state.json se pisan las posiciones, y la que
+    # desaparece del estado queda viva en MetaTrader sin que nadie la conozca.
+    # Es barato equivocarse en esto con dos instancias, y caro descubrirlo.
+    from tct.lockfile import CarpetaOcupada, lock_para
+
+    lock = lock_para(settings)
+    try:
+        lock.tomar()
+    except CarpetaOcupada as exc:
+        logger.error("%s", exc)
+        return 1
+
     try:
         asyncio.run(_run_async(settings))
     except KeyboardInterrupt:
         logger.info("Detenido por el usuario")
+    finally:
+        lock.soltar()
     return 0
 
 
