@@ -232,6 +232,25 @@ class MT5NativeBroker(Broker):
             return None
         return float(cuenta.equity) if cuenta is not None else None
 
+    async def posicion_existe(self, ticket: int | None) -> bool | None:
+        if ticket is None or not await self.is_ready():
+            return None
+        return await asyncio.to_thread(self._posicion_existe_sync, ticket)
+
+    def _posicion_existe_sync(self, ticket: int) -> bool | None:
+        try:
+            posiciones = self._mt5.positions_get(ticket=ticket)
+        except Exception:
+            logger.warning("No se pudo consultar la posicion %s", ticket, exc_info=True)
+            return None
+
+        # None y () NO son lo mismo, y confundirlos cuesta caro en la direccion
+        # peligrosa: None es un error de consulta (terminal caida) y ahi la
+        # posicion puede estar viva; solo la tupla vacia significa "no esta".
+        if posiciones is None:
+            return None
+        return len(posiciones) > 0
+
     async def market_price(self, symbol: str) -> float | None:
         if not await self.is_ready():
             return None

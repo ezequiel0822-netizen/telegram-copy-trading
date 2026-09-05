@@ -576,6 +576,15 @@ otro a medias. Sigue sin mirar nadie más:
 
 ## 9. Reglas que el código respeta (no romperlas)
 
+- **Antes de evaluar una apertura, el estado se sincroniza contra el bróker.**
+  Este canal no manda mensajes de cierre: las operaciones terminan solas en el
+  TP o en el SL y el bróker las cierra sin avisar. Sin sincronizar, la regla de
+  "ya hay una posición abierta en X" —que es buena— se mide contra una posición
+  que ya no existe y rechaza la señal **siguiente** de ese instrumento. Con un
+  canal que opera un solo símbolo, eso es perder casi una señal de cada dos.
+  Solo un `False` del bróker saca la posición del estado: un `None` significa
+  "no pude preguntar", y darla por cerrada sin saberlo la soltaría del registro
+  estando viva.
 - El paper trade se escribe **siempre**, y **antes** de llamar al bróker.
 - El estado solo cambia si el bróker **confirmó**. Vale para los cuatro
   handlers, incluido el cierre parcial, que era el que faltaba. La única

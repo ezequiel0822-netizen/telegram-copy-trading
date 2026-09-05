@@ -117,6 +117,26 @@ class Broker(ABC):
         """
         return None
 
+    async def posicion_existe(self, ticket: int | None) -> bool | None:
+        """Si la posicion sigue abierta en el broker. None = no se pudo saber.
+
+        Existe para un caso que no se resuelve solo: este canal de senales no
+        manda mensajes de cierre. Las operaciones terminan en el TP o en el SL,
+        y ahi el broker las cierra sin avisarle a nadie. El bot se queda
+        creyendo que sigue abierta, y por la regla de "ya hay una posicion
+        abierta en X" rechaza la senal SIGUIENTE de ese instrumento.
+
+        Los tres valores son distintos y hay que respetarlos:
+            True  -> sigue abierta
+            False -> el broker confirma que NO esta
+            None  -> no se pudo consultar (terminal caida, timeout)
+
+        Confundir None con False es peligroso al reves: daria por cerrada una
+        posicion que puede estar perfectamente viva, y el bot la soltaria del
+        estado dejandola correr sola y sin registro.
+        """
+        return None
+
     async def market_price(self, symbol: str) -> float | None:
         """Precio actual del instrumento, o None si no se puede leer.
 

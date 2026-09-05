@@ -379,3 +379,96 @@ def test_un_move_sl_rechazado_no_se_informa_como_exito(tmp_path):
         f"informo un movimiento que no ocurrio: {avisos}"
     )
     assert any("NO se pudo mover" in a for a in avisos), avisos
+
+
+# --------------------------------------------------------------------------
+# El broker cierra la posicion solo (TP o SL) y el bot no se entera
+#
+# El canal del usuario NO manda mensajes de cierre: las operaciones terminan
+# en el TP o en el SL. Sin sincronizar, el estado sigue diciendo que estan
+# abiertas y la regla de "ya hay una posicion abierta en X" rechaza la senal
+# SIGUIENTE de ese instrumento. Con un canal que opera solo oro, eso es perder
+# casi una senal de cada dos.
+# --------------------------------------------------------------------------
+
+
+SENAL_2 = "XAUUSD BUY\nEntry 4438\nSL 4420\nTP 4470"
+
+
+def test_una_posicion_cerrada_por_el_tp_no_bloquea_la_proxima_senal(tmp_path):
+    _, store, engine, fake = armar(tmp_path)
+    send(engine, SENAL, message_id=1)
+    assert len(store.open_positions()) == 1
+
+    fake._posiciones.clear()  # toca el TP: MT5 la cierra y no avisa
+
+    resultado = send(engine, SENAL_2, message_id=2)
+
+    assert resultado["status"] == "aceptada", (
+        f"la senal se rechazo por una posicion que ya no existe: "
+        f"{resultado.get('reasons')}"
+    )
+
+
+def test_se_avisa_que_se_cerro_sola(tmp_path):
+    """Sin este aviso, el usuario nunca se entera de que una operacion
+    termino: el canal no lo dice y el bot tampoco lo decia."""
+    avisos = []
+
+    class Aviso:
+        def enabled(self):
+            return True
+
+        async def send(self, texto):
+            avisos.append(texto)
+
+    settings = build_settings(tmp_path)
+    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    fake = FakeMT5({"XAUUSD": {"bid": 4438.0, "ask": 4438.5}})
+    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake), Aviso())
+
+    send(engine, SENAL, message_id=1)
+    fake._posiciones.clear()
+    send(engine, SENAL_2, message_id=2)
+
+    assert any("cerraron solas" in a for a in avisos), avisos
+
+
+def test_queda_registrado_el_cierre(tmp_path):
+    _, store, engine, fake = armar(tmp_path)
+    send(engine, SENAL, message_id=1)
+    fake._posiciones.clear()
+    send(engine, SENAL_2, message_id=2)
+
+    kinds = [e["kind"] for e in store.read_events()]
+    assert "cerrada_en_el_broker" in kinds
+
+
+def test_si_no_se_puede_consultar_la_posicion_no_se_suelta(tmp_path):
+    """La direccion peligrosa. None es 'no pude preguntar', no 'no esta': dar
+    por cerrada una posicion viva la deja corriendo sola y sin registro."""
+    _, store, engine, _ = armar(tmp_path)
+    send(engine, SENAL, message_id=1)
+
+    async def no_se_sabe(_ticket):
+        return None
+
+    engine.broker.posicion_existe = no_se_sabe
+    send(engine, SENAL_2, message_id=2)
+
+    assert len(store.open_positions()) == 1, (
+        "solto una posicion sin que el broker confirmara que estaba cerrada"
+    )
+
+
+def test_una_posicion_que_sigue_viva_no_se_toca(tmp_path):
+    """Lo que no hay que romper: la regla de una posicion por simbolo sigue
+    valiendo mientras la posicion exista de verdad."""
+    _, store, engine, _ = armar(tmp_path)
+    send(engine, SENAL, message_id=1)
+
+    resultado = send(engine, SENAL_2, message_id=2)
+
+    assert resultado["status"] == "rechazada"
+    assert any("Ya hay una posicion abierta" in r for r in resultado["reasons"])
+    assert len(store.open_positions()) == 1

@@ -238,6 +238,11 @@ class Engine:
         # El freno por perdida diaria necesita saber cuanto vale la cuenta
         # AHORA. Se pide antes de evaluar el riesgo porque es justo uno de los
         # motivos por los que se puede rechazar la senal.
+        # Lo primero: sacar del estado lo que el broker ya cerro solo. Sin
+        # esto, la regla de "ya hay una posicion abierta en X" rechaza la
+        # senal que viene ahora por culpa de una que dejo de existir.
+        await self._sincronizar_posiciones()
+
         await self._actualizar_equity()
 
         # Y el contraste con el precio real necesita saber cuanto vale el
@@ -698,6 +703,71 @@ class Engine:
         )
         self.store.remove_position(position.trade_id)
         return True
+
+    async def _sincronizar_posiciones(self) -> None:
+        """Saca del estado las posiciones que el broker ya cerro por su cuenta.
+
+        POR QUE HACE FALTA
+        ------------------
+        El canal de senales no manda mensajes de cierre: las operaciones
+        terminan solas en el TP o en el SL. El broker las cierra y no se lo
+        avisa a nadie, con lo cual el estado queda diciendo que siguen
+        abiertas.
+
+        La consecuencia no es cosmetica. La regla de "ya hay una posicion
+        abierta en X" es una proteccion buena, pero medida contra una posicion
+        que ya no existe rechaza la senal SIGUIENTE de ese instrumento. Con un
+        canal que opera un solo simbolo, eso significa perder casi una senal de
+        cada dos: se toma una, la siguiente se rechaza, la de mas alla se toma.
+
+        Antes esto se reconciliaba solo de rebote, cuando llegaba un mensaje de
+        gestion y el broker contestaba que la posicion no existia. Depender de
+        eso es depender de que el canal mande un mensaje que puede no mandar.
+
+        Se respeta la diferencia entre "no esta" y "no pude preguntar": solo un
+        False del broker saca la posicion del estado. Un None la deja donde
+        esta, porque darla por cerrada sin saberlo la soltaria del registro
+        estando viva.
+        """
+        abiertas = self.store.open_positions()
+        if not abiertas:
+            return
+
+        cerradas = []
+        for position in list(abiertas):
+            try:
+                existe = await self.broker.posicion_existe(position.broker_ticket)
+            except Exception:
+                logger.warning(
+                    "No se pudo verificar la posicion %s", position.symbol, exc_info=True
+                )
+                continue
+            if existe is False:
+                self.store.remove_position(position.trade_id)
+                cerradas.append(position)
+
+        if not cerradas:
+            return
+
+        for position in cerradas:
+            self.store.append_event("cerrada_en_el_broker", {
+                "trade_id": position.trade_id,
+                "symbol": position.symbol,
+                "side": position.side,
+                "entry": position.entry,
+                "stop_loss": position.stop_loss,
+                "take_profits": position.take_profits,
+            })
+            logger.info(
+                "%s ya no esta abierta en el broker (TP, SL o cierre a mano). "
+                "Se saca del estado y el simbolo queda libre.", position.symbol,
+            )
+
+        await self._notify(
+            "Se cerraron solas en el broker (TP, SL o a mano):\n"
+            + "\n".join(f"  {p.symbol} {p.side} entrada {p.entry}" for p in cerradas)
+            + "\nEsos simbolos quedan libres para la proxima senal."
+        )
 
     async def _precio_de_mercado(self, symbol: str | None) -> float | None:
         """Trae la cotizacion real de un instrumento.
