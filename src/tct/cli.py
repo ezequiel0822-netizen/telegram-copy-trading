@@ -542,6 +542,52 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+async def _probar_mover_stop(broker, canonico, real, apertura, precio, fallos) -> None:
+    """Mueve el stop dos veces al MISMO precio y verifica las dos respuestas.
+
+    El segundo movimiento es el punto de esta prueba. Reproduce exactamente lo
+    que pasa en produccion cuando el canal edita un mensaje de "MOVER SL A X":
+    el bot lo reprocesa, MT5 contesta 10025 (NO_CHANGES) porque el stop ya vale
+    eso, y durante un tiempo el bot lo conto como rechazo y aviso "NO se pudo
+    mover el SL" inmediatamente despues de haberlo movido bien.
+
+    Se hace contra el broker de verdad y no con un test, porque el numero 10025
+    lo devuelve MT5 y cada broker puede contestar distinto ante un cambio nulo.
+    """
+    info = await asyncio.to_thread(broker._ensure_symbol, real)
+    digitos = int(getattr(info, "digits", 2) or 2)
+    # 1% por debajo del precio: valido para un BUY (el stop va abajo) y lo
+    # bastante lejos como para que ningun broker lo rechace por cercania.
+    stop = round(precio * 0.99, digitos)
+
+    print(f"      Moviendo el SL a {stop}...")
+    primero = await broker.modify_stop_loss(
+        ticket=apertura.ticket, symbol=canonico, stop_loss=stop
+    )
+    if not primero.ok:
+        print(f"      FALLO al mover el SL: {primero.reason}")
+        fallos.append(f"No se pudo mover el stop: {primero.reason}")
+        return
+    print(f"      OK: {primero.reason}")
+
+    print(f"      Moviendolo OTRA VEZ al mismo {stop} (lo que pasa con una edicion)...")
+    segundo = await broker.modify_stop_loss(
+        ticket=apertura.ticket, symbol=canonico, stop_loss=stop
+    )
+    if segundo.ok:
+        print(f"      OK: {segundo.reason}")
+        print("            Un cambio nulo NO se informa como fallo. Es lo que")
+        print("            hacia que el bot avisara 'NO se pudo mover el SL'")
+        print("            justo despues de haberlo movido bien.")
+        return
+
+    print(f"      FALLO: un cambio nulo se informo como rechazo: {segundo.reason}")
+    fallos.append(
+        "Pedir el stop que YA esta puesto se informa como fallo. En produccion "
+        "eso avisa 'NO se pudo mover el SL' con el stop bien puesto."
+    )
+
+
 def _avisar_rosters_desparejos(settings: Settings, env_file: str | None) -> None:
     """Avisa si otro `.env` de esta carpeta declara un roster distinto.
 
@@ -969,6 +1015,21 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
                 fallos.append(f"No se pudo abrir la orden de prueba: {apertura.reason}")
             else:
                 print(f"      OK: abierta. ticket={apertura.ticket} precio={apertura.price}")
+
+                # Mover el stop DOS VECES al mismo precio. La segunda es la que
+                # importa: reproduce lo que pasa en produccion cuando el canal
+                # edita un "MOVER SL A X" y el bot lo reprocesa. MT5 contesta
+                # 10025 (NO_CHANGES) y eso NO es un fallo, es la prueba de que
+                # el stop ya esta donde se pidio. Se conto como rechazo durante
+                # un tiempo, y el bot avisaba "NO se pudo mover el SL" justo
+                # despues de haberlo movido bien.
+                #
+                # Este era el unico camino de escritura que 'probar' no
+                # ejercitaba, y es justamente el que se rompio.
+                await _probar_mover_stop(
+                    broker, canonico, real, apertura, precio, fallos
+                )
+
                 cierre = await broker.close_position(
                     ticket=apertura.ticket, symbol=canonico, fraction=1.0
                 )

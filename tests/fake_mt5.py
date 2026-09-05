@@ -30,6 +30,10 @@ TRADE_RETCODE_INVALID_FILL = 10030
 TRADE_RETCODE_INVALID_VOLUME = 10014
 TRADE_RETCODE_INVALID_STOPS = 10016
 TRADE_RETCODE_NO_MONEY = 10019
+# Lo devuelve MT5 cuando lo que se pide YA esta puesto. No es un fallo: es
+# la prueba de que el cambio anterior entro. Pasa siempre en produccion,
+# porque el canal edita sus mensajes y el bot reprocesa las ediciones.
+TRADE_RETCODE_NO_CHANGES = 10025
 
 
 class FakeSymbolInfo:
@@ -94,6 +98,7 @@ class FakeMT5:
     SYMBOL_FILLING_IOC = 2
     TRADE_RETCODE_DONE = TRADE_RETCODE_DONE
     TRADE_RETCODE_INVALID_FILL = TRADE_RETCODE_INVALID_FILL
+    TRADE_RETCODE_NO_CHANGES = TRADE_RETCODE_NO_CHANGES
 
     def __init__(self, simbolos: dict[str, dict[str, Any]] | None = None) -> None:
         # {"XAUUSD": {"bid": 4438.0, "ask": 4438.5, "volume_min": 0.01, ...}}
@@ -168,7 +173,13 @@ class FakeMT5:
             posicion = self._posiciones.get(request["position"])
             if posicion is None:
                 return FakeResult(TRADE_RETCODE_INVALID_STOPS, comment="posicion inexistente")
-            posicion.sl = request.get("sl", 0.0)
+            nuevo_sl = request.get("sl", 0.0)
+            if posicion.sl == nuevo_sl:
+                # Sin esto el fake devolvia DONE y los tests del camino de
+                # mover el stop pasaban sin ejercitar el caso que importa.
+                return FakeResult(TRADE_RETCODE_NO_CHANGES,
+                                  comment="No changes")
+            posicion.sl = nuevo_sl
             return FakeResult(TRADE_RETCODE_DONE)
 
         # Cerrar: un DEAL que nombra una posicion existente.
