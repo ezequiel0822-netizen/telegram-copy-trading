@@ -83,10 +83,22 @@ class TelegramReader:
             )
             return False
 
+        # Reintentos INFINITOS a proposito. Por defecto Telethon reintenta 5
+        # veces con 1 segundo de espera y despues se rinde: unos seis segundos
+        # de internet caido alcanzan para que el bot se apague. Este bot esta
+        # pensado para quedarse dias escuchando en una PC dedicada, donde un
+        # corte de conexion de madrugada es normal y nadie lo esta mirando.
+        #
+        # Rendirse ahi es lo peor de los dos mundos: no opera y no avisa. Con
+        # -1 sigue intentando mientras el proceso viva, que es lo que uno
+        # espera de algo que dejo corriendo.
         self._client = TelegramClient(
             self.settings.telegram_session_name,
             self.settings.telegram_api_id,
             self.settings.telegram_api_hash,
+            connection_retries=-1,
+            retry_delay=5,
+            auto_reconnect=True,
         )
         # start() abre el flujo interactivo de login si no hay sesion guardada.
         await self._client.start()

@@ -1239,13 +1239,43 @@ async def _run_async(settings: Settings) -> None:
         )
     logger.info("Escuchando mensajes. Ctrl+C para parar.")
 
+    corte_inesperado = False
     try:
         await reader.run_forever()
+        # Si `run_forever` VUELVE por su cuenta, no fue un cierre pedido: un
+        # Ctrl+C sale por KeyboardInterrupt y una parada nuestra por `stop()`.
+        # Volver aca significa que la conexion con Telegram se murio del todo.
+        #
+        # Antes esto caia en el `finally` y se registraba como "Cerrado
+        # limpio", que es mentira: el bot se apago y nadie lo pidio. Con el bot
+        # corriendo dias en una PC que nadie mira, esa mentira es la diferencia
+        # entre enterarte y no enterarte de que perdiste dos dias de senales.
+        corte_inesperado = True
+        logger.error(
+            "SE CORTO LA CONEXION CON TELEGRAM y no se pudo recuperar.\n"
+            "        El bot deja de escuchar el grupo AHORA. Las posiciones que\n"
+            "        haya abiertas siguen en MetaTrader con su SL y su TP: el\n"
+            "        broker las respeta aunque el bot no este.\n"
+            "        Volve a arrancarlo cuando tengas internet de nuevo."
+        )
+        try:
+            await notifier.send(
+                f"[{settings.instance_name.upper()}] SE DETUVO SOLO\n"
+                "Se corto la conexion con Telegram y no se pudo recuperar.\n"
+                "Dejo de leer el grupo. Lo que este abierto sigue en MetaTrader\n"
+                "con su SL y su TP.\n\n"
+                "Hay que volver a arrancarlo a mano."
+            )
+        except Exception:
+            logger.warning("Tampoco se pudo avisar del corte", exc_info=True)
     finally:
         await reader.stop()
         await broker.disconnect()
         store.save_state()
-        logger.info("Cerrado limpio.")
+        if corte_inesperado:
+            logger.info("Estado guardado. El bot NO esta escuchando.")
+        else:
+            logger.info("Cerrado limpio.")
 
 
 # --------------------------------------------------------------------------
