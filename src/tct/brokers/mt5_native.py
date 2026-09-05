@@ -430,7 +430,13 @@ class MT5NativeBroker(Broker):
             if last_result is not None
             else f"order_send devolvio None: {mt5.last_error()}"
         )
-        return OrderResult(False, "open", reason, symbol=symbol, lot=volume)
+        # El retcode viaja en `raw` y no solo dentro del texto del motivo: hay
+        # rechazos que NO son un defecto del sistema (10018, mercado cerrado) y
+        # quien los recibe tiene que poder distinguirlos sin parsear una frase.
+        return OrderResult(
+            False, "open", reason, symbol=symbol, lot=volume,
+            raw={"retcode": last_result.retcode} if last_result is not None else {},
+        )
 
     async def close_position(
         self, *, ticket: int | None, symbol: str, fraction: float = 1.0

@@ -542,6 +542,11 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+# El broker rechaza ordenes fuera del horario de mercado. No es una falla del
+# sistema: es sabado.
+_MERCADO_CERRADO = 10018
+
+
 async def _probar_mover_stop(broker, canonico, real, apertura, precio, fallos) -> None:
     """Mueve el stop dos veces al MISMO precio y verifica las dos respuestas.
 
@@ -1010,7 +1015,19 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
                 symbol=canonico, side=Side.BUY, order_type=OrderType.MARKET,
                 lot=settings.default_lot, entry=None, stop_loss=None, take_profit=None,
             )
-            if not apertura.ok:
+            if apertura.raw.get("retcode") == _MERCADO_CERRADO:
+                # No es un defecto del sistema: es el fin de semana. Contarlo
+                # como problema manda a buscar una falla que no existe, y hace
+                # que 'probar' sea inutilizable justo cuando uno tiene tiempo
+                # de configurar el bot, que suele ser un sabado.
+                print("      SALTADA: el mercado esta CERRADO ahora mismo.")
+                print("      No es un problema del bot: el broker no acepta ordenes")
+                print("      fuera del horario de mercado.")
+                print("\n      El forex abre de domingo a la noche a viernes a la")
+                print("      tarde (hora de tu broker). Volve a correr esto en")
+                print("      horario y ahi se prueba de verdad:")
+                print("\n          tct probar --operar")
+            elif not apertura.ok:
                 print(f"      FALLO al abrir: {apertura.reason}")
                 fallos.append(f"No se pudo abrir la orden de prueba: {apertura.reason}")
             else:

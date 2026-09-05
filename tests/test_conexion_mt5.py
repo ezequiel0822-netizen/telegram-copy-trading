@@ -154,3 +154,66 @@ def test_probar_operar_llama_a_la_prueba_del_stop():
     from tct import cli
 
     assert "_probar_mover_stop" in inspect.getsource(cli._probar_async)
+
+
+# --------------------------------------------------------------------------
+# Mercado cerrado no es un defecto del sistema: es sabado
+# --------------------------------------------------------------------------
+
+
+MERCADO_CERRADO = 10018
+
+
+def test_el_rechazo_lleva_el_retcode_en_raw():
+    """Quien recibe el rechazo tiene que poder distinguir un mercado cerrado de
+    una falla real sin parsear una frase en castellano."""
+    import asyncio
+    import tempfile
+    from pathlib import Path
+
+    from tct.brokers.mt5_native import MT5NativeBroker
+    from tct.signals.models import OrderType, Side
+    from tests.fake_mt5 import FakeMT5, enchufar
+    from tests.test_engine import build_settings
+
+    settings = build_settings(Path(tempfile.mkdtemp()))
+    fake = FakeMT5({"XAUUSD": {"bid": 4434.66, "ask": 4435.08}})
+    fake.rechazar_con = MERCADO_CERRADO
+    broker = enchufar(MT5NativeBroker(settings), fake)
+
+    resultado = asyncio.run(broker.open_order(
+        symbol="XAUUSD", side=Side.BUY, order_type=OrderType.MARKET,
+        lot=0.01, entry=None, stop_loss=None, take_profit=None,
+    ))
+
+    assert resultado.ok is False
+    assert resultado.raw.get("retcode") == MERCADO_CERRADO
+
+
+def test_probar_no_cuenta_el_mercado_cerrado_como_problema():
+    """Contarlo como falla manda a buscar un defecto que no existe, y deja
+    'probar --operar' inutilizable justo el fin de semana, que es cuando uno
+    tiene tiempo de configurar el bot."""
+    import inspect
+
+    from tct import cli
+
+    fuente = inspect.getsource(cli._probar_async)
+    cerrado = fuente.index("_MERCADO_CERRADO")
+    siguiente_fallo = fuente.index("fallos.append", cerrado)
+    bloque = fuente[cerrado:siguiente_fallo]
+
+    assert "SALTADA" in bloque, "no lo trata como salteada"
+    assert "elif not apertura.ok" in bloque, (
+        "el mercado cerrado tiene que cortar ANTES de la rama de fallo"
+    )
+
+
+def test_el_mensaje_dice_cuando_volver():
+    import inspect
+
+    from tct import cli
+
+    fuente = inspect.getsource(cli._probar_async)
+
+    assert "domingo a la noche a viernes" in fuente, "no dice cuando reintentar"
