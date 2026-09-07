@@ -8,6 +8,7 @@
     python -m tct chats     # lista tus chats de Telegram con sus IDs
     python -m tct test      # prueba el parser con un mensaje, sin tocar nada
     python -m tct status    # posiciones abiertas y estadisticas
+    python -m tct informe   # que hizo el bot y por que no opero algunas
     python -m tct run       # arranca el bot
 
 `check` es el primero que hay que correr en una maquina nueva: dice que falta
@@ -1163,6 +1164,114 @@ def cmd_test(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
+def cmd_informe(args: argparse.Namespace) -> int:
+    """Que hizo el bot y POR QUE, leido de lo que quedo registrado.
+
+    Contesta la pregunta que uno se hace mirando el grupo: "hoy hubo nueve
+    senales y solo opero cuatro, que paso". El dato siempre estuvo -cada
+    rechazo se guarda con su motivo- pero vivia en un .jsonl que nadie podia
+    leer sin abrirlo a mano.
+    """
+    from tct.informe import APERTURAS, filtrar_por_horas, resumir
+    from tct.store import Store
+
+    settings = load_settings(args.env_file)
+    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+
+    eventos = filtrar_por_horas(store.read_events(), args.horas)
+    trades = filtrar_por_horas(store.read_paper_trades(), args.horas)
+    r = resumir(eventos, trades)
+
+    print("=" * 66)
+    print(f"  QUE PASO EN LAS ULTIMAS {args.horas} HORAS")
+    print("=" * 66)
+    print(f"  Instancia: {settings.instance_name.upper()}   "
+          f"Registro: {settings.events_path}")
+
+    if not r["vistas"]:
+        print("\n  No llego ninguna senal de apertura en ese rango.")
+        print(f"  Proba con mas horas:  tct informe --horas {args.horas * 3}")
+        return 0
+
+    print(f"\n  Senales de apertura que vio el bot: {r['vistas']}")
+    for kind, etiqueta in APERTURAS.items():
+        cuantas = r["por_tipo"].get(kind, 0)
+        if cuantas:
+            print(f"      {cuantas:>3}  {etiqueta}")
+
+    if r["motivos"]:
+        print("\n  " + "-" * 62)
+        print("  POR QUE NO SE OPERARON")
+        print("  " + "-" * 62)
+        for motivo, veces in r["motivos"]:
+            print(f"      {veces:>3}x  {motivo}")
+
+    print("\n  " + "-" * 62)
+    print("  UNA POR UNA")
+    print("  " + "-" * 62)
+    for fila in r["detalle"]:
+        hora = str(fila["ts"] or "")[11:16]
+        simbolo = fila["symbol"] or "?"
+        lado = fila["side"] or ""
+        entrada = fila["entry"]
+        print(f"      {hora}  {simbolo:<8} {lado:<5} "
+              f"entrada={entrada if entrada is not None else '-':<10} "
+              f"{APERTURAS.get(fila['kind'], fila['kind'])}")
+        for motivo in fila["motivos"]:
+            print(f"              {motivo}")
+
+    if r["gestion"]:
+        print("\n  " + "-" * 62)
+        print("  GESTION")
+        print("  " + "-" * 62)
+        etiquetas = {
+            "mover_sl": "mensajes de mover el stop",
+            "cierre": "cierres",
+            "cierre_parcial": "cierres parciales",
+            "cerrada_en_el_broker": "se cerraron solas (TP, SL o a mano)",
+            "gestion_rechazada": "gestion que no se pudo aplicar",
+        }
+        for kind, cuantas in r["gestion"].items():
+            print(f"      {cuantas:>3}  {etiquetas.get(kind, kind)}")
+
+    _informar_distancias(r["distancias"], settings)
+    return 0
+
+
+def _informar_distancias(medidas: list, settings: Settings) -> None:
+    """El dato para calibrar, medido en el momento en que llego cada senal.
+
+    A diferencia de `simular --con-precios`, aca no existe el problema de las
+    senales viejas: el precio de mercado se guardo cuando el mensaje llego, no
+    cuando uno corre el informe.
+    """
+    if not medidas:
+        return
+
+    limite = settings.max_spread_from_entry_pct
+    print("\n  " + "-" * 62)
+    print(f"  DISTANCIA AL PRECIO REAL  ({len(medidas)} senales operadas)")
+    print("  " + "-" * 62)
+    print("  Medido en el instante exacto en que llego cada senal.")
+    print()
+
+    peor = 0.0
+    for m in medidas:
+        hora = str(m["ts"] or "")[11:16]
+        marca = "  <- rozo el limite" if limite and m["distancia_pct"] > limite * 0.8 else ""
+        peor = max(peor, m["distancia_pct"])
+        print(f"      {hora}  {m['symbol']:<8} entrada={m['entry']:<10} "
+              f"mercado={m['mercado']:<10} {m['distancia_pct']:5.2f}%{marca}")
+
+    print(f"\n  La mas lejos quedo a {peor:.2f}%, con el limite en {limite}%.")
+    if limite and peor > limite * 0.8:
+        print("  Alguna estuvo cerca de rozarlo. Si empezas a ver rechazos por")
+        print(f"  'precio real', ahi tenes el numero: subir {math.ceil(peor * 10 + 1) / 10}"
+              " en MAX_SPREAD_FROM_ENTRY_PCT")
+    else:
+        print("  Hay margen de sobra: el limite no esta apretando estas senales.")
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     from collections import Counter
 
@@ -1446,6 +1555,10 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("message", nargs="*", help="Mensaje (si se omite, se lee de stdin)")
 
     sub.add_parser("status", help="Posiciones abiertas y estadisticas")
+    informe = sub.add_parser(
+        "informe", help="Que hizo el bot y POR QUE no opero algunas senales")
+    informe.add_argument("--horas", type=int, default=24,
+                         help="Cuantas horas hacia atras mirar (por defecto 24)")
     run = sub.add_parser("run", help="Arranca el bot")
     run.add_argument(
         "--esperar-mt5", type=int, default=0, dest="esperar_mt5", metavar="SEGUNDOS",
@@ -1469,6 +1582,7 @@ def main(argv: list[str] | None = None) -> int:
         "chats": cmd_chats,
         "test": cmd_test,
         "status": cmd_status,
+        "informe": cmd_informe,
         "run": cmd_run,
     }
     try:
