@@ -132,6 +132,45 @@ _NARRATIVA_RE = re.compile(
     r"WE\s+(?:CLOSED|MADE|GOT|HIT)|MANAGED\s+TO)\b"
 )
 
+def es_descarte_deliberado(text: str) -> bool:
+    """True si este mensaje se descarta A PROPOSITO, no por no entenderlo.
+
+    POR QUE HACE FALTA DISTINGUIRLO
+    -------------------------------
+    `parse_signal` devuelve None en dos situaciones que no tienen nada que ver
+    entre si:
+
+        a) "esto no es un mensaje de trading"      -> no lo entendi
+        b) "esto es una cronica o un recap"        -> lo entendi y lo descarto
+
+    El caso (b) es una DECISION, y de las caras: `_NARRATIVA_RE` y
+    `_RESULTADO_RE` existen porque un "pudimos cerrar otra operacion" se
+    ejecutaba como una orden de cerrar todo, y un recap abria operaciones.
+
+    Con los dos casos devolviendo el mismo None, el motor no podia separarlos
+    y le mandaba TAMBIEN las cronicas a la IA local, que es un modelo de 3B y
+    las lee como aperturas. Caso real del canal del usuario:
+
+        "Asi que, chicos, aqui estan nuestros resultados de la primera
+         operacion. Lo considero un buen comienzo"
+
+    El parser de reglas lo descartaba bien; la IA lo interpretaba como OPEN.
+    No llego a operar nada porque OLLAMA_AUTO_EXECUTE esta en false, pero
+    generaba una notificacion por Telegram por cada mensaje y edicion, y ~15
+    segundos de CPU cada una. O sea: la capa de IA rodeaba una guarda que se
+    habia puesto a proposito.
+
+    Recibe el mensaje CRUDO y lo normaliza aca adentro. Los regex trabajan
+    sobre texto en mayusculas y sin acentos, asi que pasarles el original no
+    matchea nada: "resultados" no es "RESULTADOS". Que la normalizacion sea
+    interna evita que quien llame tenga que acordarse.
+    """
+    normalizado = _normalize(text)
+    return bool(
+        _NARRATIVA_RE.search(normalizado) or _RESULTADO_RE.search(normalizado)
+    )
+
+
 _BREAKEVEN_RE = re.compile(r"\b(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN)\b")
 _HALF_RE = re.compile(r"\b(?:HALF|MITAD)\b")
 _PERCENT_RE = re.compile(r"(\d{1,3})\s*%")

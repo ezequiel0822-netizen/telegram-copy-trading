@@ -28,10 +28,56 @@ from tct.risk import (
     usable_take_profits,
 )
 from tct.signals.models import EventType, SignalEvent, Side
-from tct.signals.parser import parse_signal
+from tct.signals.parser import es_descarte_deliberado, parse_signal
 from tct.store import OpenPosition, Store, utc_now_iso
 
 logger = logging.getLogger(__name__)
+
+
+def _vale_preguntarle_a_la_ia(event: SignalEvent | None, text: str) -> bool:
+    """Si conviene molestar a la IA local con este mensaje.
+
+    Un None del parser tiene DOS significados y hay que separarlos, porque
+    tratarlos igual deshace una decision que costo cara:
+
+        no lo entendi          -> que opine la IA, para eso esta
+        lo descarte a proposito -> NO. Ya se decidio, y se decidio bien.
+
+    Las cronicas y los recaps caen en el segundo caso. `_NARRATIVA_RE` existe
+    porque "pudimos cerrar otra operacion" se ejecutaba como una orden de
+    cerrar todo. Pasarle igual esos mensajes a la IA es rodear la guarda por
+    atras: un modelo de 3B los lee como aperturas.
+
+    En el canal del usuario esto pasaba todos los dias. Los recaps generaban
+    una notificacion de "la IA interpreto esto" por cada mensaje Y por cada
+    edicion, mas ~15 segundos de CPU cada una. Nunca opero nada porque
+    OLLAMA_AUTO_EXECUTE esta en false, pero un aviso que siempre es ruido
+    entrena a ignorar los avisos.
+    """
+    if event is None:
+        return not es_descarte_deliberado(text)
+    return _parser_no_entendio(event)
+
+
+def _interpretacion_utilizable(event: SignalEvent) -> bool:
+    """Si lo que devolvio la IA sirve para algo, aunque sea para avisar.
+
+    Una APERTURA sin simbolo o sin entrada no se puede ejecutar jamas: el
+    riesgo la rechazaria con "no se pudo identificar el simbolo". Avisar de
+    ella es puro ruido, y encima ruido que parece importante.
+
+    Caso real del canal, medido: seis avisos en un dia de "MENSAJE QUE EL
+    PARSER NO ENTENDIO / la IA lo interpreto asi: Tipo OPEN, Simbolo -,
+    Entrada -". Todos venian de recaps del canal contando como les fue. Un
+    aviso que siempre es ruido entrena a ignorar los avisos, y el dia que
+    llegue uno que importa va a estar mezclado con esos.
+
+    Los eventos de GESTION no entran en esta regla: un "mover el SL a X" sin
+    simbolo es legitimo y aplica a todo lo abierto.
+    """
+    if event.event_type is not EventType.OPEN:
+        return True
+    return bool(event.symbol) and event.entry is not None
 
 
 def _parser_no_entendio(event: SignalEvent | None) -> bool:
@@ -161,9 +207,9 @@ class Engine:
 
         # La IA solo entra donde el parser de reglas fallo. Si el parser
         # entendio, no se la consulta: es mas rapida, gratis y determinista.
-        if self.ollama is not None and _parser_no_entendio(event):
+        if self.ollama is not None and _vale_preguntarle_a_la_ia(event, text):
             interpretado = await self._consultar_ia(text, metadata)
-            if interpretado is not None:
+            if interpretado is not None and _interpretacion_utilizable(interpretado):
                 event = interpretado
 
         if event is None:
