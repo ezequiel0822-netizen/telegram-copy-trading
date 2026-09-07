@@ -177,3 +177,75 @@ def test_un_trade_sin_precio_de_mercado_no_se_mide():
     trades = [{"symbol": "XAUUSD", "entry": 4432.0, "precio_mercado": None}]
 
     assert resumir([], trades)["distancias"] == []
+
+
+# --------------------------------------------------------------------------
+# Las ediciones no pueden inflar el conteo
+#
+# Salida real del usuario: el informe decia "9 senales de apertura" cuando en
+# el grupo habia muchas menos. Este canal edita lo que manda y las ediciones
+# se reprocesan a proposito, asi que un solo mensaje generaba tres eventos.
+# Un numero que no coincide con lo que uno ve en el grupo no sirve para
+# comparar, que es exactamente para lo que se lo mira.
+# --------------------------------------------------------------------------
+
+
+def con_id(kind, mid, hace_horas=1):
+    e = evento(kind, hace_horas)
+    e["signal"]["telegram_message_id"] = mid
+    return e
+
+
+def test_tres_ediciones_del_mismo_mensaje_cuentan_como_uno():
+    eventos = [con_id("ia_sugerencia", 100) for _ in range(3)]
+
+    r = resumir(eventos)
+
+    assert r["mensajes"] == 1, "tres ediciones del mismo mensaje contaron como tres"
+    assert r["vistas"] == 3, "el conteo de eventos tiene que seguir estando"
+
+
+def test_mensajes_distintos_cuentan_por_separado():
+    eventos = [con_id("aceptada", 1), con_id("aceptada", 2), con_id("aceptada", 3)]
+
+    assert resumir(eventos)["mensajes"] == 3
+
+
+def test_el_caso_real_del_usuario():
+    """3 senales operadas + 2 mensajes que la IA interpreto, cada uno con dos
+    ediciones. El informe decia 9; son 5 mensajes."""
+    eventos = (
+        [con_id("aceptada", 1), con_id("aceptada", 2), con_id("aceptada", 3)]
+        + [con_id("ia_sugerencia", 10) for _ in range(3)]
+        + [con_id("ia_sugerencia", 20) for _ in range(3)]
+    )
+
+    r = resumir(eventos)
+
+    assert r["vistas"] == 9
+    assert r["mensajes"] == 5
+
+
+def test_un_evento_sin_message_id_cuenta_igual():
+    """Los eventos viejos no lo guardaban. Descartarlos escondería senales."""
+    eventos = [evento("aceptada"), evento("aceptada")]
+
+    assert resumir(eventos)["mensajes"] == 2
+
+
+# --------------------------------------------------------------------------
+# El texto del mensaje
+# --------------------------------------------------------------------------
+
+
+def test_el_detalle_guarda_lo_que_decia_el_mensaje():
+    """Sin esto, una senal que el parser no entendio se ve como '? entrada=-'
+    y no hay forma de saber que decia: justo cuando mas se necesita."""
+    e = evento("ia_sugerencia")
+    e["signal"]["raw_message"] = "No esperemos por TP1\nMovamos el SL ya"
+
+    fila = resumir([e])["detalle"][0]
+
+    assert fila["texto"] == "No esperemos por TP1 Movamos el SL ya", (
+        "el texto tiene que quedar en una sola linea para la tabla"
+    )

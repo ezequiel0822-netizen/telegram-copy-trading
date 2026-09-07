@@ -1193,7 +1193,15 @@ def cmd_informe(args: argparse.Namespace) -> int:
         print(f"  Proba con mas horas:  tct informe --horas {args.horas * 3}")
         return 0
 
-    print(f"\n  Senales de apertura que vio el bot: {r['vistas']}")
+    # Se informan los dos numeros. El de MENSAJES es el que se puede comparar
+    # con lo que uno ve en el grupo; el de eventos es mayor porque este canal
+    # edita lo que manda y las ediciones se reprocesan a proposito.
+    if r["mensajes"] != r["vistas"]:
+        print(f"\n  Mensajes de apertura distintos: {r['mensajes']}")
+        print(f"  (se procesaron {r['vistas']} veces: el canal EDITA sus mensajes")
+        print("   y cada edicion se vuelve a leer, por si corrigieron un precio)")
+    else:
+        print(f"\n  Senales de apertura que vio el bot: {r['vistas']}")
     for kind, etiqueta in APERTURAS.items():
         cuantas = r["por_tipo"].get(kind, 0)
         if cuantas:
@@ -1219,6 +1227,11 @@ def cmd_informe(args: argparse.Namespace) -> int:
               f"{APERTURAS.get(fila['kind'], fila['kind'])}")
         for motivo in fila["motivos"]:
             print(f"              {motivo}")
+        # El texto solo en lo que NO se opero: es ahi donde uno necesita ver
+        # que decia el mensaje para entender por que no se entendio. En una
+        # senal operada seria ruido, porque ya se sabe que se leyo bien.
+        if fila["kind"] != "aceptada" and fila["texto"]:
+            print(f"              dijo: {fila['texto'][:100]}")
 
     if r["gestion"]:
         print("\n  " + "-" * 62)

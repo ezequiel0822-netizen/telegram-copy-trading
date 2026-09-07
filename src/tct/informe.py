@@ -88,6 +88,12 @@ def resumir(
             "side": senal.get("side"),
             "entry": senal.get("entry"),
             "precio_mercado": evento.get("precio_mercado"),
+            # El TEXTO del mensaje. Sin esto, una senal que el parser no
+            # entendio se muestra como "? entrada=-" y no hay forma de saber
+            # que decia: justo el caso en el que uno mas necesita verlo.
+            "texto": " ".join(str(senal.get("raw_message") or "").split()),
+            # Para poder distinguir mensajes DISTINTOS de ediciones del mismo.
+            "message_id": senal.get("telegram_message_id"),
             "motivos": [],
         }
 
@@ -109,8 +115,17 @@ def resumir(
                              "cerrada_en_el_broker", "gestion_rechazada"}
     )
 
+    # Cuantos MENSAJES distintos hubo, no cuantos eventos. Este canal edita lo
+    # que manda y las ediciones se reprocesan a proposito, asi que un solo
+    # mensaje puede aparecer tres veces. Contar eventos infla el numero hasta
+    # no coincidir con lo que uno ve en el grupo, que es contra lo que se
+    # compara.
+    ids = [f["message_id"] for f in detalle if f["message_id"] is not None]
+    mensajes = len(set(ids)) + sum(1 for f in detalle if f["message_id"] is None)
+
     return {
         "vistas": sum(por_tipo.values()),
+        "mensajes": mensajes,
         "por_tipo": dict(por_tipo),
         "motivos": motivos.most_common(),
         "detalle": detalle,
