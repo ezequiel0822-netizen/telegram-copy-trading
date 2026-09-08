@@ -6,10 +6,15 @@ exactamente dónde hacer clic y qué esperar.
 Windows es la plataforma **recomendada**: MetaTrader 5 se conecta de forma
 nativa, sin intermediarios ni servicios de pago. En una Mac eso no es posible.
 
-> **El sistema no opera con dinero real.** La protección de "solo cuentas demo"
-> está dentro del ejecutor de órdenes, no en un archivo de configuración:
-> aunque pongas por error los datos de una cuenta real, el bot se niega a
-> arrancar y te lo dice.
+> **Con la configuración de fábrica, el sistema no opera con dinero real.** La
+> protección de "solo cuentas demo" está dentro del ejecutor de órdenes: le
+> pregunta al bróker qué tipo de cuenta es, y no se conforma con lo que diga
+> el archivo de configuración. Si por error ponés los datos de una cuenta
+> real, el bot se niega a arrancar y te lo dice.
+>
+> Pasar a dinero real es **deliberado** y necesita dos llaves a la vez:
+> `TRADING_MODE=LIVE` y `ALLOW_LIVE_TRADING=true`. Mientras esa segunda esté
+> en `false` —como viene— la protección no se puede saltear por accidente.
 
 ---
 
@@ -162,15 +167,30 @@ trabajando. **No la cierres.**
 | `Verificando Ollama` | La IA local. Te va a preguntar. |
 | `Corriendo los tests` | Verifica que todo quedó bien. Tienen que dar todos OK. |
 
-### Te va a hacer dos preguntas
+### Te va a hacer hasta tres preguntas
 
 **1. "¿Instalar Ollama ahora?"** — Es la IA local que interpreta mensajes que
 el bot no entiende. Es opcional; el bot funciona sin ella. Respondé **S** si
 querés tenerla, o **n** para hacerlo después con `scripts\instalar_ia.bat`.
 
-**2. "¿Arrancar el bot solo al prender la PC?"** — En una PC dedicada,
-respondé **S**. Así, si se corta la luz y la máquina se reinicia, el bot vuelve
-solo.
+**2. "¿Descargar el modelo ahora?"** — Solo aparece si instalaste Ollama y no
+tenés ningún modelo bajado. Son unos 2 GB y unos minutos. **Ojo: acá el valor
+por defecto está al revés que en las otras dos** (`[s/N]`), así que hay que
+escribir **S**; si apretás Enter se saltea y la IA queda apagada. Se puede
+hacer después con `scripts\instalar_ia.bat`.
+
+**3. "¿Arrancar el bot solo al prender la PC?"** — Respondé **n**, incluso en
+una PC dedicada. Esta opción pone en el inicio de Windows el arranque *simple*
+(`iniciar_bot.bat`), que hace un solo intento de conectarse a MetaTrader y
+aborta si todavía no está listo — y recién prendida la PC, nunca lo está. El
+arranque automático que **sí** sirve se configura después con
+`scripts\autoarranque.bat` (más abajo, *"Que arranque solo al prender la PC"*).
+El acceso directo del escritorio se crea igual, contestes lo que contestes.
+
+> **Si ya contestaste S:** corré `scripts\autoarranque.bat`, elegí **D** para
+> desactivar, y volvé a correrlo para activarlo. Los dos escriben el mismo
+> archivo en la carpeta de inicio, así que mientras esté el del instalador el
+> script te va a decir "ACTIVADO" y solo te va a ofrecer desactivar.
 
 Al final crea un acceso directo **"Bot de Trading"** en el escritorio.
 
@@ -584,7 +604,7 @@ El diagnóstico imprime bastante. Estas son las líneas que importan:
 | `Telethon : configurado` | Ya pusiste `TELEGRAM_API_ID` y `TELEGRAM_API_HASH`. |
 | `Telethon : FALTA` | Faltan esos dos datos (paso 7). |
 | `Chats fuente : (ninguno)` | Todavía no elegiste el grupo (paso 9). |
-| `IA local : llama3.2:3b (solo avisa)` | Ollama funcionando. El "solo avisa" es lo correcto. |
+| `IA local : llama3.2:3b (solo avisa, max 45s)` | Ollama funcionando. El "solo avisa" es lo correcto; el `max` es `OLLAMA_TIMEOUT_SECONDS`. |
 | `IA local : apagada` | Sin IA. El bot funciona igual, solo pierde los mensajes raros. |
 | `Modo : AUTO -> PAPER_ONLY` | Sin datos de MT5: registra pero no opera. |
 | `Modo : AUTO -> PAPER_AND_MT5_DEMO` | Con MT5 conectado: **opera en tu cuenta demo**. |
@@ -599,7 +619,7 @@ esto está **bien encaminado**, no roto:
 
 ```
     Modo            : AUTO -> PAPER_ONLY
-    IA local        : llama3.2:3b (solo avisa)
+    IA local        : llama3.2:3b (solo avisa, max 45s)
     Chats fuente    : (ninguno)
     Telethon        : configurado
 
@@ -664,13 +684,20 @@ Si querés ser más prudente todavía, poné `DRY_RUN=true` en el `.env` unos d�
 anota cómo interpretó cada mensaje **sin crear ninguna operación, ni siquiera
 en papel**.
 
-> ### 🔶 Esto puede variar — la primera orden real es lo menos probado del sistema
+> ### 🔶 Esto puede variar — al cambiar de bróker
 >
-> Todo lo que MetaTrader expone se verificó contra el paquete instalado, pero
-> **una orden de verdad contra FxPro no se pudo probar**. El punto más delicado
+> La cadena de ejecución **ya se probó de punta a punta**: la primera orden real
+> fue el 2026-09-04 contra `MetaQuotes-Demo`, y el bot viene operando señales
+> del canal desde entonces. Lo que **no** está probado es el mismo camino en
+> **otro bróker**, y ahí es donde cambian las cosas: nombres de instrumento con
+> sufijo, lote mínimo, y sobre todo el *filling mode*. El punto más delicado
 > es el *filling mode*: cada bróker acepta un modo distinto de ejecución y no
 > avisa cuál. El bot los prueba en orden hasta que uno entre, pero es la clase
 > de cosa que solo se confirma operando.
+>
+> **Antes de dejarlo suelto en un bróker nuevo**, corré `python -m tct probar`
+> y después `python -m tct probar --operar`, que abre y cierra una posición
+> mínima de prueba. Es el ensayo del camino completo sin esperar una señal.
 >
 > **Qué mirar en la primera señal aceptada:**
 > - Si en el log aparece `ticket=<un número>`, la orden entró. Confirmalo en la
@@ -765,6 +792,33 @@ Los archivos se abren con cualquier editor:
 Que se registren también los rechazos es lo que después permite contestar *"¿por
 qué el bot no tomó esta señal?"*.
 
+### "Hubo más señales de las que operó"
+
+Para eso está el informe:
+
+```
+python -m tct informe --horas 24
+```
+
+Te dice cuántos mensajes llegaron, cuáles eran señales, cuáles se operaron
+y **el motivo de cada una que no**. No manda ninguna orden: solo lee.
+
+> **Ojo con contar a ojo.** El grupo **edita** sus mensajes —les agrega el
+> resultado, corrige un número— y cada edición te aparece como algo nuevo.
+> Cinco señales pueden verse como nueve. El informe agrupa por mensaje, así
+> que su número es el bueno.
+
+Y si querés saber **cómo terminó cada una**:
+
+```
+python -m tct informe --horas 48 --con-resultados
+```
+
+Va al historial de MetaTrader y clasifica cada operación: llegó al take
+profit, la sacó el stop, murió en breakeven, o la cerraste a mano. Es lo
+que después sirve para decidir si el grupo de señales vale la pena. Tampoco
+toca nada: lee el historial y listo.
+
 ### Probar el parser sin arrancar nada
 
 Copiá un mensaje real del grupo y fijate qué entiende:
@@ -809,11 +863,12 @@ del bot ya activado, y ahí los comandos se escriben cortos:
 ```
 tct check
 tct status
+tct informe --horas 24
 tct simular --horas 2 --con-precios
 ```
 
-**Por qué hace falta:** `python -m tct` a secas NO funciona, y el error que da
-(`No module named tct`) no explica nada. Ese `python` es el de Windows; el bot
+**Por qué hace falta:** `python -m tct` **sin activar el entorno** NO funciona,
+y el error que da (`No module named tct`) no explica nada. Ese `python` es el de Windows; el bot
 está instalado en el Python de la carpeta `.venv` del proyecto, que es otro.
 Son dos cajas de herramientas distintas y el bot está en una sola.
 
@@ -837,8 +892,9 @@ igual.
 > **Por qué no alcanza con copiar el acceso directo del escritorio.** Ese apunta
 > a `iniciar_bot.bat`, que aborta si MetaTrader no está listo. Al iniciar
 > sesión, MetaTrader y el bot arrancan casi al mismo tiempo, pero MetaTrader
-> tarda en levantar la interfaz, conectarse y loguear la cuenta — y el bot gana
-> esa carrera casi siempre. `autoarranque.bat` usa `iniciar_auto.bat`, que
+> tarda en levantar la interfaz, conectarse y loguear la cuenta — así que el
+> bot llega primero casi siempre, y ganar esa carrera es justamente el
+> problema: se encuentra sin bróker y se apaga. `autoarranque.bat` usa `iniciar_auto.bat`, que
 > **espera hasta 5 minutos** a que MetaTrader esté listo, y además vuelve a
 > levantar el bot si se cae.
 
@@ -917,10 +973,11 @@ correcta: los dos bots podrían ir a la misma cuenta, o cada uno a la del otro.
 Para encontrar cada ruta: **clic derecho en el acceso directo** de ese
 MetaTrader → **Propiedades** → mirá el campo **"Destino"**.
 
-O pedile la lista a Windows, desde `scripts\consola.bat`:
+O pedile la lista a Windows. Desde `scripts\consola.bat` (que abre `cmd`, no
+PowerShell):
 
 ```bash
-Get-ChildItem "C:\Program Files" -Filter terminal64.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+where /r "C:\Program Files" terminal64.exe
 ```
 
 ### Paso 3 — Armar el segundo `.env`
@@ -945,7 +1002,14 @@ misma línea `INSTANCE_NAMES` que en el nuevo.
 | `MT5_PATH` | ruta del primer MT5 | ruta del segundo |
 
 Si dos bots comparten la carpeta de datos, el segundo **se niega a arrancar** y
-te dice por qué. Si los `INSTANCE_NAMES` no coinciden, te avisa también.
+te dice por qué.
+
+Los `INSTANCE_NAMES` distintos, en cambio, **no los detecta nadie**: cada bot
+solo mira su propio archivo. Lo que sí hace es imprimir su lista al arrancar,
+en la línea `Instancia`. **Compará esa línea en las dos ventanas**: si no dicen
+lo mismo, los comandos con nombre no van a llegar a destino — un `/pausa fxpro`
+en el bot que no conoce ese nombre no se lee como destinatario sino como
+motivo, y ese bot se pausa a sí mismo.
 
 ### Paso 4 — Arrancar los dos
 

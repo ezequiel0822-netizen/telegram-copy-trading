@@ -65,7 +65,7 @@ latencia, menos piezas que puedan fallar y nada que pagar.
 
 | `TRADING_MODE` | Qué hace | ¿Corre en Mac? |
 |---|---|---|
-| **`AUTO`** *(por defecto)* | Decide solo: MT5 demo si hay credenciales de MetaApi en el `.env`, papel si no. | Sí |
+| **`AUTO`** *(por defecto)* | Decide solo, en este orden: MetaApi si están `METAAPI_TOKEN` y `METAAPI_ACCOUNT_ID`; si no, en Windows, el MT5 local si están `MT5_LOGIN`, `MT5_PASSWORD` y `MT5_SERVER`; papel si no hay ninguno de los dos. | Sí |
 | `PAPER_ONLY` | Solo simula, aunque haya credenciales cargadas. | Sí |
 | `PAPER_AND_METAAPI_DEMO` | Fuerza la ejecución en MT5 demo vía MetaApi Cloud. | Sí |
 | `PAPER_AND_MT5_DEMO` | Ejecuta con el MT5 instalado localmente. **Lo recomendado.** | **No.** Solo Windows |
@@ -128,6 +128,7 @@ python -m tct check     # diagnóstico: Python, dependencias, .env, plataforma
 python -m tct chats     # lista tus grupos de Telegram con sus IDs
 python -m tct test      # prueba el parser con un mensaje, sin tocar nada
 python -m tct status    # posiciones abiertas y estadísticas
+python -m tct informe   # qué llegó, qué se operó y por qué no el resto
 python -m tct run       # arranca el bot
 ```
 
@@ -218,8 +219,12 @@ consistente casi nunca se activa.
 
 ## Capas de seguridad
 
-Todas viven en [`src/tct/risk.py`](src/tct/risk.py) y son configurables desde
-el `.env`, tal como pide el CONTEXTO MAESTRO:
+Casi todas viven en [`src/tct/risk.py`](src/tct/risk.py), y todas son
+configurables desde el `.env`, tal como pide el CONTEXTO MAESTRO. Las dos
+excepciones son a propósito: el techo de lote sobre el volumen que realmente
+sale y la guarda de cuenta demo viven en el ejecutor
+([`src/tct/brokers/mt5_native.py`](src/tct/brokers/mt5_native.py)), que es el
+último lugar por el que pasa una orden.
 
 - **Lista blanca** de símbolos (`ALLOWED_SYMBOLS`).
 - **Techo de lote** (`MAX_LOT`): si `DEFAULT_LOT` lo supera, el bot no arranca.
@@ -272,6 +277,8 @@ src/tct/
 ├── engine.py           orquestador: parser -> riesgo -> paper -> broker
 ├── risk.py             todas las capas de seguridad
 ├── store.py            persistencia JSONL + estado
+├── informe.py          qué llegó, qué se operó y por qué no el resto
+├── lockfile.py         una sola instancia por carpeta de datos
 ├── cli.py              comandos
 ├── signals/
 │   ├── models.py       SignalEvent, EventType, OrderType
@@ -297,10 +304,11 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-112 tests, sin red y sin credenciales. Cubren el parser (39 casos con mensajes
+457 tests, sin red y sin credenciales. Cubren el parser (79 casos con mensajes
 reales), el ciclo completo del motor con el broker de papel, las capas de
-riesgo, la resolución del modo `AUTO`, la configuración, la persistencia y la
-clasificación de adjuntos (stickers, fotos, archivos).
+riesgo, la resolución del modo `AUTO`, la configuración, la persistencia, la
+clasificación de adjuntos (stickers, fotos, archivos), el control por Telegram,
+el informe y los desenlaces, y la convivencia de dos instancias.
 
 ---
 
@@ -325,13 +333,19 @@ de terceros y toda la capa de eventos de gestión.
 ## Estado y límites
 
 **Probado:** parser, motor, riesgo, persistencia, configuración, CLI, filtrado
-de adjuntos y el broker de papel — 103 tests verdes, y la instalación completa verificada en un
-entorno virtual limpio.
+de adjuntos y el broker de papel — 457 tests verdes, y la instalación completa
+verificada en un entorno virtual limpio.
 
-**Sin probar contra un servicio real:** `brokers/metaapi.py` (necesita un token
-y una cuenta MT5 demo conectada) y `telegram/reader.py` (necesita credenciales
-de Telegram). Ambos están escritos contra la API documentada y verificados a
-nivel de firma, pero el primer contacto real puede necesitar ajustes.
+**Probado contra los servicios reales:** desde el 2026-09-04 el bot corre de
+punta a punta contra MetaTrader y contra el grupo de Telegram, y opera señales
+del canal en una cuenta demo. `telegram/reader.py` y `brokers/mt5_native.py`
+ya no son código sin estrenar.
+
+**Sin probar contra un servicio real:** `brokers/metaapi.py`, el camino de
+macOS (necesita un token y una cuenta MT5 demo conectada). Está escrito contra
+la API documentada y verificado a nivel de firma, pero además le faltan los
+arreglos que sí tiene `mt5_native.py` — ver "Hallazgos sin verificar" en
+`docs/CONTEXTO_MAESTRO.md`.
 
 **Pendiente:** OCR está preparado pero apagado (`ENABLE_OCR=false`); conviene
 encenderlo recién después de medir cuántas señales del grupo son solo imagen.

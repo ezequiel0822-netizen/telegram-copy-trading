@@ -5,7 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-04 · v0.9.0 · 380 tests · sobre el commit `1d5861c`
+Actualizado: 2026-09-08 · v1.0.0 · 457 tests · el último commit que describe
+es `69b00f5`, más este mismo cambio (que es el que trae la v1.0.0)
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -31,35 +32,74 @@ Eso viene del pedido original y sigue vigente.
 
 ## 2. Dónde está el usuario ahora mismo
 
-- Windows 10 configurado, `check` da **"todo listo para arrancar"**.
-- **El 2026-09-04 el bot arrancó por primera vez de punta a punta.** Las cuatro
-  patas conectadas a la vez: MT5, Telegram leyendo el grupo, el control por
-  Telegram en Mensajes Guardados, y Ollama. Lo dejó correr medio minuto y lo
-  paró; el cierre fue limpio.
-- **El bróker conectado es `MetaQuotes-Demo`, NO FxPro.** Es la cuenta demo
-  genérica que MetaTrader crea sola, y la eligió a propósito para probar. Sirve
-  para validar la cañería —parser, motor, riesgo, control— pero **no** valida
-  nada específico de FxPro: nombres de instrumentos con sufijo, lotes mínimos,
-  spreads, ni el *filling mode*. Correr `tct probar` en las dos cuentas y
-  comparar es lo que muestra qué cambia.
-- `MT5_PATH` quedó **vacío** en su `.env`, a propósito. Tenía una ruta con un
-  error de tipeo (`MetaTrade 5`, sin la "r") y vacío es más robusto: el bot se
-  engancha a la terminal que esté abierta. **Efecto secundario a tener
-  presente:** se conecta a la que haya, así que la cuenta con la que opera
-  depende de en cuál esté logueada esa ventana.
-- Ollama con `llama3.2:3b` funcionando.
-- **El 2026-09-04 el bot mandó su primera orden de verdad.**
-  `tct probar --operar` abrió y cerró 0.01 de XAUUSD contra MetaQuotes-Demo
-  sin un solo tropiezo. Es el hito que cierra el punto 2 de §8.
-- **El canal opera BTCUSD y `MetaQuotes-Demo` no tiene cripto.** Se decidió
-  **dejarlo** en `ALLOWED_SYMBOLS`: las señales igual se registran como paper
-  trade —que es lo que sirve para evaluar el canal— y ya no gastan cupo
-  diario. Se resuelve solo cuando conecte FxPro, que sí lo opera.
-- La cuenta **real no está configurada**. Existe `.env.real.example` pero no
-  la ha completado.
-- Tiene `MAX_DAILY_LOSS_PCT` sin poner (el arranque dice "sin tope"), y
-  `MAX_OPEN_TRADES=10` / `MAX_SIGNALS_PER_DAY=10`. En demo da igual; antes de
-  real, el freno diario no se deja en 0.
+**El bot está operando señales reales del canal, en demo, y funciona.** Ya no
+es un sistema que se está montando: es uno que corre y del que hay datos.
+
+### Lo que ya pasó
+
+- **2026-09-04**: primera vez de punta a punta (MT5 + Telegram + control +
+  Ollama), y primera orden real (`tct probar --operar` abrió y cerró 0.01 de
+  XAUUSD sin tropiezos). El *filling mode* funcionó a la primera.
+- **2026-09-05 al 07**: el bot operó **4 señales reales del canal**, sin
+  intervención. Una de ellas —SELL 4467— se puede seguir entera en el
+  historial de MT5: entró en 4467.57, el `MOVER SL A 4467` le movió el stop a
+  breakeven, y cerró ahí en **+0.57**.
+
+### La configuración de hoy
+
+| | |
+|---|---|
+| Bróker | **`MetaQuotes-Demo`, NO FxPro** |
+| `MT5_PATH` | **vacío**, a propósito |
+| Lote / máx | 0.01 / 0.01 |
+| `MAX_OPEN_TRADES` / `MAX_SIGNALS_PER_DAY` | **100 / 100** (de fábrica son 5 y 20) |
+| `MAX_DAILY_LOSS_PCT` | **sin tope** |
+| `MAX_SPREAD_FROM_ENTRY_PCT` | 0.5% (sin calibrar, pero con margen de sobra) |
+| `OLLAMA_TIMEOUT_SECONDS` | 45 (bajado de 180) |
+
+Tres cosas de esa tabla merecen atención antes de dinero real:
+
+- **`MetaQuotes-Demo` no es FxPro.** Valida la cañería —parser, motor, riesgo,
+  control— pero **nada** de lo que cambia entre brókers: nombres con sufijo,
+  lotes mínimos, spreads, *filling mode*. Correr `tct probar` en las dos y
+  comparar es lo que muestra la diferencia. Y **no tiene cripto**, que importa
+  porque el canal sí manda señales de BTCUSD.
+- **`MT5_PATH` vacío** es lo más robusto con UNA instancia: se engancha a la
+  terminal que esté abierta. Con dos deja de tener respuesta correcta (§5).
+  Efecto secundario: la cuenta con la que opera depende de en cuál esté
+  logueada esa ventana.
+- **100 / 100 y sin freno diario** son tres protecciones prácticamente
+  desactivadas. En demo da igual. Antes de real hay que volver a bajarlas, y
+  el freno diario no se deja en 0.
+
+### Decisiones tomadas que no hay que revisar
+
+- **BTCUSD se queda en `ALLOWED_SYMBOLS`** aunque este bróker no lo tenga. Las
+  señales se registran igual como paper trade —que es lo que sirve para
+  evaluar el canal— y desde el arreglo del cupo ya no gastan lugar del día.
+  Se resuelve solo cuando conecte FxPro.
+- **La IA local se queda como está.** Ver §4: subirle el nivel no ayudaría.
+- La cuenta **real no está configurada**. Existe `.env.real.example` sin
+  completar.
+
+### La decisión que está esperando datos
+
+**Qué hacer con los tres TP.** El canal manda TP1/TP2/TP3 en cada señal y el
+bot usa solo el primero. Hay tres caminos y **no se puede elegir sin datos**:
+
+| | Riesgo | Resultado |
+|---|---|---|
+| Hoy: 1 posición, TP1 | 0.01 | +4 o 0 |
+| 1 posición, TP más lejano | 0.01 | +8, pero muere en breakeven más seguido |
+| 3 posiciones, un TP cada una | **0.03** | +4/+6/+8 en escalera |
+
+MT5 admite **un solo TP por posición**: los tres objetivos requieren tres
+operaciones, y el lote mínimo de 0.01 no se puede partir, así que son 0.03
+sí o sí. **Triplica el tamaño de cada señal.**
+
+Lo que falta para decidir es la proporción entre "llegó al TP1" y "murió en
+breakeven", y eso lo da `tct informe --con-resultados` después de una semana.
+**No adivinar esto: es la diferencia entre evaluar el canal y suponerlo.**
 
 ### Fricciones recurrentes que va a tener de nuevo
 
@@ -79,7 +119,8 @@ Eso viene del pedido original y sigue vigente.
 ### Cómo escribe el canal (medido, no supuesto)
 
 Un `tct simular --horas 23` sobre **David 💵 Forex | PRO** el 2026-09-04 dio
-15 mensajes, 14 con texto, y **7 interpretados como señal**. El formato es
+15 mensajes, 14 con texto, y **7 interpretados como evento de trading** (así lo
+cuenta `cmd_simular`; son 3 aperturas más su gestión, no 7 señales). El formato es
 consistente:
 
 ```
@@ -109,8 +150,9 @@ simétrica y el objetivo de todo esto es decidir si el canal sirve:
 Con tres TPs, cuánto se cierra en cada uno cambia el resultado por completo, y
 el canal no lo dice: el bot manda el TP más cercano a MT5 y los demás quedan
 para los mensajes de cierre parcial. **Esto no se decide mirando la geometría,
-se decide con el P&L de los paper trades** —que es el punto 7 de §8, todavía
-pendiente, y la razón por la que importa.
+se decide con el resultado de las operaciones** —que es la decisión pendiente de
+arriba y el punto 1 de §8. La herramienta para medirlo ya existe
+(`tct informe --con-resultados`); lo que falta es dejarla juntar datos.
 
 **Detrás de cada señal viene un `MOVER SL A <la entrada>`.** O sea: el canal
 manda a breakeven, pero escribiendo el número en vez de decir "BE". El parser
@@ -126,38 +168,75 @@ escribió.
 
 Un mensaje narrativo (*"La línea blanca que ves es nuestro SL 4424"*) se
 clasificó como `UPDATE`. No ejecuta nada, así que es inofensivo, pero genera
-una notificación por Telegram cada vez. Es un casi-acierto de `_NARRATIVA_RE`:
-lo agarró antes de que pudiera hacer daño, no antes de hacer ruido.
+una notificación por Telegram cada vez. **No lo agarra `_NARRATIVA_RE`**
+—comprobado: `es_descarte_deliberado()` da `False`— sino la última regla de
+`_classify`: *"sin lado y sin gestión, pero con un SL nuevo: es una
+modificación"*. Vale anotarlo porque manda al lugar correcto: si algún día
+molesta el ruido, se toca esa regla o `_handle_update`, no el regex.
 
 ### Los 7 mensajes descartados: el parser acertó los 14
 
-`--todos` mostró los descartes, y **ninguno era una señal**. Pero cuatro de
-ellos son exactamente las trampas que costaron los catorce bugs de §6, vistas
-por primera vez en el canal real:
+`--todos` mostró los descartes, y **ninguno era una señal**. Cuatro de ellos
+tienen precios adentro, que es la familia de mensajes que costó los bugs de §6:
 
-| Mensaje descartado | Qué habría hecho sin la guarda |
+| Mensaje descartado | Por qué no se ejecutó |
 |---|---|
-| *"Abrí un par de operaciones de prueba…"* | crónica → abrir |
-| *"Si hubieran comprado en 4428 (captura…"* | **hipotético con precio** → BUY a 4428 |
-| *"¿Pero por qué no compramos en 4428?"* | **pregunta con precio** → BUY a 4428 |
-| *"aquí están nuestros resultados de la oper…"* | recap → abrir |
+| *"aquí están nuestros resultados de la oper…"* | **`_RESULTADO_RE`**: descarte deliberado |
+| *"Abrí un par de operaciones de prueba…"* | no hay palabra de lado (`ABRÍ` no es `COMPRA`) |
+| *"Si hubieran comprado en 4428 (captura…"* | ídem (`COMPRADO` no es `COMPRA`) |
+| *"¿Pero por qué no compramos en 4428?"* | ídem (`COMPRAMOS` no es `COMPRA`) |
+
+**Esa distinción importa y conviene no perderla.** Corrido contra el código,
+`es_descarte_deliberado()` da `True` **solo para el recap**. Los otros tres no
+los frena ninguna guarda: se caen porque `_SIDE_RE` no reconoce esas formas
+verbales, o sea que el parser **no los entendió**, no que los descartó. Y como
+no son descarte deliberado, **sí se le mandan a la IA local** (§5). Hoy eso es
+inofensivo —`OLLAMA_AUTO_EXECUTE` está en `false` y la IA solo avisa— pero es
+justo el escenario para el que existe esa guarda: si algún día se enciende la
+ejecución automática, un *"si hubieran comprado en 4428"* llega a un modelo de
+3B sin que ninguna regla lo haya frenado antes.
 
 Los otros tres son charla (*"ya estoy en línea"*, *"intenté explicarlo"*,
 *"esperemos por ahora"*).
 
-**14 de 14: siete señales leídas completas, siete descartes correctos, cero
-falsos positivos y cero señales perdidas.** Es la primera validación del parser
-contra datos reales de este canal, y confirma que `_NARRATIVA_RE` y el orden de
-`_classify` (§5) hacen falta de verdad: este canal produce ese tipo de mensaje
-todo el tiempo, con precios adentro.
+**14 de 14: siete mensajes interpretados como evento de trading —3 aperturas,
+3 `MOVER SL` y 1 `UPDATE`—, siete descartes correctos, cero falsos positivos y
+cero señales perdidas.** Ojo con el 7: son *eventos*, no señales. Las señales
+completas de esas 23 horas fueron **3**, las de la tabla de arriba.
 
-Volumen: **3 señales en 23 horas**. Con `MAX_SIGNALS_PER_DAY=10` sobra lugar.
+Es la primera validación del parser contra datos reales de este canal. Lo que
+confirma es el orden de `_classify` y `_RESULTADO_RE`, que es el que atajó el
+recap. `_NARRATIVA_RE` **no se activó ni una vez** en esta corrida: lo que lo
+justifica sigue siendo el caso viejo (*"pudimos cerrar otra operación"*), no
+estos catorce mensajes.
+
+Volumen: **3 señales en 23 horas**. El usuario subió el cupo diario a 100, así
+que el freno de cantidad no se va a activar nunca con este canal.
+
+### El episodio de "hubo nueve señales y leyó cuatro"
+
+Vale entero porque la respuesta no era un bug y encontrar eso llevó tiempo.
+El usuario contó nueve señales en el grupo y el bot había operado cuatro.
+`tct informe --horas 24` mostró qué pasó de verdad:
+
+- **En el grupo había 5 mensajes de apertura, no 9.** El canal **edita** sus
+  mensajes —les agrega el resultado, corrige un número— y cada edición entra
+  como un evento más. Cinco mensajes producían nueve eventos. Contar eventos
+  en vez de mensajes infla el número. Por eso el informe agrupa por
+  `message_id`.
+- De esos 5: **4 se operaron** y **1 era BTCUSD**, que este bróker no tiene.
+
+O sea: el bot no perdió ninguna señal operable. **La lección es de método:**
+cuando el usuario reporta un número que no cierra, el primer paso es
+`tct informe`, no teorizar. Fue construido exactamente para esto.
 
 ### Preguntas abiertas
 
-- Ninguna sobre el canal. La próxima duda concreta es cuánto conviene apretar
-  `MAX_SPREAD_FROM_ENTRY_PCT`, y eso se mide con
-  `tct simular --horas 2 --con-precios` **con el mercado abierto**.
+- Ninguna sobre el canal. `--con-precios` con el mercado abierto midió las
+  entradas reales contra la cotización de MT5: **entre 0.02% y 0.07%**,
+  contra un límite de 0.5%. Hay diez veces de margen, así que apretar el
+  número es posible, pero no urgente.
+- La que sí queda es la de los tres TP, arriba, y espera resultados.
 
 ---
 
@@ -170,13 +249,22 @@ Telegram (Telethon, sesión de usuario)
    ↓  [si falla] ollama.py    IA local, SOLO avisa, nunca opera
    ↓  engine.py         orquesta; serializa con un Lock
    ↓  risk.py           todas las validaciones, cada una con su motivo
-   ↑  broker.market_price()   el unico dato de afuera que entra al riesgo
+   ↑  broker.market_price()   el dato de afuera de la validacion de precio
                                (aperturas y tambien MOVE_SL)
+   ↑  broker.account_equity() el del freno diario
+   ↑  broker.posicion_existe() el de la exposicion (sincroniza antes de abrir)
    ↓  brokers/          paper | mt5_native (Windows) | metaapi (macOS)
    →  store.py          JSONL + estado atómico
+
+lockfile.py   candado del SO sobre la carpeta de datos: dos instancias
+              no pueden pisarse el estado (§9)
+informe.py    lee lo que store.py escribió y lo explica. Fuera del camino
+              de la señal, y de solo lectura (§5)
 ```
 
-Módulos en `src/tct/`. La CLI (`cli.py`) expone:
+Módulos en `src/tct/`, salvo tres que viven en subpaquetes: `parser.py` en
+`signals/`, `reader.py` en `telegram/` y `ollama.py` en `intelligence/`.
+La CLI (`cli.py`) expone:
 
 | Comando | Para qué |
 |---|---|
@@ -185,7 +273,8 @@ Módulos en `src/tct/`. La CLI (`cli.py`) expone:
 | `chatid` | Averigua el chat id para las notificaciones. |
 | `simular` | **Reproduce los mensajes reales del grupo.** Sin `--ejecutar` no toca nada. Con `--con-precios` compara cada entrada contra el precio real de MT5 y sugiere el límite, sin operar. |
 | `probar` | Verifica la cadena contra MT5. Con `--operar` abre y cierra una posición mínima. |
-| `chats` / `test` / `status` / `run` | Listar grupos / probar el parser / ver estado / arrancar. |
+| `informe` | **Qué pasó con lo que llegó.** Agrupa por mensaje (no por evento, ver §2), separa operadas de descartadas y dice el motivo de cada descarte. Con `--con-resultados` va al historial de MT5 y agrega cómo terminó cada una: TP, SL, breakeven o cierre a mano. Es de solo lectura. |
+| `chats` / `test` / `status` / `run` | Listar grupos / probar el parser / ver estado / arrancar. `run --esperar-mt5 SEGUNDOS` reintenta la conexión hasta ese tope en vez de morir en el primer intento: es lo que hace posible el arranque automático. |
 
 Los `.bat` de `scripts/` envuelven todo esto para no depender de la terminal.
 
@@ -234,9 +323,17 @@ devuelve texto basura que el parser puede leer como señal.
 en gramática y **no genera** lo que no es obligatorio. Con solo las 4 claves
 básicas, devolvía `es_senal`/`tipo`/`confianza` y omitía todos los precios.
 
-**`control.py` — vocabulario cerrado de destinatarios.** `{demo, real, papel,
-paper}`. Sin lista fija, `/pausa mercado feo` se leía como dirigido a una
-instancia llamada "mercado".
+**`control.py` — vocabulario cerrado de destinatarios.** Cerrado, pero ya no
+clavado: el roster sale de `INSTANCE_NAMES` (`config.py::_resolver_roster`), y
+`{demo, real, papel, paper}` quedó como default de fábrica —
+`NOMBRES_DE_INSTANCIA` es el respaldo, no la lista—. Lo que no se toca es que
+sea **cerrado** y el **mismo en todos los `.env`**: sin lista fija,
+`/pausa mercado feo` se leía como dirigido a una instancia llamada "mercado";
+y sin los nombres de las otras, una instancia no distingue un `/pausa fxpro`
+que no es para ella de un motivo escrito a mano. **Nadie compara los `.env`
+entre sí**: cada uno solo valida que su `INSTANCE_NAME` esté en su propio
+`INSTANCE_NAMES`. Si dos declaran listas distintas, lo único que lo delata es
+el roster que cada bot imprime al arrancar.
 
 **`risk.py` — el contraste con el mercado son DOS límites, no uno.** Una orden
 a mercado entra al precio de *ahora*, así que una entrada lejana significa que
@@ -307,6 +404,49 @@ chat y vuelven a entrar. Empiezan con `[NOMBRE]` y se descartan en la primera
 línea de `manejar`. Esa guarda tiene que quedar **antes** de la lógica que
 cancela la confirmación: si no, el propio pedido de confirmación se cancelaría
 solo al volver.
+
+**`mt5_native.py` — el retcode `10025 NO_CHANGES` es ÉXITO.** MT5 lo devuelve
+cuando se le pide mover el stop al precio donde el stop **ya está**. O sea:
+es la confirmación de que lo pedido se cumple, no un rechazo. Tratarlo como
+fallo llenaba el log de `ERROR` y avisaba *"no se pudo mover el stop"* con el
+stop exactamente donde correspondía. Y con este canal pasa todo el tiempo:
+cada señal trae su `MOVER SL A <entrada>`, y **cada edición del mensaje lo
+repite** (§2), así que el segundo y el tercero siempre encuentran el trabajo
+hecho.
+
+**La IA se consulta cuando el parser NO ENTENDIÓ, no cuando descartó.** Son
+dos cosas distintas, y confundirlas anula las guardas de acá arriba. El caso
+real, del canal del usuario: *"acá están nuestros resultados de la primera
+operación"* lo frena `_RESULTADO_RE` a propósito... y después se le mandaba
+igual a la IA, que lo leía como un `OPEN`. El descarte deliberado no servía de
+nada. Por eso existe `es_descarte_deliberado()` en `parser.py`, y por eso
+`_vale_preguntarle_a_la_ia()` la consulta antes de preguntar. **La IA es una
+segunda oportunidad para lo ininteligible, no una apelación contra el parser.**
+
+Y al revés también importa: un mensaje que el parser **no entendió** sí llega a
+la IA, aunque tenga precios adentro. Los tres hipotéticos de §2 son de esos.
+
+**Y una interpretación de la IA sin símbolo o sin entrada no se usa.**
+`_interpretacion_utilizable()`. Un `OPEN` al que le falta cualquiera de los
+dos no es una señal a medias: es la IA rellenando un formulario que no
+entendió.
+
+**`informe.py` — con TPs solapados se elige el MÁS CERCANO, no el primero.**
+Los TPs de este canal están a **2 puntos** uno de otro y la tolerancia con la
+que se decide "cerró en el TP" ronda los 2.2. O sea: **las ventanas se pisan**,
+y un cierre exacto en TP3 cae también adentro de la de TP2. Recorrerlos en
+orden y quedarse con el primero que entra reporta TP2 sistemáticamente. Es un
+error de etiqueta, no de dinero, pero corrompe justo el dato con el que se va
+a decidir la pregunta de los tres TP (§2).
+
+**La lectura de desenlaces es de SOLO LECTURA, y es un requisito, no un
+detalle.** El usuario lo pidió así con todas las letras: *"que no interfiera
+en nada, solo que almacene data sin retrasar nada ni afectar nada"*.
+`desenlace_de()` llama a `history_deals_get()` y nada más: no abre, no cierra,
+no toca el estado. Y **no corre en el camino de la señal** — se consulta solo
+cuando alguien pide `tct informe --con-resultados`. Meterla en el motor
+"para tener el dato fresco" le agregaría una consulta al bróker a cada
+mensaje: dejaría de ser gratis y dejaría de cumplir lo que se pidió.
 
 **`.gitattributes` — `.sh` en LF, `.bat`/`.ps1` en CRLF.** Un `.bat` con LF
 falla en `cmd.exe` de formas difíciles de diagnosticar.
@@ -455,6 +595,48 @@ dejaron atrás, corriendo los tests que habían escrito. Si volvés a quedarte s
 resultados de una revisión, mirá ahí antes de darla por perdida:
 `git worktree list`.
 
+### Cuarta ronda: los que solo aparecen cuando el bot ya está operando
+
+Los de las tres rondas anteriores salieron leyendo código. Estos salieron de
+**mirar el log de una máquina que estaba operando de verdad**, y ninguna
+revisión de escritorio los habría encontrado, porque todos dependen de cómo
+se comporta este canal en particular.
+
+- **Una operación que cerró sola bloqueaba la señal siguiente.** El más caro
+  de todos. Este canal **no manda mensajes de cierre**: las operaciones
+  terminan en el TP o el SL y el bróker las cierra sin avisarle a nadie. El
+  bot seguía creyéndolas abiertas, y la regla de *"ya hay una posición en
+  XAUUSD"* —que es buena— rechazaba todo lo que viniera después. Con un canal
+  que opera **un solo símbolo**, eso es perder casi una señal de cada dos, en
+  silencio y para siempre. Se arregla sincronizando contra el bróker antes de
+  evaluar una apertura (§9).
+- **Un corte de internet apagaba el bot y el log decía "Cerrado limpio".** La
+  peor combinación posible: se cae solo y encima te tranquiliza. Ahora
+  Telethon reintenta para siempre (`connection_retries=-1`) y, si igual se
+  corta, el log lo dice como lo que es.
+- **El arranque automático no podía ganarle la carrera a MetaTrader.** Al
+  prender la PC, el bot levantaba antes que la terminal y moría con
+  `IPC initialize failed`. Un autoarranque que falla la mitad de las mañanas
+  es peor que ninguno, porque no te enterás. → `run --esperar-mt5`.
+- **Una señal que el bróker no podía operar igual gastaba cupo del día.** El
+  contador subía al aceptar la señal, no al confirmarla el bróker: cada
+  BTCUSD —que este bróker no tiene— se comía un lugar de `MAX_SIGNALS_PER_DAY`.
+  Ahora sube **después** de la confirmación.
+- **La capa de IA rodeaba por atrás la guarda de los recaps.** El
+  *"acá están nuestros resultados de la primera operación"* de §2 lo frena
+  `_RESULTADO_RE` a propósito... y después se le mandaba igual a la IA, que lo
+  leía como un `OPEN`. No llegó a operar nada —la IA solo avisa— pero cada
+  mensaje y cada edición costaban una notificación y ~15 segundos de CPU. La
+  guarda mejor probada del proyecto tenía una puerta atrás.
+- **El informe contaba eventos y decía 9 donde había 5.** Ver §2: el canal
+  edita sus mensajes. No es un bug de trading, es un bug de **la herramienta
+  con la que se diagnostica el trading**, que es peor de lo que suena: manda
+  a buscar bugs que no existen.
+- **`10025 No changes` se registraba como error.** Ver §5.
+- **Dos instancias podían compartir carpeta de datos sin enterarse.** El lock
+  de `lockfile.py` es del sistema operativo, no un archivo con un PID adentro,
+  así que un corte de luz no deja un candado trabado.
+
 ---
 
 ## 7. Errores de proceso que costaron tiempo
@@ -466,6 +648,15 @@ Una dejó un `\x08` literal (backspace) dentro de una expresión regular,
 volviéndola imposible de satisfacer, y **ningún test lo detectaba**.
 → **Para editar código, usar la herramienta Edit o escribir un script `.py` con
 Write y ejecutarlo.** Nunca heredoc con regex o escapes.
+
+**Y volvió a pasar dos veces, con esta advertencia ya escrita acá arriba.**
+Las dos veces el heredoc convirtió el `\n` de un f-string en un salto de línea
+real y rompió el archivo (`SyntaxError: unterminated f-string`); las dos veces
+hubo que revertir con `git checkout --` y rehacer la edición con Edit.
+→ La regla no alcanza escrita: **si el texto que vas a insertar tiene una barra
+invertida, comillas o llaves, no pasa por un heredoc.** Y si el entorno te
+empuja a usar bash igual, el heredoc va **entrecomillado** (`<<'FIN'`) y con el
+`assert viejo in t` adentro. Los scripts del scratchpad son el ejemplo.
 
 **`str.replace()` falla en silencio.** Un reemplazo cuyo ancla no coincide
 devuelve el texto intacto sin error. Así se perdió el cableado del control por
@@ -488,9 +679,31 @@ worktree` que dejaron: los tests que escribieron seguían ahí, y correrlos
 mostraba qué habían probado.
 → Antes de dar por perdida una revisión: `git worktree list`.
 
+**Y pasó de nuevo el 2026-09-08: 23 de 32 agentes murieron por límite de uso.**
+Esa vez el rescate fue por otro lado, porque no habían escrito tests: el
+`journal.jsonl` del workflow guarda **una línea por agente terminado con su
+resultado completo**. Tres de los cinco verificadores habían alcanzado a
+reportar 26 hallazgos antes de que se cayera todo; lo que faltaba eran los
+refutadores. Se leyó el journal, se verificaron los hallazgos a mano contra el
+código, y de ahí salieron las correcciones de esta versión.
+→ El segundo lugar donde mirar: `journal.jsonl` en la carpeta del workflow.
+Y **una revisión a medias es un resultado, no un fracaso** — pero hay que
+decir cuál mitad corrió.
+
 **Verificar imports no es verificar comportamiento.** `import tct.cli` pasaba
 con el control desconectado.
 → Verificar el efecto, no que el módulo cargue.
+
+**Un test verde puede estar pasando por el motivo equivocado.** Los primeros
+tests del `10025` pasaban... porque el MT5 falso de `tests/fake_mt5.py`
+devolvía `DONE` siempre, así que el caso que decían cubrir **nunca ocurría**.
+Verdes, inútiles, y peor que no tenerlos: daban por probado justo lo que no se
+había probado. Se descubrió rompiendo el arreglo a propósito y viendo que solo
+**un** test se ponía en rojo cuando tenían que ser varios. Con el falso
+enseñado a devolver `NO_CHANGES`, la misma mutación puso cuatro.
+→ **Un test nuevo no está listo hasta que lo viste fallar.** Rompé el arreglo,
+mirá cuántos se ponen en rojo, y si son menos de los que escribiste, alguno no
+está probando nada.
 
 **Caché de bytecode.** Una vez `inspect.getsource` mostró el código nuevo
 mientras corría el viejo. Si algo no tiene sentido, limpiar `__pycache__`.
@@ -501,45 +714,53 @@ mientras corría el viejo. Si algo no tiene sentido, limpiar `__pycache__`.
 
 Ordenado por lo que más importa antes de dinero real.
 
-1. **Calibrar los dos límites del contraste con el mercado contra el grupo
-   real.** El control ya existe y está conectado (ver §5), pero `0.5%` a
-   mercado y `3%` en pendientes son números elegidos a mano, no medidos. Con
-   el oro en 4438, `0.5%` son 22 puntos: durante una noticia eso se mueve en
-   minutos, y una señal procesada tarde se rechazaría siendo buena.
-   `tct simular --horas 2 --con-precios` mide las señales reales del grupo
-   contra el precio de MT5 sin operar y sugiere el número. **Es lo primero que
-   hay que hacer con este cambio, antes de confiar en él.**
-2. **Primera orden real contra FxPro.** ✅ El `order_send` de verdad **ya
-   ocurrió**: el 2026-09-04, `tct probar --operar` abrió y cerró una posición
-   de 0.01 en XAUUSD contra `MetaQuotes-Demo`
-   (`ticket=10356633241 precio=4483.3`), y la negociación de *filling mode*
-   funcionó a la primera. La cadena completa —conectar, resolver el símbolo,
-   cotizar, normalizar el volumen, `order_send`, cerrar— está probada contra
-   una terminal real.
-   **Lo que sigue faltando es repetirlo en FxPro**, que es donde va a operar:
-   el *filling mode* es justamente lo que cada bróker acepta distinto, así que
-   este resultado no se traslada.
-3. **Punto como separador de miles.** `"DAX SELL 18.500"` → 18.5. Los tres
+1. **Juntar una semana de resultados y decidir la pregunta de los tres TP.**
+   Es lo único que hoy bloquea una decisión de verdad, y ya no falta código:
+   `tct informe --con-resultados` lee el historial de MT5 y clasifica cada
+   operación en TP, SL, breakeven o cierre a mano. Lo que falta es **tiempo
+   corriendo**. Con la proporción entre "llegó al TP1" y "murió en breakeven"
+   se contesta lo de §2, y de paso se sabe si el canal sirve —que es el
+   objetivo de todo el proyecto—. **Correr el informe una vez no alcanza: son
+   3 señales por día.**
+2. **Repetir contra FxPro lo que ya funcionó contra MetaQuotes-Demo.** La
+   cadena entera —conectar, resolver el símbolo, cotizar, normalizar el
+   volumen, `order_send`, cerrar— está probada contra una terminal real desde
+   el 2026-09-04. Pero el *filling mode*, los sufijos de los nombres y los
+   lotes mínimos son **exactamente** lo que cambia entre brókers, así que ese
+   resultado no se traslada. `tct probar` en las dos cuentas y comparar.
+   Además, FxPro es lo que destraba BTCUSD.
+3. **Volver a bajar las protecciones antes de dinero real.** Hoy están en
+   `100 / 100` y sin freno diario (§2), que para demo está bien y para real no.
+   Es un cambio de `.env`, pero es fácil de olvidar justo en el momento en que
+   más importa.
+4. **Punto como separador de miles.** `"DAX SELL 18.500"` → 18.5. Los tres
    números escalan juntos, así que la geometría no lo nota. El contraste con
    el mercado ahora lo ataja *si el bróker cotiza ese símbolo*, pero eso es una
    red debajo del error, no el arreglo del parser.
-4. **`ollama.py`: la guarda antialucinaciones tiene dos fallas.** El `0*` de
+5. **`ollama.py`: la guarda antialucinaciones tiene dos fallas.** El `0*` de
    `_aparece_en_texto` deja pasar prefijos (`3950` valida contra `39,500`), y
    rechaza números legítimos con separador de miles (el prompt le pide al
    modelo que copie las comas, y después el parseo se rompe con ellas).
-5. **En la gestión solo se ataja el error de ESCALA, no el sutil.** Un
+6. **En la gestión solo se ataja el error de ESCALA, no el sutil.** Un
    `MOVER SL A 4438` leído como `4338` pasa: está a 2% del mercado, que es un
    stop perfectamente plausible. Distinguirlo de un stop ancho legítimo no se
    puede sin saber la intención del mensaje, así que probablemente no tenga
    arreglo por este lado. Lo que sí queda: un `MOVE_SL` sin símbolo sigue
    aplicando a **todas** las posiciones cuya escala coincida —si el canal opera
-   oro y otro instrumento de precio parecido, el filtro no los separa. Ver la
-   pregunta abierta de §2.
-6. **Órdenes pendientes no se pueden cancelar.** Solo se usa `positions_get()`.
-7. **Sin P&L de los paper trades.** Es lo que haría falta para saber si el
-   grupo de señales realmente sirve. Ya hay media pieza: cada paper trade
-   guarda `precio_mercado`, el precio real del instrumento en el momento de la
-   señal. Falta el precio de salida.
+   oro y otro instrumento de precio parecido, el filtro no los separa.
+7. **Órdenes pendientes no se pueden cancelar.** Solo se usa `positions_get()`.
+8. **El `_turno` del motor se sostiene durante la llamada a la IA.** Con
+   `OLLAMA_TIMEOUT_SECONDS=45`, un mensaje que va a la IA puede tener a los
+   siguientes esperando hasta 45 segundos. **Los mensajes no se pierden** —la
+   consulta corre en `asyncio.to_thread` y Telethon los sigue recibiendo—, se
+   encolan. Con 3 señales por día es teórico. Soltar el lock durante la
+   consulta es tentador y **no hay que hacerlo sin antes escribir los tests
+   que reproduzcan la carrera** que el lock evita: el orden entre una apertura
+   y su `MOVER SL` no es opcional.
+9. **Calibrar los dos límites del contraste con el mercado.** ✅ a medias: con
+   el mercado abierto, las entradas reales del canal midieron **0.02% a 0.07%**
+   contra un límite de 0.5%. Hay diez veces de margen. Apretarlo es posible,
+   pero mientras el canal siga scalpeando oro no cambia nada.
 
 ### Hallazgos sin verificar, listos para levantar
 
@@ -570,7 +791,22 @@ otro a medias. Sigue sin mirar nadie más:
   la misma persona. Lo que sí tiene son tests de mutación: romper el cableado
   pone 11 tests en rojo, neutralizar la regla en `risk.py` otros 8, y
   desconectar el chequeo de escala otros 6.
-- **La investigación del punto como separador de miles** (punto 3 de arriba).
+- **La investigación del punto como separador de miles** (punto 4 de arriba).
+- **Todo lo de la cuarta ronda**: `informe.py`, `lockfile.py`, la lectura de
+  desenlaces, `--esperar-mt5` y la guarda `es_descarte_deliberado`. Salió de
+  mirar producción, se probó con tests de mutación —romper la elección del TP
+  más cercano, o el agrupado por `message_id`, pone tests en rojo— pero **no lo
+  revisó nadie más**. Lo más sensible es `es_descarte_deliberado`: quedó en el
+  camino de decisión de todas las guardas de §5.
+
+**Lo que sí se revisó el 2026-09-08** fue *esta documentación*, no el código:
+cinco verificadores contrastando cada afirmación contra el código real. Dos
+murieron sin arrancar (§6 y §7 quedaron **sin verificar**, no verificadas), y
+de los tres que terminaron salieron las correcciones de esta versión. Las más
+graves eran mías, escritas ese mismo día: la tabla de descartes de §2 le
+atribuía a `_NARRATIVA_RE` tres frenadas que en realidad no hace nadie, y §5
+usaba ese mismo ejemplo equivocado. **Si retomás el proyecto, §6 y §7 son las
+dos secciones que nadie contrastó contra el código.**
 
 ---
 
@@ -616,8 +852,22 @@ otro a medias. Sigue sin mirar nadie más:
   para la cotización (contraste con el mercado): si el bróker no responde, esa
   capa no opina y la señal sigue su curso. Un bróker lento no puede dejar al
   bot sin operar.
+- **El cupo del día se descuenta cuando el bróker CONFIRMA, no cuando la señal
+  se acepta.** Si no, una señal que el bróker no puede operar —un símbolo que
+  no cotiza, la cuenta desconectada— igual se come un lugar de
+  `MAX_SIGNALS_PER_DAY`. Con BTCUSD en la lista y un bróker sin cripto, eso
+  vaciaba el cupo sin haber operado nada.
+- **La IA no puede revertir un descarte deliberado.** Solo se la consulta
+  cuando el parser **no entendió**; lo que el parser descartó a propósito
+  (crónica, hipotético, resultado) no llega a la IA. Ver §5.
+- **Leer cómo terminó una operación no toca nada.** Solo `history_deals_get()`,
+  solo cuando alguien pide el informe, nunca en el camino de una señal.
+- **Dos instancias no comparten carpeta de datos.** El lock es del sistema
+  operativo (`msvcrt.locking` / `fcntl.flock`), así que se libera solo si el
+  proceso muere: un corte de luz no deja un candado trabado.
 - `tct simular` **sin** `--ejecutar` no manda una sola orden, ni siquiera con
   `--con-precios`: ahí el bróker se conecta únicamente para leer cotizaciones.
+  `tct informe` no manda ninguna nunca, ni con `--con-resultados`.
 
 ---
 
@@ -629,7 +879,19 @@ otro a medias. Sigue sin mirar nadie más:
 - Está probando en una PC distinta a la de desarrollo. **Nada de lo que hagas
   localmente afecta esa máquina**: todo viaja por GitHub.
 - Cuando reporte algo raro, **pedile la salida textual** antes de teorizar.
-  `tct simular` fue construido para eso y ya encontró dos bugs reales.
+  `tct simular` fue construido para eso y ya encontró dos bugs reales, y
+  `tct informe` contestó el *"hubo nueve señales y leyó cuatro"* de §2 en un
+  solo comando. **Si el número que reporta no cierra, el primer paso es
+  `tct informe --horas 24`.** Teorizar antes de mirarlo es cómo se pierde
+  una tarde buscando un bug que no existe.
+- Cuando le tengas que dictar un comando, acordate de
+  `scripts\consola.bat`: la ruta larga del `.venv` no se le queda pegada y ya
+  le costó seis veces el mismo error.
+- **El bot arranca solo al prender la PC, así que ya nadie mira la consola.**
+  Eso cambia el estándar de los mensajes: algo que falla en silencio no se
+  descubre a los cinco minutos, se descubre cuando el usuario nota que faltan
+  operaciones. Por eso el corte de conexión ahora se avisa (§6) y por eso el
+  arranque imprime la configuración que va a usar.
 - Hay una guía web publicada como Artifact que espeja `docs/SETUP_WINDOWS.md`.
   Si cambia algo de la instalación, hay que actualizar las dos.
 
