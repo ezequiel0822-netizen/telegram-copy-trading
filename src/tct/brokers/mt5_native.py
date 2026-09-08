@@ -74,6 +74,26 @@ _AUTH_FAILED = -6
 _AUTOTRADING_APAGADO = -8
 
 
+def _motivo_de_cierre(mt5, reason) -> str:
+    """Traduce el DEAL_REASON de MT5. Lo dice el broker, no se deduce.
+
+    Deducirlo comparando precios se equivocaria justo en el caso que mas
+    importa en este canal: un stop movido a breakeven cierra por SL a precio
+    de entrada, y sin el motivo no hay como distinguirlo de una salida a mano.
+    """
+    if reason is None:
+        return "otro"
+    conocidos = {
+        getattr(mt5, "DEAL_REASON_TP", 5): "tp",
+        getattr(mt5, "DEAL_REASON_SL", 4): "sl",
+        getattr(mt5, "DEAL_REASON_CLIENT", 0): "manual",
+        getattr(mt5, "DEAL_REASON_MOBILE", 1): "manual",
+        getattr(mt5, "DEAL_REASON_WEB", 2): "manual",
+        getattr(mt5, "DEAL_REASON_EXPERT", 3): "programa",
+    }
+    return conocidos.get(reason, "otro")
+
+
 def _pistas_de_initialize(codigo: int, mt5_path: str) -> list[str]:
     """Que hacer ante un initialize() fallido, en castellano y accionable.
 
@@ -268,6 +288,41 @@ class MT5NativeBroker(Broker):
             logger.warning("No se pudo leer el equity de MT5", exc_info=True)
             return None
         return float(cuenta.equity) if cuenta is not None else None
+
+    async def desenlace_de(self, ticket: int | None) -> dict[str, Any] | None:
+        if ticket is None or not await self.is_ready():
+            return None
+        return await asyncio.to_thread(self._desenlace_sync, ticket)
+
+    def _desenlace_sync(self, ticket: int) -> dict[str, Any] | None:
+        """Lee el historial de una posicion. NO manda ordenes de ningun tipo."""
+        try:
+            deals = self._mt5.history_deals_get(position=ticket)
+        except Exception:
+            logger.debug("No se pudo leer el historial de %s", ticket, exc_info=True)
+            return None
+
+        if not deals:
+            # Puede ser que la posicion siga abierta, o que MT5 todavia no
+            # tenga ese tramo del historial cargado. En los dos casos el dato
+            # es "no se sabe", que no es lo mismo que "no paso nada".
+            return None
+
+        salida = getattr(self._mt5, "DEAL_ENTRY_OUT", 1)
+        cierres = [d for d in deals if getattr(d, "entry", None) == salida]
+        if not cierres:
+            return None
+
+        # Con cierres parciales hay varios. El ultimo es el que termino de
+        # cerrar la posicion; el profit se suma, porque el resultado de la
+        # operacion es el total y no el del ultimo pedazo.
+        ultimo = cierres[-1]
+        return {
+            "precio": float(getattr(ultimo, "price", 0.0) or 0.0),
+            "profit": sum(float(getattr(d, "profit", 0.0) or 0.0) for d in cierres),
+            "motivo": _motivo_de_cierre(self._mt5, getattr(ultimo, "reason", None)),
+            "cerrada_en": getattr(ultimo, "time", None),
+        }
 
     async def posicion_existe(self, ticket: int | None) -> bool | None:
         if ticket is None or not await self.is_ready():

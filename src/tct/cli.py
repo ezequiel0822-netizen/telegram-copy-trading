@@ -1254,7 +1254,85 @@ def cmd_informe(args: argparse.Namespace) -> int:
             print(f"\n           {veces}x  {motivo}")
 
     _informar_distancias(r["distancias"], settings)
+
+    if getattr(args, "con_resultados", False):
+        asyncio.run(_informar_desenlaces(settings, eventos))
+
     return 0
+
+
+async def _informar_desenlaces(settings: Settings, eventos: list) -> None:
+    """Como termino cada operacion, leido del historial de MetaTrader.
+
+    ES SOLO LECTURA, y esa es la restriccion de diseño, no un detalle: nada de
+    esto corre mientras el bot escucha. El historial de MT5 es persistente y
+    sigue ahi cuando uno pide el informe, asi que consultarlo en el momento de
+    la senal solo agregaria latencia al unico camino donde la latencia importa
+    -y no aportaria nada, porque la operacion recien empieza.
+
+    Por eso tambien es un flag y no parte del informe normal: `tct informe` a
+    secas sigue siendo instantaneo y sin depender de que MetaTrader este
+    abierto.
+    """
+    from tct.brokers.base import build_broker
+    from tct.informe import clasificar_desenlace, resumir_desenlaces, tickets_operados
+
+    operadas = tickets_operados(eventos)
+    if not operadas:
+        print("\n  (no hay operaciones con ticket en este rango)")
+        return
+
+    print("\n  " + "-" * 62)
+    print("  COMO TERMINO CADA OPERACION")
+    print("  " + "-" * 62)
+    print("  Leido del historial de MetaTrader. Solo lectura.")
+
+    broker = build_broker(settings)
+    if not await broker.connect():
+        print("\n  No se pudo conectar a MetaTrader, asi que no hay desenlaces.")
+        print("  Abrilo y volve a correr esto. El resto del informe no depende")
+        print("  de MT5 y ya esta arriba.")
+        return
+
+    filas = []
+    try:
+        for operada in operadas:
+            desenlace = await broker.desenlace_de(operada["ticket"])
+            if desenlace is None:
+                filas.append({**operada, "resultado": None})
+                continue
+            filas.append({
+                **operada,
+                "resultado": clasificar_desenlace(operada, desenlace),
+                "precio_cierre": desenlace.get("precio"),
+                "profit": desenlace.get("profit"),
+            })
+    finally:
+        await broker.disconnect()
+
+    print()
+    for fila in filas:
+        hora = str(fila.get("ts", ""))[11:16]
+        if fila["resultado"] is None:
+            print(f"      {hora}  {fila['symbol']:<8} sigue abierta o sin historial")
+            continue
+        print(f"      {hora}  {fila['symbol']:<8} {fila['side']:<5} "
+              f"entrada={fila['entry']:<10} cerro={fila.get('precio_cierre')} "
+              f"{fila['resultado']:<14} {fila.get('profit'):+.2f}")
+
+    r = resumir_desenlaces(filas)
+    if not r["conocidos"]:
+        print("\n  Ninguna operacion tiene desenlace todavia.")
+        return
+
+    print(f"\n  De {r['conocidos']} operaciones terminadas:")
+    for resultado, veces in r["por_resultado"]:
+        print(f"      {veces:>3}  {resultado}")
+    print(f"\n  Resultado neto: {r['profit_total']:+.2f} "
+          f"(en la moneda de la cuenta)")
+    if r["sin_datos"]:
+        print(f"  {r['sin_datos']} sin datos: siguen abiertas, o MetaTrader no")
+        print("  tiene ese tramo del historial cargado.")
 
 
 def _informar_distancias(medidas: list, settings: Settings) -> None:
@@ -1576,6 +1654,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="Posiciones abiertas y estadisticas")
     informe = sub.add_parser(
         "informe", help="Que hizo el bot y POR QUE no opero algunas senales")
+    informe.add_argument(
+        "--con-resultados", action="store_true", dest="con_resultados",
+        help="Leer del historial de MetaTrader como termino cada operacion. "
+             "SOLO LEE: no manda ordenes ni toca posiciones. Necesita MT5 abierto.",
+    )
     informe.add_argument("--horas", type=int, default=24,
                          help="Cuantas horas hacia atras mirar (por defecto 24)")
     run = sub.add_parser("run", help="Arranca el bot")

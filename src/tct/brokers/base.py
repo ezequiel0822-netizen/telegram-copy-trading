@@ -117,6 +117,33 @@ class Broker(ABC):
         """
         return None
 
+    async def desenlace_de(self, ticket: int | None) -> dict[str, Any] | None:
+        """Como TERMINO una posicion, leido del historial. None si no se sabe.
+
+        SOLO LEE. Es una consulta de historial y nada mas: no manda ordenes, no
+        toca posiciones y no escribe en el estado. Esa restriccion es del
+        pedido y esta puesta a proposito, porque el dato se necesita para
+        evaluar el canal y no vale la pena arriesgar nada del camino que opera
+        para conseguirlo.
+
+        Por eso tampoco corre mientras el bot escucha: el historial de MT5 es
+        persistente y sigue ahi cuando uno pide el informe. Consultarlo en el
+        momento de la senal agregaria latencia al unico camino donde la
+        latencia importa, y no aportaria nada: la operacion recien empieza.
+
+        Devuelve, cuando se puede:
+            precio      a que precio cerro
+            profit      cuanto dio, en la moneda de la cuenta
+            motivo      "tp" | "sl" | "manual" | "programa" | "otro"
+            cerrada_en  cuando
+
+        El motivo lo dice MT5 (DEAL_REASON_TP, DEAL_REASON_SL), no se deduce
+        comparando precios: deducirlo se equivocaria justo en el caso que mas
+        importa, un stop movido a breakeven, que cierra por SL a precio de
+        entrada.
+        """
+        return None
+
     async def posicion_existe(self, ticket: int | None) -> bool | None:
         """Si la posicion sigue abierta en el broker. None = no se pudo saber.
 

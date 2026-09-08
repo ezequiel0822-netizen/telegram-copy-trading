@@ -214,3 +214,105 @@ def _distancias(paper_trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "distancia_pct": abs(entrada - mercado) / mercado * 100,
         })
     return medidas
+
+
+# --------------------------------------------------------------------------
+# Como termino cada operacion
+#
+# Se calcula APARTE del camino que opera, leyendo el historial de MT5 cuando
+# alguien pide el informe. El bot corriendo no consulta nada de esto: el dato
+# sirve para evaluar el canal, no para decidir una orden, y no vale la pena
+# meterle latencia al unico camino donde la latencia importa.
+# --------------------------------------------------------------------------
+
+
+def tickets_operados(eventos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Las senales que llegaron a abrir una posicion, con su ticket.
+
+    El ticket vive en el evento "aceptada", que es el unico lugar durable
+    donde queda: el paper trade se escribe ANTES de llamar al broker, asi que
+    todavia no lo conoce, y el estado lo borra cuando la posicion cierra.
+    """
+    operadas = []
+    for evento in eventos:
+        if evento.get("kind") != "aceptada":
+            continue
+        ticket = (evento.get("order") or {}).get("ticket")
+        if not ticket:
+            continue
+        senal = evento.get("signal") or {}
+        operadas.append({
+            "ts": evento.get("ts"),
+            "ticket": ticket,
+            "symbol": senal.get("symbol"),
+            "side": senal.get("side"),
+            "entry": senal.get("entry"),
+            "stop_loss": senal.get("stop_loss"),
+            "take_profits": list(senal.get("take_profits") or []),
+        })
+    return operadas
+
+
+def clasificar_desenlace(operada: dict[str, Any], desenlace: dict[str, Any]) -> str:
+    """Que le paso a la operacion, en palabras.
+
+    La distincion que importa en este canal es "stop de verdad" contra "stop
+    en breakeven": el canal mueve el stop a la entrada a los pocos minutos de
+    cada senal, asi que la mayoria de las operaciones terminan por SL a precio
+    de entrada. Contarlas como perdidas seria describir mal al canal entero.
+    """
+    motivo = desenlace.get("motivo")
+    precio = desenlace.get("precio")
+    entrada = operada.get("entry")
+
+    if motivo == "tp":
+        return _que_tp(operada, precio)
+
+    if motivo == "sl":
+        if entrada and precio and _cerca(precio, entrada, entrada):
+            return "breakeven"
+        return "stop"
+
+    if motivo in {"manual", "programa"}:
+        return "cerrada a mano" if motivo == "manual" else "la cerro el bot"
+    return "otro"
+
+
+def _que_tp(operada: dict[str, Any], precio: float | None) -> str:
+    """Cual de los tres objetivos toco. Hoy el bot manda solo el primero a MT5,
+    asi que casi siempre va a ser TP1; se calcula igual para que el dia que se
+    manden los tres el informe ya lo sepa leer."""
+    objetivos = operada.get("take_profits") or []
+    if not precio or not objetivos:
+        return "TP"
+
+    # El MAS CERCANO, no el primero que entre en la tolerancia. Los TP de este
+    # canal estan a 2 puntos entre si, y la tolerancia del relleno del broker
+    # es de ese mismo orden: quedarse con el primero que califica devuelve TP2
+    # para un cierre exacto en TP3.
+    i, tp = min(enumerate(objetivos, start=1), key=lambda par: abs(precio - par[1]))
+    return f"TP{i}" if _cerca(precio, tp, precio) else "TP"
+
+
+def _cerca(a: float, b: float, escala: float, tolerancia_pct: float = 0.05) -> bool:
+    """Si dos precios son el mismo, con el margen del relleno del broker.
+
+    Un cierre nunca cae exacto en el numero pedido: hay spread y deslizamiento.
+    0.05% del precio son ~2 puntos en oro, que es lo que corresponde.
+    """
+    if not escala:
+        return False
+    return abs(a - b) / abs(escala) * 100 <= tolerancia_pct
+
+
+def resumir_desenlaces(desenlaces: list[dict[str, Any]]) -> dict[str, Any]:
+    """El resumen que contesta si el canal sirve."""
+    conocidos = [d for d in desenlaces if d.get("resultado")]
+    conteo = Counter(d["resultado"] for d in conocidos)
+    total = sum(float(d.get("profit") or 0.0) for d in conocidos)
+    return {
+        "conocidos": len(conocidos),
+        "sin_datos": len(desenlaces) - len(conocidos),
+        "por_resultado": conteo.most_common(),
+        "profit_total": total,
+    }
