@@ -216,7 +216,11 @@ class Settings:
         if not self.enable_ollama:
             return "apagada"
         rol = "puede OPERAR" if self.ollama_auto_execute else "solo avisa"
-        return f"{self.ollama_model} ({rol})"
+        # El timeout se muestra porque es lo unico configurable de esta capa que
+        # tiene consecuencias visibles: mientras la IA piensa, el procesamiento
+        # de los mensajes siguientes hace cola. Sin verlo al arrancar, cambiarlo
+        # en el .env es cambiar un numero a ciegas.
+        return f"{self.ollama_model} ({rol}, max {self.ollama_timeout_seconds}s)"
 
     def _describe_distancia(self) -> str:
         """Como se muestra el control contra el precio real al arrancar.

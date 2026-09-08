@@ -282,3 +282,26 @@ def test_el_cupo_diario_se_reinicia_al_cambiar_el_dia(store):
 
     store.state.signals_day = "2020-01-01"
     assert store.signals_today() == 0, "otro dia, cupo nuevo"
+
+
+def test_el_arranque_muestra_el_timeout_de_la_ia(tmp_path):
+    """Es lo unico configurable de esa capa con consecuencias visibles:
+    mientras la IA piensa, el procesamiento de los mensajes siguientes hace
+    cola. Sin verlo al arrancar, cambiarlo en el .env es a ciegas."""
+    env = write_env(
+        tmp_path,
+        "TRADING_MODE=PAPER_ONLY\nENABLE_OLLAMA=true\nOLLAMA_TIMEOUT_SECONDS=45\n",
+    )
+
+    salida = load_settings(env).describe()
+
+    assert "max 45s" in salida
+
+
+def test_con_la_ia_apagada_no_se_muestra_nada_de_eso(tmp_path):
+    env = write_env(tmp_path, "TRADING_MODE=PAPER_ONLY\nENABLE_OLLAMA=false\n")
+
+    salida = load_settings(env).describe()
+
+    assert "IA local        : apagada" in salida
+    assert "max" not in salida.split("IA local")[1].split("\n")[0]
