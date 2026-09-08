@@ -217,3 +217,52 @@ def test_el_mensaje_dice_cuando_volver():
     fuente = inspect.getsource(cli._probar_async)
 
     assert "domingo a la noche a viernes" in fuente, "no dice cuando reintentar"
+
+
+# --------------------------------------------------------------------------
+# Codigos que tienen una causa concreta, no las tres genericas
+#
+# Salida real del usuario: "Terminal: Authorization failed (codigo -6)" con la
+# lista de tres causas debajo. La segunda era la buena, pero quedaba escondida
+# entre otras dos que ya estaban bien y mandan a revisar de todo.
+# --------------------------------------------------------------------------
+
+
+def test_auth_failed_dice_la_causa_exacta():
+    pistas = " ".join(_pistas_de_initialize(-6, ""))
+
+    assert "SIN LA CUENTA INICIADA" in pistas
+    assert "Guardar contrasena" in pistas, "no dice como evitar que vuelva a pasar"
+    assert "1. MetaTrader 5 no esta abierto" not in pistas, (
+        "sigue tirando las tres causas genericas y esconde la verdadera"
+    )
+
+
+def test_auth_failed_contempla_que_el_env_este_mal():
+    """La otra causa del -6: la cuenta esta iniciada pero MT5_LOGIN no coincide
+    y el broker rechaza el login."""
+    pistas = " ".join(_pistas_de_initialize(-6, ""))
+
+    assert "MT5_LOGIN" in pistas
+    assert "tct mt5" in pistas, "no manda al comando que resuelve eso"
+
+
+def test_auth_failed_explica_por_que_rompe_el_arranque_automatico():
+    """Es la consecuencia que no se ve: sin la contrasena guardada, cada
+    reinicio deja el bot sin poder arrancar."""
+    pistas = " ".join(_pistas_de_initialize(-6, ""))
+
+    assert "arranque automatico" in pistas
+
+
+def test_autotrading_apagado_tiene_su_propio_mensaje():
+    pistas = " ".join(_pistas_de_initialize(-8, ""))
+
+    assert "Algo Trading" in pistas
+    assert "Ctrl+E" in pistas
+
+
+def test_los_codigos_sin_causa_conocida_siguen_dando_las_tres():
+    pistas = " ".join(_pistas_de_initialize(-1, ""))
+
+    assert "Casi siempre es una de estas tres" in pistas

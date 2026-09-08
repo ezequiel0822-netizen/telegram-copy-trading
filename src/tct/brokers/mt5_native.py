@@ -65,6 +65,14 @@ def _volumen_confirmado(result: Any, pedido: float) -> float:
 # apunta a un problema de RUTA y no de estado de la terminal.
 _IPC_INITIALIZE_FAILED = -10003
 
+# RES_E_AUTH_FAILED. La terminal esta ahi pero no hay sesion iniciada, o el
+# login que se le paso no fue aceptado. Es un caso muy distinto de "no la
+# encuentro", y merece su propia explicacion.
+_AUTH_FAILED = -6
+
+# RES_E_AUTO_TRADING_DISABLED. El boton verde de la barra esta apagado.
+_AUTOTRADING_APAGADO = -8
+
 
 def _pistas_de_initialize(codigo: int, mt5_path: str) -> list[str]:
     """Que hacer ante un initialize() fallido, en castellano y accionable.
@@ -87,6 +95,35 @@ def _pistas_de_initialize(codigo: int, mt5_path: str) -> list[str]:
             "No se encontro ninguna terminal MetaTrader 5 para arrancar.",
             "Abri MetaTrader 5 a mano y volve a intentar, o completá MT5_PATH",
             "en el .env con la ruta a terminal64.exe.",
+        ]
+
+    if codigo == _AUTH_FAILED:
+        # No es "no encuentro MetaTrader": es "esta ahi y no hay sesion".
+        # Decir las tres causas genericas aca manda a revisar cosas que ya
+        # estan bien, y la verdadera queda escondida entre ellas.
+        return [
+            "MetaTrader esta ahi, pero SIN LA CUENTA INICIADA.",
+            "El bot no puede operar contra una terminal sin sesion.",
+            "",
+            "Abri MetaTrader y fijate abajo a la derecha: si dice 'Sin conexion'",
+            "o no muestra el balance, esta deslogueada.",
+            "  Archivo -> Iniciar sesion en cuenta de operaciones",
+            "  y TILDA 'Guardar contrasena de la cuenta'.",
+            "",
+            "Sin ese tilde, cada reinicio de Windows te deja el bot sin poder",
+            "arrancar hasta que entres a mano, y el arranque automatico no",
+            "sirve de nada.",
+            "",
+            "Si la cuenta SI esta iniciada, entonces MT5_LOGIN/MT5_PASSWORD/",
+            "MT5_SERVER del .env no coinciden con ella y el login fue rechazado.",
+            "Corre 'tct mt5' con MetaTrader abierto: te dice que poner.",
+        ]
+
+    if codigo == _AUTOTRADING_APAGADO:
+        return [
+            "El boton 'Algo Trading' de MetaTrader esta APAGADO.",
+            "Abrilo y apretalo hasta que quede verde, o presiona Ctrl+E.",
+            "Sin eso ninguna orden va a entrar, aunque todo lo demas ande.",
         ]
 
     return [
