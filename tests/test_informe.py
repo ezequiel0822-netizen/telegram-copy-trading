@@ -249,3 +249,61 @@ def test_el_detalle_guarda_lo_que_decia_el_mensaje():
     assert fila["texto"] == "No esperemos por TP1 Movamos el SL ya", (
         "el texto tiene que quedar en una sola linea para la tabla"
     )
+
+
+# --------------------------------------------------------------------------
+# Por que no se pudo aplicar la gestion
+#
+# El informe decia "6 gestion que no se pudo aplicar" y nada mas. Eso suena a
+# que algo anda mal, cuando casi siempre es lo contrario: el canal edita sus
+# mensajes, la edicion se reprocesa, y para entonces la operacion ya cerro.
+# Sin el motivo no hay forma de distinguirlo de un problema de verdad.
+# --------------------------------------------------------------------------
+
+
+def test_se_explica_por_que_fallo_la_gestion():
+    eventos = [
+        evento("gestion_rechazada", reasons=["No hay posiciones abiertas en XAUUSD"])
+        for _ in range(6)
+    ]
+
+    motivos = resumir(eventos)["motivos_gestion"]
+
+    assert len(motivos) == 1
+    texto, veces = motivos[0]
+    assert veces == 6
+    assert "Suele ser normal" in texto, "no aclara que no es un problema"
+    assert "edicion" in texto, "no dice de donde sale"
+
+
+def test_los_motivos_de_gestion_se_agrupan():
+    """Seis por el mismo motivo son una linea con un 6x, no seis lineas."""
+    eventos = [
+        evento("gestion_rechazada", reasons=["No hay posiciones abiertas en XAUUSD"]),
+        evento("gestion_rechazada", reasons=["No hay posiciones abiertas en EURUSD"]),
+        evento("gestion_rechazada", reasons=["MOVE_SL sin precio ni breakeven"]),
+    ]
+
+    motivos = dict(resumir(eventos)["motivos_gestion"])
+
+    assert len(motivos) == 2
+    assert max(motivos.values()) == 2
+
+
+def test_una_gestion_sin_motivo_no_se_pierde():
+    """Los eventos viejos no guardaban reasons. Saltearlos haria que el conteo
+    de arriba y el desglose no cierren, y ahi uno deja de confiar en los dos."""
+    eventos = [evento("gestion_rechazada")]
+
+    motivos = dict(resumir(eventos)["motivos_gestion"])
+
+    assert sum(motivos.values()) == 1
+
+
+def test_el_informe_imprime_los_motivos_de_gestion():
+    """El cableado hasta la pantalla."""
+    import inspect
+
+    from tct import cli
+
+    assert "motivos_gestion" in inspect.getsource(cli.cmd_informe)

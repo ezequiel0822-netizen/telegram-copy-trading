@@ -115,6 +115,18 @@ def resumir(
                              "cerrada_en_el_broker", "gestion_rechazada"}
     )
 
+    # Por que no se pudo aplicar la gestion. Se contaba pero no se explicaba,
+    # y "6 gestion que no se pudo aplicar" a secas suena a que algo anda mal
+    # cuando casi siempre es lo contrario: el canal edita sus mensajes, la
+    # edicion se reprocesa, y para entonces la posicion ya cerro. Sin el
+    # motivo no hay forma de distinguir eso de un problema de verdad.
+    motivos_gestion: Counter[str] = Counter()
+    for e in eventos:
+        if e.get("kind") != "gestion_rechazada":
+            continue
+        for motivo in e.get("reasons", []) or ["sin motivo registrado"]:
+            motivos_gestion[_familia_de_motivo_gestion(motivo)] += 1
+
     # Cuantos MENSAJES distintos hubo, no cuantos eventos. Este canal edita lo
     # que manda y las ediciones se reprocesan a proposito, asi que un solo
     # mensaje puede aparecer tres veces. Contar eventos infla el numero hasta
@@ -130,8 +142,31 @@ def resumir(
         "motivos": motivos.most_common(),
         "detalle": detalle,
         "gestion": dict(gestion),
+        "motivos_gestion": motivos_gestion.most_common(),
         "distancias": _distancias(paper_trades or []),
     }
+
+
+def _familia_de_motivo_gestion(motivo: str) -> str:
+    """Agrupa los motivos por los que no se pudo aplicar un mensaje de gestion.
+
+    El mas comun no es un problema: el canal edita sus mensajes y la
+    edicion se reprocesa; para entonces la posicion ya cerro y no hay nada
+    que mover. Decirlo con esas palabras evita que alguien salga a buscar
+    una falla que no existe.
+    """
+    if "No hay posiciones abiertas" in motivo:
+        return (
+            "No habia ninguna posicion abierta. Suele ser normal: es una "
+            "edicion del mensaje que llego cuando la operacion ya habia cerrado."
+        )
+    if "Fraccion de cierre invalida" in motivo:
+        return "No se entendio que fraccion cerrar"
+    if "MOVE_SL sin precio" in motivo:
+        return "Un 'mover el stop' sin decir a que precio ni a breakeven"
+    if "precio de entrada para calcular el breakeven" in motivo:
+        return "Se pidio breakeven sin tener registrada la entrada"
+    return motivo
 
 
 def _familia_de_motivo(motivo: str) -> str:

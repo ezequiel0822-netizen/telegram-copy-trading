@@ -1247,6 +1247,12 @@ def cmd_informe(args: argparse.Namespace) -> int:
         for kind, cuantas in r["gestion"].items():
             print(f"      {cuantas:>3}  {etiquetas.get(kind, kind)}")
 
+        # "6 gestion que no se pudo aplicar" a secas suena a que algo anda mal.
+        # Casi siempre es lo contrario, y sin el motivo no hay forma de
+        # distinguirlo de un problema de verdad.
+        for motivo, veces in r["motivos_gestion"]:
+            print(f"\n           {veces}x  {motivo}")
+
     _informar_distancias(r["distancias"], settings)
     return 0
 
