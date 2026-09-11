@@ -190,6 +190,22 @@ def cmd_check(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
+def _ruta_del_terminal(terminal) -> str | None:
+    """El terminal64.exe de la terminal que respondio.
+
+    `terminal_info().path` devuelve la CARPETA de instalacion, no el ejecutable,
+    y MT5_PATH quiere el ejecutable. Si el archivo no esta donde deberia se
+    devuelve None en vez de inventar una ruta: una ruta mal escrita en el .env
+    falla con un error de IPC que no explica nada, y es mejor no ponerla que
+    ponerla mal.
+    """
+    carpeta = getattr(terminal, "path", None) if terminal is not None else None
+    if not carpeta:
+        return None
+    exe = Path(carpeta) / "terminal64.exe"
+    return str(exe) if exe.exists() else None
+
+
 def cmd_mt5(args: argparse.Namespace) -> int:
     """Lee la cuenta de la terminal MT5 abierta y dice que poner en el .env.
 
@@ -248,10 +264,25 @@ def cmd_mt5(args: argparse.Namespace) -> int:
         print("\n" + "=" * 58)
         print("  QUE PONER EN EL .env")
         print("=" * 58)
-        print("  Copia estas dos lineas tal cual (la tercera es tu password):\n")
+        print("  Copia estas lineas tal cual (la password es la de tu cuenta):\n")
         print(f"      MT5_LOGIN={cuenta.login}")
         print(f"      MT5_SERVER={cuenta.server}")
         print("      MT5_PASSWORD=<la de tu cuenta demo>")
+
+        # La ruta de ESTA terminal.
+        #
+        # Con una sola instancia no hace falta: vacio es mas robusto, el bot se
+        # engancha a la que encuentre. Con DOS cuentas a la vez pasa a ser
+        # obligatorio, y es el dato mas dificil de conseguir a mano -hay que ir a
+        # buscar el acceso directo y mirar sus propiedades-. La terminal lo sabe,
+        # asi que se lo preguntamos.
+        ruta = _ruta_del_terminal(terminal)
+        if ruta:
+            print()
+            print("  Y si vas a correr DOS cuentas a la vez, la ruta de ESTA:\n")
+            print(f"      MT5_PATH={ruta}")
+            print()
+            print("  (con una sola cuenta dejalo VACIO: es mas robusto)")
 
         # Avisos que evitan un fallo silencioso mas adelante.
         problemas = []
