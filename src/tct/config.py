@@ -31,6 +31,58 @@ class ConfigError(RuntimeError):
     """Configuracion invalida. Aborta el arranque."""
 
 
+# Caracteres que una ruta de Windows no puede contener, con el escape que los
+# produjo. Si aparecen en MT5_PATH es por una sola razon: comillas dobles.
+_ESCAPES_QUE_ROMPEN = {
+    "\t": r"\t",
+    "\n": r"\n",
+    "\r": r"\r",
+    "\b": r"\b",
+    "\f": r"\f",
+    "\v": r"\v",
+}
+
+
+def _revisar_ruta_de_mt5(ruta: str) -> None:
+    """Falla si MT5_PATH quedo corrompida por las comillas del .env.
+
+    LA TRAMPA
+    ---------
+    `python-dotenv` interpreta las secuencias de escape SOLO cuando el valor
+    esta entre comillas DOBLES. Y toda instalacion de MetaTrader termina en
+    "\\terminal64.exe", asi que:
+
+        MT5_PATH="C:\\...\\MT5\\terminal64.exe"   el \\t se vuelve un TABULADOR
+        MT5_PATH=C:\\...\\MT5\\terminal64.exe     bien
+        MT5_PATH='C:\\...\\MT5\\terminal64.exe'   bien
+
+    O sea: la costumbre razonable de entrecomillar una ruta con espacios -que
+    es lo que piden cmd y PowerShell- rompe justo la variable donde el \\t es
+    inevitable. Lo unico que se veia despues era "el archivo no existe" con la
+    ruta impresa y un hueco en el medio que no se distingue de un espacio.
+
+    No se repara sola a proposito. Reparar el tabulador dejaria a la persona
+    creyendo que las comillas estan bien, y la proxima ruta que escriba va a
+    romperse igual -empezando por la del segundo bot, que es la que viene
+    justo despues-.
+    """
+    for caracter, escape in _ESCAPES_QUE_ROMPEN.items():
+        if caracter not in ruta:
+            continue
+        raise ConfigError(
+            f"MT5_PATH tiene un caracter invisible donde deberia decir '{escape}'.\n"
+            "    Lo hacen las COMILLAS DOBLES del .env: convierten el "
+            f"'{escape}' de la ruta en otro caracter.\n"
+            "\n"
+            "    Sacale las comillas y dejala pelada:\n"
+            "\n"
+            "        MT5_PATH=C:\\Program Files\\MetaTrader 5\\terminal64.exe\n"
+            "\n"
+            "    Los espacios NO son un problema aca: el .env no los necesita\n"
+            "    entrecomillados, al reves que cmd o PowerShell."
+        )
+
+
 # Modos soportados. El orden es la escalera de riesgo que pide el CONTEXTO
 # MAESTRO: primero papel, despues demo, y recien al final dinero real.
 #
@@ -52,9 +104,6 @@ _DEFAULT_SYMBOLS = "XAUUSD,XAGUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,NAS100,US30
 # puede llamarse asi, o "/pausa todos" quedaria ambiguo.
 NOMBRES_RESERVADOS = frozenset({"todo", "todos", "all", "ambos", "ambas"})
 
-# El roster de fabrica. Existe para que quien corre una sola instancia no tenga
-# que declarar nada, y para que los `.env` escritos antes de que esto fuera
-# configurable sigan funcionando igual.
 # Cuanto avisa el bot por Telegram. NO afecta a los comandos (/pausa,
 # /cerrar): esos van por otro canal -la sesion de Telethon del usuario- y
 # siguen funcionando con los avisos apagados del todo.
@@ -64,6 +113,9 @@ NOMBRES_RESERVADOS = frozenset({"todo", "todos", "all", "ambos", "ambas"})
 #   none      silencio
 NIVELES_DE_AVISO = ("all", "problems", "none")
 
+# El roster de fabrica. Existe para que quien corre una sola instancia no tenga
+# que declarar nada, y para que los `.env` escritos antes de que esto fuera
+# configurable sigan funcionando igual.
 ROSTER_POR_DEFECTO = ("demo", "real", "papel", "paper")
 
 
@@ -377,6 +429,13 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     env = _Env(values)
     warnings: list[str] = []
 
+    # Se valida ACA y no al conectar: asi `tct check` lo caza antes de que la
+    # persona intente arrancar, que es donde el error costaba mas caro -el
+    # mensaje del broker decia "el archivo no existe" y mostraba la ruta con un
+    # hueco invisible en el medio-.
+    ruta_de_mt5 = env.str("MT5_PATH")
+    _revisar_ruta_de_mt5(ruta_de_mt5)
+
     # Un nivel mal escrito no puede caer en silencio: 'ninguno' en vez de
     # 'none' dejaria al usuario creyendo que apago los avisos, o al reves,
     # esperando avisos que no van a llegar. Se falla al arrancar y se dice
@@ -456,7 +515,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         mt5_login=env.str("MT5_LOGIN"),
         mt5_password=env.str("MT5_PASSWORD"),
         mt5_server=env.str("MT5_SERVER"),
-        mt5_path=env.str("MT5_PATH"),
+        mt5_path=ruta_de_mt5,
         mt5_broker_profile=env.str("MT5_BROKER_PROFILE", "default"),
         default_lot=default_lot,
         max_lot=max_lot,

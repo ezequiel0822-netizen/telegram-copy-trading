@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-11 · v1.2.0 · 516 tests · el último commit que describe
-es `52bb96d`, más este mismo cambio (que es el que trae la v1.2.0)
+Actualizado: 2026-09-11 · v1.2.1 · 528 tests · el último commit que describe
+es `dddfb13`, más este mismo cambio (que es el que trae la v1.2.1)
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -546,6 +546,32 @@ lugar. Se arregló agregando las opciones comunes a cada subcomando con
 `default=argparse.SUPPRESS`: **el `SUPPRESS` es lo que las hace convivir**, sin
 él el subcomando escribe su `None` encima del valor que puso el parser
 principal y la forma que sí andaba deja de andar.
+
+**`.env` — las comillas dobles rompen TODA ruta de MetaTrader.** `python-dotenv`
+interpreta las secuencias de escape solo cuando el valor esta entre comillas
+dobles, y toda instalación de MT5 termina en `\terminal64.exe`:
+
+| en el `.env` | resultado |
+|---|---|
+| `MT5_PATH="C:\...\MT5\terminal64.exe"` | **ROTO**: el `\t` se vuelve un TABULADOR |
+| `MT5_PATH=C:\...\MT5\terminal64.exe` | bien |
+| `MT5_PATH='C:\...\MT5\terminal64.exe'` | bien |
+
+Lo cruel es que entrecomillar una ruta con espacios es exactamente lo que
+piden cmd y PowerShell: la costumbre correcta en todos lados rompe la única
+variable donde el `\t` es inevitable. Pasó en producción, montando la segunda
+instancia. El síntoma era *"MT5_PATH apunta a un archivo que no existe"* con la
+ruta impresa y un hueco en el medio indistinguible de un espacio.
+
+**Y volvió a pasar escribiendo esta misma sección**: el parche que la agregaba
+usaba un heredoc, y el `\t` del ejemplo se convirtió en un tabulador de verdad
+adentro del documento. Es la trampa de §7 mordiendo mientras se documentaba
+otra trampa. Se arregló con la herramienta de edición, que es lo que §7 dice.
+
+`config.py::_revisar_ruta_de_mt5` lo caza al cargar -o sea que `tct check` lo
+dice antes de intentar arrancar- y **no lo repara solo a proposito**: reparar
+el tabulador dejaria a la persona creyendo que las comillas estan bien, y la
+proxima ruta que escriba se rompe igual.
 
 **`.gitattributes` — `.sh` en LF, `.bat`/`.ps1` en CRLF.** Un `.bat` con LF
 falla en `cmd.exe` de formas difíciles de diagnosticar.
