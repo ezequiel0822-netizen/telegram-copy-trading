@@ -55,6 +55,15 @@ NOMBRES_RESERVADOS = frozenset({"todo", "todos", "all", "ambos", "ambas"})
 # El roster de fabrica. Existe para que quien corre una sola instancia no tenga
 # que declarar nada, y para que los `.env` escritos antes de que esto fuera
 # configurable sigan funcionando igual.
+# Cuanto avisa el bot por Telegram. NO afecta a los comandos (/pausa,
+# /cerrar): esos van por otro canal -la sesion de Telethon del usuario- y
+# siguen funcionando con los avisos apagados del todo.
+#
+#   all       todo: aperturas, cierres, movidas de SL, rechazos y fallos
+#   problems  solo lo que salio mal o quedo sin hacer
+#   none      silencio
+NIVELES_DE_AVISO = ("all", "problems", "none")
+
 ROSTER_POR_DEFECTO = ("demo", "real", "papel", "paper")
 
 
@@ -201,6 +210,13 @@ class Settings:
     # verdad, no al numero del mensaje. Ver `engine._destino_del_stop`, que es
     # donde estan las tres operaciones reales que lo motivaron.
     breakeven_uses_real_entry: bool = True
+    # Cuanto avisa por Telegram. Ver NIVELES_DE_AVISO arriba.
+    #
+    # 'none' NO deja al usuario sin freno: los comandos entran por la sesion
+    # de Telethon (`control.py`), que es otro canal. Lo que se pierde es
+    # enterarse SIN preguntar, y eso importa mas de lo que parece cuando el
+    # bot arranca solo al prender la PC y nadie mira la consola.
+    telegram_notify_level: str = "all"
     configured_mode: str = ""
 
     warnings: list[str] = field(default_factory=list)
@@ -240,6 +256,26 @@ class Settings:
         # de los mensajes siguientes hace cola. Sin verlo al arrancar, cambiarlo
         # en el .env es cambiar un numero a ciegas.
         return f"{self.ollama_model} ({rol}, max {self.ollama_timeout_seconds}s)"
+
+    def _describe_avisos(self) -> str:
+        """Si van a llegar avisos, y por que no si no.
+
+        Antes esto miraba SOLO el token y decia "configuradas". Pero
+        `Notifier.enabled()` exige token Y chat_id, asi que con el chat_id
+        vacio -que es facil, es opcional en el .env- el arranque anunciaba
+        notificaciones y despues no llegaba ni una. Mentir sobre esto es peor
+        que no decir nada: el usuario descarta la hipotesis correcta cuando
+        despues no recibe el aviso de que algo fallo.
+        """
+        if not self.telegram_bot_token:
+            return "apagadas (falta TELEGRAM_BOT_TOKEN)"
+        if not self.telegram_notify_chat_id:
+            return "apagadas (falta TELEGRAM_NOTIFY_CHAT_ID)"
+        if self.telegram_notify_level == "none":
+            return "silenciadas a proposito (TELEGRAM_NOTIFY_LEVEL=none)"
+        if self.telegram_notify_level == "problems":
+            return "solo problemas (TELEGRAM_NOTIFY_LEVEL=problems)"
+        return "todas"
 
     def _describe_por_senal(self) -> str:
         """Cuantas posiciones abre una senal y cuantas tolera por instrumento.
@@ -322,7 +358,7 @@ class Settings:
             f"IA local        : {self._describe_ollama()}",
             f"Chats fuente    : {', '.join(self.telegram_source_chats) or '(ninguno)'}",
             f"Telethon        : {'configurado' if self.telegram_api_id else 'FALTA'}",
-            f"Notificaciones  : {'configuradas' if self.telegram_bot_token else 'apagadas'}",
+            f"Notificaciones  : {self._describe_avisos()}",
             f"Paper trades    : {self.paper_trades_path}",
         ]
         return "\n".join(lines)
@@ -340,6 +376,20 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
 
     env = _Env(values)
     warnings: list[str] = []
+
+    # Un nivel mal escrito no puede caer en silencio: 'ninguno' en vez de
+    # 'none' dejaria al usuario creyendo que apago los avisos, o al reves,
+    # esperando avisos que no van a llegar. Se falla al arrancar y se dice
+    # cuales son los valores validos.
+    nivel_de_aviso = env.str("TELEGRAM_NOTIFY_LEVEL", "all").strip().lower()
+    if nivel_de_aviso not in NIVELES_DE_AVISO:
+        raise ConfigError(
+            f"TELEGRAM_NOTIFY_LEVEL='{nivel_de_aviso}' no es valido. "
+            f"Tiene que ser uno de: {', '.join(NIVELES_DE_AVISO)}.\n"
+            "    all       avisa todo (lo de siempre)\n"
+            "    problems  solo lo que salio mal o quedo sin hacer\n"
+            "    none      silencio total"
+        )
 
     configured_mode = env.str("TRADING_MODE", AUTO).upper()
     if configured_mode not in VALID_MODES:
@@ -420,6 +470,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         max_spread_from_entry_pct=env.float("MAX_SPREAD_FROM_ENTRY_PCT", 0.5),
         max_pending_distance_pct=env.float("MAX_PENDING_DISTANCE_PCT", 3.0),
         breakeven_uses_real_entry=env.bool("BREAKEVEN_USES_REAL_ENTRY", True),
+        telegram_notify_level=nivel_de_aviso,
         allow_live_trading=allow_live,
         enable_ocr=env.bool("ENABLE_OCR", False),
         dry_run=env.bool("DRY_RUN", False),

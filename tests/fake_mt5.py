@@ -112,6 +112,15 @@ class FakeMT5:
         self.enviados: list[dict[str, Any]] = []
         # Si se llena, la proxima order_send devuelve este retcode.
         self.rechazar_con: int | None = None
+        # Rechazar recien A PARTIR de la N-esima APERTURA (1 = la primera).
+        #
+        # `rechazar_con` tumba todas, y con POSITIONS_PER_SIGNAL=3 eso solo
+        # reproduce "no entro ninguna". El caso que importa es el otro: el
+        # broker acepta dos y rechaza una -por distancia de stops, requote, o
+        # el mercado cerrandose a mitad-, que es como una senal termina con 2
+        # de 3 posiciones sin que nadie lo note.
+        self.rechazar_a_partir_de: int | None = None
+        self._aperturas = 0
         # Fraccion del volumen pedido que se llena de verdad. 1.0 = todo.
         # Bajarla reproduce un llenado parcial, que es lo que hace que el
         # volumen pedido y el ejecutado dejen de coincidir.
@@ -168,6 +177,16 @@ class FakeMT5:
 
         if self.rechazar_con is not None:
             return FakeResult(self.rechazar_con, comment="rechazo forzado por el test")
+
+        if request["action"] == self.TRADE_ACTION_DEAL and "position" not in request:
+            self._aperturas += 1
+            if (self.rechazar_a_partir_de is not None
+                    and self._aperturas >= self.rechazar_a_partir_de):
+                return FakeResult(
+                    TRADE_RETCODE_INVALID_STOPS,
+                    comment="rechazo forzado por el test, a partir de la %d"
+                            % self.rechazar_a_partir_de,
+                )
 
         if request["action"] == self.TRADE_ACTION_SLTP:
             posicion = self._posiciones.get(request["position"])

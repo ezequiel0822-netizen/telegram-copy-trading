@@ -1586,11 +1586,12 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
             logger.warning("Sin control por Telegram. Solo se puede frenar desde la PC.")
 
     encabezado = "BOT REAL arrancado" if settings.is_live else "Bot arrancado"
-    await notifier.send(
+    await _avisar(
+        notifier, settings,
         f"{encabezado} [{settings.instance_name.upper()}]\n"
         f"Modo: {settings.trading_mode}\n"
         f"Escuchando {len(settings.telegram_source_chats)} chat(s)."
-        + (f"\n\nPara frenarlo: /pausa {settings.instance_name}" if control else "")
+        + (f"\n\nPara frenarlo: /pausa {settings.instance_name}" if control else ""),
     )
 
     if store.is_paused:
@@ -1620,12 +1621,14 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
             "        Volve a arrancarlo cuando tengas internet de nuevo."
         )
         try:
-            await notifier.send(
+            await _avisar(
+                notifier, settings,
                 f"[{settings.instance_name.upper()}] SE DETUVO SOLO\n"
                 "Se corto la conexion con Telegram y no se pudo recuperar.\n"
                 "Dejo de leer el grupo. Lo que este abierto sigue en MetaTrader\n"
                 "con su SL y su TP.\n\n"
-                "Hay que volver a arrancarlo a mano."
+                "Hay que volver a arrancarlo a mano.",
+                problema=True,
             )
         except Exception:
             logger.warning("Tampoco se pudo avisar del corte", exc_info=True)
@@ -1672,6 +1675,24 @@ def _opciones_comunes() -> argparse.ArgumentParser:
         help="Logs de debug",
     )
     return comunes
+
+
+async def _avisar(notifier, settings, texto: str, *, problema: bool = False) -> None:
+    """Los avisos que no pasan por el motor: el arranque y el corte.
+
+    `Engine._notify` filtra por TELEGRAM_NOTIFY_LEVEL, pero estos dos salen
+    directo del notifier y se saltearian el filtro: con nivel 'none' el usuario
+    seguiria recibiendo "Bot arrancado" cada vez que prende la PC, que es
+    justamente el aviso mas repetitivo de todos con el arranque automatico.
+    """
+    if notifier is None or not notifier.enabled():
+        return
+    nivel = getattr(settings, "telegram_notify_level", "all")
+    if nivel == "none":
+        return
+    if nivel == "problems" and not problema:
+        return
+    await notifier.send(texto)
 
 
 def build_parser() -> argparse.ArgumentParser:

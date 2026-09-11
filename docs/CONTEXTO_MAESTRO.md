@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-11 · v1.1.0 · 478 tests · el último commit que describe
-es `237b0d9`, más este mismo cambio (que es el que trae la v1.1.0)
+Actualizado: 2026-09-11 · v1.2.0 · 516 tests · el último commit que describe
+es `52bb96d`, más este mismo cambio (que es el que trae la v1.2.0)
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -470,6 +470,30 @@ bróker llenó. El primero sirve para saber qué pidió el canal, el segundo par
 saber dónde está la posición. `entry_real` queda en `None` en paper trading y
 en las posiciones abiertas antes de que el campo existiera, así que **todo el
 que lo use tiene que poder caer en `entry`**.
+
+**`engine.py` — hay avisos que NO se pueden callar sin perder información que
+no está en ningún otro lado.** `_notify(..., problema=True)` marca cuáles. Los
+dos que importan:
+
+- **El aviso de señal RECHAZADA es la única voz del freno por pérdida diaria.**
+  Cuando ese freno salta, rechaza **todas** las señales hasta el día siguiente.
+  Sin el aviso, un día entero frenado se ve desde el teléfono exactamente igual
+  que un día sin señales. `/estado` tampoco lo muestra.
+- **Una apertura que entró a medias avisa aparte, y tiene que seguir así.**
+  Antes esa información viajaba adentro del `SENAL ACEPTADA`, que es un aviso
+  de rutina: al callar la rutina se iba con él. Con `POSITIONS_PER_SIGNAL=3`,
+  si el bróker acepta dos y rechaza una, el usuario cree perseguir tres
+  objetivos y persigue dos — y **el informe tampoco lo muestra**: `fallidas` se
+  guarda en el evento `aceptada` y nadie lo lee. No es un problema de plata
+  (entra menos exposición, no más) sino de **dato**: las tres posiciones
+  existen para medir cuántas veces el precio llega al TP2 y al TP3, y un 2 de 3
+  invisible hace figurar el TP3 como "no llegó" cuando nunca se mandó.
+
+**Y ningún test protegía la entrega de un aviso.** Los de `test_desconexion.py`
+afirman sobre el TEXTO FUENTE (`inspect.getsource`), no sobre comportamiento:
+se comprobó que parchear `Notifier.enabled()` para devolver `False` dejaba la
+suite entera en verde. `test_nivel_de_avisos.py` son los primeros que se ponen
+en rojo si los avisos dejan de salir.
 
 **`mt5_native.py` — el retcode `10025 NO_CHANGES` es ÉXITO.** MT5 lo devuelve
 cuando se le pide mover el stop al precio donde el stop **ya está**. O sea:
@@ -961,6 +985,12 @@ dos secciones que nadie contrastó contra el código.**
   abrir tres, el techo se cruzaría igual. `_objetivos_de_apertura` lo recorta.
 - **No se abren más posiciones que objetivos tenga la señal.** Una posición sin
   TP propio no persigue nada: solo duplica exposición.
+- **Callar los avisos nunca puede cambiar lo que el bot HACE.**
+  `TELEGRAM_NOTIFY_LEVEL` filtra la salida y nada más: con `none` el bot abre,
+  cierra y mueve stops exactamente igual. Y **no deja sin freno**: los comandos
+  entran por la sesión de Telethon (`control.py:390`), que es otro canal — el
+  notificador usa la Bot API con `TELEGRAM_BOT_TOKEN`. Son dos mecanismos que
+  no comparten una sola línea de código.
 - **El cupo del día se descuenta cuando el bróker CONFIRMA, no cuando la señal
   se acepta.** Si no, una señal que el bróker no puede operar —un símbolo que
   no cotiza, la cuenta desconectada— igual se come un lugar de
