@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-08 · v1.0.0 · 457 tests · el último commit que describe
-es `69b00f5`, más este mismo cambio (que es el que trae la v1.0.0)
+Actualizado: 2026-09-11 · v1.1.0 · 478 tests · el último commit que describe
+es `237b0d9`, más este mismo cambio (que es el que trae la v1.1.0)
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -56,6 +56,9 @@ es un sistema que se está montando: es uno que corre y del que hay datos.
 | `MAX_DAILY_LOSS_PCT` | **sin tope** |
 | `MAX_SPREAD_FROM_ENTRY_PCT` | 0.5% (sin calibrar, pero con margen de sobra) |
 | `OLLAMA_TIMEOUT_SECONDS` | 45 (bajado de 180) |
+| `POSITIONS_PER_SIGNAL` | **3** — una posición por TP, o sea 0.03 por señal |
+| `MAX_POSITIONS_PER_SYMBOL` | **0** — sin tope, para que la TP3 colgada no bloquee |
+| `BREAKEVEN_USES_REAL_ENTRY` | `true` (ver §5) |
 
 Tres cosas de esa tabla merecen atención antes de dinero real:
 
@@ -68,9 +71,11 @@ Tres cosas de esa tabla merecen atención antes de dinero real:
   terminal que esté abierta. Con dos deja de tener respuesta correcta (§5).
   Efecto secundario: la cuenta con la que opera depende de en cuál esté
   logueada esa ventana.
-- **100 / 100 y sin freno diario** son tres protecciones prácticamente
-  desactivadas. En demo da igual. Antes de real hay que volver a bajarlas, y
-  el freno diario no se deja en 0.
+- **100 / 100, sin freno diario y sin tope por instrumento** son cuatro
+  protecciones prácticamente desactivadas, y `POSITIONS_PER_SIGNAL=3`
+  triplica cada señal encima de eso. En demo da igual y es a propósito: el
+  objetivo declarado es juntar datos. **Antes de real hay que volver a
+  bajar las cuatro**, y el freno diario no se deja en 0.
 
 ### Decisiones tomadas que no hay que revisar
 
@@ -82,24 +87,49 @@ Tres cosas de esa tabla merecen atención antes de dinero real:
 - La cuenta **real no está configurada**. Existe `.env.real.example` sin
   completar.
 
-### La decisión que está esperando datos
+### La decisión de los tres TP, ya tomada
 
-**Qué hacer con los tres TP.** El canal manda TP1/TP2/TP3 en cada señal y el
-bot usa solo el primero. Hay tres caminos y **no se puede elegir sin datos**:
+**Se decidió abrir las tres.** El 2026-09-11, con una semana de datos reales
+sobre la mesa, el usuario eligió perseguir los tres objetivos. El motivo es
+recolectar datos: la cuenta es demo, así que triplicar el tamaño no cuesta
+nada, y es la única forma de saber cuántas veces el precio llega al TP2 y al
+TP3 en vez de suponerlo.
 
-| | Riesgo | Resultado |
-|---|---|---|
-| Hoy: 1 posición, TP1 | 0.01 | +4 o 0 |
-| 1 posición, TP más lejano | 0.01 | +8, pero muere en breakeven más seguido |
-| 3 posiciones, un TP cada una | **0.03** | +4/+6/+8 en escalera |
+Lo que decían los datos que había:
 
-MT5 admite **un solo TP por posición**: los tres objetivos requieren tres
-operaciones, y el lote mínimo de 0.01 no se puede partir, así que son 0.03
-sí o sí. **Triplica el tamaño de cada señal.**
+| De 12 operaciones | |
+|---|---|
+| llegaron al TP1 | **8** |
+| murieron en breakeven | 3 |
+| la cerró el bot | 1 |
+| tocaron el stop de verdad | **0** |
 
-Lo que falta para decidir es la proporción entre "llegó al TP1" y "murió en
-breakeven", y eso lo da `tct informe --con-resultados` después de una semana.
-**No adivinar esto: es la diferencia entre evaluar el canal y suponerlo.**
+O sea: el canal llega al primer objetivo dos de cada tres veces y **nunca**
+llegó al stop. Eso es lo que hace que la pregunta valga la pena — si el precio
+sigue de largo hasta el TP3 con alguna frecuencia, el TP1 está dejando plata
+arriba de la mesa. Pero eso no se sabía, porque los TP2 y TP3 nunca se habían
+mandado al bróker.
+
+**Cómo quedó implementado.** `POSITIONS_PER_SIGNAL=3` abre tres posiciones, una
+por objetivo, todas con el mismo SL. MT5 admite un solo TP por posición, así
+que no hay otra forma de expresarlo. Y como el lote mínimo (0.01) no se puede
+partir, **cada señal pasa a valer 0.03**: el triple. Eso se imprime al arrancar
+en la línea `Por senal`, para que el número esté a la vista y no en el estado
+de cuenta del día siguiente.
+
+**La consecuencia que no era obvia**, y por la que hubo que tocar otra cosa: la
+posición del TP más lejano puede quedar viva horas. Con la regla vieja de *"ya
+hay una posición abierta en XAUUSD"*, esa posición colgada bloquearía **todas**
+las señales siguientes de un canal que opera un solo instrumento. Por eso ahora
+el tope es `MAX_POSITIONS_PER_SYMBOL`, y en esta máquina está en **0** (sin
+tope). Antes de dinero real hay que volver a bajarlo.
+
+### Lo que sigue esperando datos
+
+Ahora que los tres objetivos se mandan de verdad, lo que falta es dejar correr
+una semana y mirar `tct informe --con-resultados`: cuántas llegan al TP2 y al
+TP3. Recién con eso se sabe si tres posiciones rinden más que una, que es la
+pregunta que originalmente motivó todo esto.
 
 ### Fricciones recurrentes que va a tener de nuevo
 
@@ -405,6 +435,42 @@ línea de `manejar`. Esa guarda tiene que quedar **antes** de la lógica que
 cancela la confirmación: si no, el propio pedido de confirmación se cancelaría
 solo al volver.
 
+**`engine.py` — el breakeven va al precio al que el bróker LLENÓ, no al del
+mensaje.** Es el arreglo que salió de mirar las primeras operaciones reales, y
+la diferencia es plata.
+
+Una orden a mercado entra al precio de **ahora**. El número que el canal
+escribe es el que él vio al mandar la señal, y cuando la orden llega ya no es
+el mismo: medido, de 0.02% a 0.07%. En oro, décimas de punto. Eso no importa
+para nada... salvo para el breakeven, que es exactamente la operación de *poner
+el stop donde entré*. Las tres que cerraron "en breakeven" la primera semana:
+
+| | entrada del mensaje | llenó en | stop a | resultado |
+|---|---|---|---|---|
+| SELL | 4467 | 4467.745 | 4467.0 | **+0.57** |
+| BUY | 4387 | 4387.315 | 4387.0 | **-0.42** |
+| SELL | 4334 | 4333.025 | 4334.0 | **-1.08** |
+
+Dos de tres perdieron, y no por slippage: el stop quedaba del lado equivocado
+de la entrada real, **siempre por la distancia del spread**. Un breakeven que
+pierde sistemáticamente no es un breakeven.
+
+Hay un segundo detalle, y es cómo habla este canal: no dice *"a BE"*, escribe
+`MOVER SL A 4467`, o sea el número de la entrada. Eso llega al parser como un
+stop explícito, así que hay que **reconocerlo por el número**. Lo hace
+`_destino_del_stop()`, y la comparación es **exacta a propósito**: los dos
+números salen del mismo canal con el mismo formato. Aflojar esa tolerancia
+tiene costo asimétrico — de más, se pisa un stop que el canal eligió a
+propósito; de menos, se cae en el comportamiento viejo, que es obedecer el
+mensaje. Errar para el lado de obedecer es el lado barato.
+
+**`store.py` — `entry` y `entry_real` son cosas distintas y las dos hacen
+falta.** `entry` es el número del mensaje; `entry_real` es el precio al que el
+bróker llenó. El primero sirve para saber qué pidió el canal, el segundo para
+saber dónde está la posición. `entry_real` queda en `None` en paper trading y
+en las posiciones abiertas antes de que el campo existiera, así que **todo el
+que lo use tiene que poder caer en `entry`**.
+
 **`mt5_native.py` — el retcode `10025 NO_CHANGES` es ÉXITO.** MT5 lo devuelve
 cuando se le pide mover el stop al precio donde el stop **ya está**. O sea:
 es la confirmación de que lo pedido se cumple, no un rechazo. Tratarlo como
@@ -637,6 +703,28 @@ se comporta este canal en particular.
   de `lockfile.py` es del sistema operativo, no un archivo con un PID adentro,
   así que un corte de luz no deja un candado trabado.
 
+### Quinta ronda: el que solo se ve en el estado de cuenta
+
+Uno solo, pero costaba plata en cada operación, y ninguna revisión de código lo
+habría encontrado: hacía falta mirar los **resultados**.
+
+- **El breakeven se ponía en el número del mensaje y no donde la posición
+  estaba de verdad.** El usuario lo notó como *"no pone bien los stop loss"*.
+  Las tres operaciones que habían cerrado "en breakeven" daban +0.57, **-0.42**
+  y **-1.08**: dos de tres perdiendo, siempre por el tamaño del spread. No era
+  slippage ni mala suerte — el stop quedaba del lado equivocado del precio de
+  entrada real, sistemáticamente. Ver §5, que tiene la tabla con los números.
+
+  **Lo que lo hace interesante como lección:** el bot hacía exactamente lo que
+  el mensaje decía. `MOVER SL A 4467` → stop en 4467. El bug no estaba en
+  ejecutar mal una orden, sino en tomar al pie de la letra un mensaje cuya
+  *intención* era otra. Esa clase de error no aparece en un test unitario ni en
+  el log: aparece en el P&L, y solo si alguien lo mira.
+
+  Y se encontró porque existía `tct informe --con-resultados`. Sin esa
+  herramienta, las tres operaciones figuraban como "breakeven" y nadie iba a
+  sospechar nada.
+
 ---
 
 ## 7. Errores de proceso que costaron tiempo
@@ -852,6 +940,18 @@ dos secciones que nadie contrastó contra el código.**
   para la cotización (contraste con el mercado): si el bróker no responde, esa
   capa no opina y la señal sigue su curso. Un bróker lento no puede dejar al
   bot sin operar.
+- **Una señal puede abrir varias posiciones, pero sigue siendo una señal.** El
+  cupo diario (`MAX_SIGNALS_PER_DAY`) se descuenta **una vez**, no una por
+  posición: tres posiciones persiguiendo los tres TP de un mismo mensaje son un
+  solo mensaje. Y el registro escribe **un** evento `aceptada` por señal, con
+  todos los tickets adentro en `orders`: escribir tres haría que un día de 4
+  señales se informara como 12, que es el bug de contar eventos en vez de
+  mensajes (§6) volviendo por otra puerta.
+- **`MAX_OPEN_TRADES` se recorta al abrir, no solo al evaluar.** `evaluate_open`
+  mira si entra UNA posición; si quedaba un solo lugar libre y la señal quiere
+  abrir tres, el techo se cruzaría igual. `_objetivos_de_apertura` lo recorta.
+- **No se abren más posiciones que objetivos tenga la señal.** Una posición sin
+  TP propio no persigue nada: solo duplica exposición.
 - **El cupo del día se descuenta cuando el bróker CONFIRMA, no cuando la señal
   se acepta.** Si no, una señal que el bróker no puede operar —un símbolo que
   no cotiza, la cuenta desconectada— igual se come un lugar de

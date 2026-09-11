@@ -182,6 +182,25 @@ class Settings:
 
     # Lo que decia el .env. Puede ser AUTO, mientras que `trading_mode` es
     # siempre el modo ya resuelto. Se guarda para poder mostrar la diferencia.
+    # Cuantas posiciones abre UNA senal: una por take profit, en orden, hasta
+    # este tope. 1 es el comportamiento historico (solo el TP mas cercano).
+    #
+    # MT5 admite un solo TP por posicion, asi que perseguir los tres objetivos
+    # que manda un canal exige tres operaciones. Cada una lleva DEFAULT_LOT
+    # entero -el lote minimo no se puede partir-, de modo que subir esto
+    # MULTIPLICA la exposicion de cada senal. No es un ajuste cosmetico.
+    positions_per_signal: int = 1
+    # Cuantas posiciones pueden convivir en el mismo instrumento. Limita
+    # cuantas SENALES se aceptan, no el tamano de una: eso lo gobierna el de
+    # arriba, y esta regla se evalua antes de que exista ninguna posicion de la
+    # senal nueva. 1 es el comportamiento historico ('ya hay una posicion
+    # abierta en XAUUSD' rechaza la siguiente); 0 es sin tope.
+    max_positions_per_symbol: int = 1
+    # Un 'MOVER SL A <la entrada>' es una orden de breakeven escrita como
+    # numero. Con esto en true el stop va al precio al que el broker LLENO de
+    # verdad, no al numero del mensaje. Ver `engine._destino_del_stop`, que es
+    # donde estan las tres operaciones reales que lo motivaron.
+    breakeven_uses_real_entry: bool = True
     configured_mode: str = ""
 
     warnings: list[str] = field(default_factory=list)
@@ -221,6 +240,28 @@ class Settings:
         # de los mensajes siguientes hace cola. Sin verlo al arrancar, cambiarlo
         # en el .env es cambiar un numero a ciegas.
         return f"{self.ollama_model} ({rol}, max {self.ollama_timeout_seconds}s)"
+
+    def _describe_por_senal(self) -> str:
+        """Cuantas posiciones abre una senal y cuantas tolera por instrumento.
+
+        Va en el arranque porque `POSITIONS_PER_SIGNAL=3` triplica el tamano de
+        cada senal sin que MAX_LOT lo note: ese techo se aplica por orden, y las
+        tres ordenes son de DEFAULT_LOT cada una. Que el numero este a la vista
+        es lo que evita descubrirlo mirando el estado de cuenta.
+        """
+        if self.positions_per_signal == 1:
+            cuantas = "1 posicion (solo el TP mas cercano)"
+        else:
+            total = round(self.default_lot * self.positions_per_signal, 4)
+            cuantas = (
+                f"{self.positions_per_signal} posiciones, una por TP "
+                f"= {total} de lote por senal"
+            )
+        if self.max_positions_per_symbol:
+            tope = f"max {self.max_positions_per_symbol} por instrumento"
+        else:
+            tope = "sin tope por instrumento"
+        return f"{cuantas}, {tope}"
 
     def _describe_distancia(self) -> str:
         """Como se muestra el control contra el precio real al arrancar.
@@ -272,6 +313,7 @@ class Settings:
             f"Simbolos        : {', '.join(sorted(self.allowed_symbols))}",
             f"Max abiertas    : {self.max_open_trades}",
             f"Max senales/dia : {self.max_signals_per_day}",
+            f"Por senal       : {self._describe_por_senal()}",
             f"Exige SL / TP   : {self.require_stop_loss} / {self.require_take_profit}",
             f"Dist. al mercado: {self._describe_distancia()}",
             f"Tope perdida dia: "
@@ -371,10 +413,13 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         allowed_symbols={s.upper() for s in env.list("ALLOWED_SYMBOLS", _DEFAULT_SYMBOLS)},
         max_open_trades=env.int("MAX_OPEN_TRADES", 5),
         max_signals_per_day=env.int("MAX_SIGNALS_PER_DAY", 20),
+        positions_per_signal=max(1, env.int("POSITIONS_PER_SIGNAL", 1)),
+        max_positions_per_symbol=max(0, env.int("MAX_POSITIONS_PER_SYMBOL", 1)),
         require_stop_loss=env.bool("REQUIRE_STOP_LOSS", True),
         require_take_profit=env.bool("REQUIRE_TAKE_PROFIT", True),
         max_spread_from_entry_pct=env.float("MAX_SPREAD_FROM_ENTRY_PCT", 0.5),
         max_pending_distance_pct=env.float("MAX_PENDING_DISTANCE_PCT", 3.0),
+        breakeven_uses_real_entry=env.bool("BREAKEVEN_USES_REAL_ENTRY", True),
         allow_live_trading=allow_live,
         enable_ocr=env.bool("ENABLE_OCR", False),
         dry_run=env.bool("DRY_RUN", False),

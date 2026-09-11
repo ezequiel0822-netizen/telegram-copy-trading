@@ -59,6 +59,70 @@ def _vale_preguntarle_a_la_ia(event: SignalEvent | None, text: str) -> bool:
     return _parser_no_entendio(event)
 
 
+def _mismo_precio(a: float, b: float) -> bool:
+    """Si dos precios son literalmente el mismo numero.
+
+    A proposito NO tiene tolerancia. Sirve para reconocer un "MOVER SL A 4467"
+    como el breakeven de una entrada de 4467, y los dos numeros salen del mismo
+    canal con el mismo formato, asi que coinciden exacto. Aflojarlo tendria un
+    costo asimetrico: de mas, se pisa un stop que el canal pidio a proposito;
+    de menos, se cae en el comportamiento viejo, que es el literal. Errar para
+    el lado de obedecer el mensaje es el lado barato.
+    """
+    return abs(a - b) <= max(abs(a), abs(b), 1.0) * 1e-9
+
+
+def _entrada_efectiva(position, usar_precio_real: bool) -> float | None:
+    """A que precio esta de verdad esta posicion.
+
+    `entry_real` queda en None en paper trading y en las posiciones que se
+    abrieron antes de que el campo existiera, asi que siempre hay que poder
+    caer en `entry`.
+    """
+    if usar_precio_real and position.entry_real:
+        return position.entry_real
+    return position.entry
+
+
+def _destino_del_stop(position, event: SignalEvent, usar_precio_real: bool) -> float | None:
+    """A que precio va el stop de ESTA posicion. Hay tres casos.
+
+        "a breakeven", sin numero        -> la entrada de esta posicion
+        "MOVER SL A <la entrada>"        -> tambien es breakeven, escrito como
+                                            numero: es como habla este canal
+        "MOVER SL A <cualquier otro>"    -> literal, es un stop nuevo
+
+    EL SEGUNDO CASO ES EL QUE IMPORTA Y COSTO PLATA.
+
+    Una orden a mercado entra al precio de AHORA, no al del mensaje. Medido
+    sobre 12 operaciones reales del canal, la diferencia fue de 0.02% a 0.07%:
+    decimas de punto en oro. Mover el stop al numero del mensaje en vez de al
+    precio de llenado convierte el breakeven en una moneda al aire, y en esas
+    12 salio mal dos de cada tres veces:
+
+        SELL 4467, lleno en 4467.745, stop a 4467.0  ->  +0.57
+        BUY  4387, lleno en 4387.315, stop a 4387.0  ->  -0.42
+        SELL 4334, lleno en 4333.025, stop a 4334.0  ->  -1.08
+
+    Las tres cerraron "en breakeven" y dos perdieron. No es slippage: es que el
+    stop estaba puesto del lado equivocado del precio de entrada real, siempre
+    por la misma distancia que el spread.
+    """
+    if event.move_sl_to_breakeven:
+        return _entrada_efectiva(position, usar_precio_real)
+
+    pedido = event.stop_loss
+    if pedido is None:
+        return None
+    if (
+        usar_precio_real
+        and position.entry is not None
+        and _mismo_precio(pedido, position.entry)
+    ):
+        return _entrada_efectiva(position, usar_precio_real)
+    return pedido
+
+
 def _interpretacion_utilizable(event: SignalEvent) -> bool:
     """Si lo que devolvio la IA sirve para algo, aunque sea para avisar.
 
@@ -315,54 +379,131 @@ class Engine:
 
         take_profits = usable_take_profits(event)
         lot = self.settings.default_lot
-        trade_id = uuid.uuid4().hex[:12]
 
-        # 1) Paper trade primero, siempre.
-        paper = self.store.append_paper_trade({
-            "trade_id": trade_id,
-            "status": "PAPER_OPENED",
-            "mode": self.settings.trading_mode,
-            "lot": lot,
-            "symbol": event.symbol,
-            "side": event.side.value if event.side else None,
-            "order_type": event.order_type.value,
-            "entry": event.entry,
-            "entry_low": event.entry_low,
-            "entry_high": event.entry_high,
-            # Precio real del instrumento en el momento de la senal, o None si
-            # el broker no lo dio. Es lo que despues va a permitir calcular el
-            # P&L de los paper trades contra algo que existio de verdad, en vez
-            # de contra la entrada que dijo el mensaje.
-            "precio_mercado": precio_mercado,
-            "stop_loss": event.stop_loss,
-            "take_profits": take_profits,
-            "signal": event.to_dict(),
-        })
+        # Cuantas posiciones abre esta senal, y con que objetivo cada una.
+        #
+        # MT5 admite UN take profit por posicion. Perseguir los tres objetivos
+        # que manda este canal exige, por lo tanto, tres operaciones: no hay
+        # forma de expresarlo con una. Y el lote minimo (0.01) no se puede
+        # partir, asi que cada una lleva DEFAULT_LOT entero y la senal pasa a
+        # valer el triple. Eso es una decision de riesgo, no un detalle: por eso
+        # vive en POSITIONS_PER_SIGNAL, arranca en 1, y se imprime al arrancar.
+        objetivos = self._objetivos_de_apertura(take_profits)
 
-        # 2) Broker, solo si el modo lo permite.
-        order = await self._send_open(event, lot, take_profits)
+        aperturas: list[dict[str, Any]] = []
+        papers: list[dict[str, Any]] = []
+        fallidas: list[str] = []
+        ordenes_fallidas: list[dict[str, Any]] = []
 
-        # Si el broker rechazo, NO se registra la posicion. Registrarla dejaria
-        # una fantasma: existe en el estado y no en el broker, bloquea el
-        # simbolo por la regla de "ya hay una posicion abierta" y ocupa cupo de
-        # MAX_OPEN_TRADES, para siempre. El paper trade de arriba ya quedo
-        # escrito, asi que la senal no se pierde.
-        if order is not None and not order.ok:
-            self.store.append_event("apertura_fallida", {
+        for indice, objetivo in enumerate(objetivos, start=1):
+            trade_id = uuid.uuid4().hex[:12]
+            etiqueta = f"TP{indice}" if objetivo is not None else "sin TP"
+
+            # 1) Paper trade primero, siempre. Uno por posicion: son operaciones
+            #    distintas, con tickets distintos y desenlaces distintos.
+            #
+            #    `take_profits` va COMPLETO en cada uno, no solo el objetivo de
+            #    esta posicion. Es lo que permite que el informe diga "cerro en
+            #    TP2": compara el precio de cierre contra los tres. Cual se le
+            #    mando al broker queda aparte, en `tp_enviado`.
+            paper = self.store.append_paper_trade({
                 "trade_id": trade_id,
+                "status": "PAPER_OPENED",
+                "mode": self.settings.trading_mode,
+                "lot": lot,
+                "symbol": event.symbol,
+                "side": event.side.value if event.side else None,
+                "order_type": event.order_type.value,
+                "entry": event.entry,
+                "entry_low": event.entry_low,
+                "entry_high": event.entry_high,
+                # Precio real del instrumento en el momento de la senal, o None si
+                # el broker no lo dio. Es lo que despues va a permitir calcular el
+                # P&L de los paper trades contra algo que existio de verdad, en vez
+                # de contra la entrada que dijo el mensaje.
+                "precio_mercado": precio_mercado,
+                "stop_loss": event.stop_loss,
+                "take_profits": take_profits,
+                "tp_enviado": objetivo,
                 "signal": event.to_dict(),
-                "order": order.to_dict(),
             })
+            papers.append(paper)
+
+            # 2) Broker, solo si el modo lo permite.
+            order = await self._send_open(
+                event, lot, [objetivo] if objetivo is not None else []
+            )
+
+            # Si el broker rechazo, NO se registra la posicion. Registrarla dejaria
+            # una fantasma: existe en el estado y no en el broker, bloquea el
+            # simbolo por la regla de "ya hay una posicion abierta" y ocupa cupo de
+            # MAX_OPEN_TRADES, para siempre. El paper trade de arriba ya quedo
+            # escrito, asi que la senal no se pierde.
+            if order is not None and not order.ok:
+                fallidas.append(f"{etiqueta}: {order.reason}")
+                ordenes_fallidas.append(order.to_dict())
+                logger.error("El broker rechazo la apertura de %s (%s): %s",
+                             event.symbol, etiqueta, order.reason)
+                continue
+
+            # 3) Estado. El ticket es el del broker si hubo, o el sintetico del
+            #    paper broker, que igual sirve para atar cierres posteriores.
+            #
+            # El lote que se guarda es el que ACEPTO el broker, no el que se pidio.
+            # `_normalize_volume` lo ajusta al paso y al minimo del instrumento, asi
+            # que los dos numeros pueden diferir. Guardar el pedido dejaba al estado,
+            # a los avisos y sobre todo a la matematica de los cierres parciales
+            # trabajando sobre un lote que en MT5 no existe.
+            lot_abierto = order.lot if (order is not None and order.lot) else lot
+            position = OpenPosition(
+                trade_id=trade_id,
+                symbol=(event.symbol or "").upper(),
+                side=event.side.value if event.side else "",
+                lot=lot_abierto,
+                entry=event.entry,
+                stop_loss=event.stop_loss,
+                take_profits=take_profits,
+                opened_at=utc_now_iso(),
+                signal_message_id=event.telegram_message_id,
+                broker_ticket=order.ticket if order else None,
+                mode=self.settings.trading_mode,
+                # El precio al que el broker lleno DE VERDAD. Es lo que despues
+                # convierte un "MOVER SL A <la entrada>" en un breakeven real y
+                # no en una perdida del tamano del spread.
+                entry_real=order.price if order else None,
+            )
+            self.store.add_position(position)
+            aperturas.append({
+                "trade_id": trade_id,
+                "tp": objetivo,
+                "etiqueta": etiqueta,
+                "lot": lot_abierto,
+                # El dict es lo que va al registro; el objeto es lo que usa el
+                # aviso. Guardar solo uno obliga a reconstruir el otro.
+                "order": order.to_dict() if order else None,
+                "order_obj": order,
+                "paper_trade": paper,
+            })
+
+        # Ninguna entro: la senal no dejo una sola posicion abierta.
+        if not aperturas:
+            self.store.append_event("apertura_fallida", {
+                "signal": event.to_dict(),
+                # `order` en singular es lo que lee el informe; `orders` lleva
+                # todas cuando la senal intento abrir mas de una.
+                "order": ordenes_fallidas[0] if ordenes_fallidas else None,
+                "orders": ordenes_fallidas,
+            })
+            motivo = fallidas[0].split(": ", 1)[-1] if fallidas else "sin motivo"
             await self._notify(
-                f"NO se pudo abrir {event.symbol}: {order.reason}\n"
+                f"NO se pudo abrir {event.symbol}: {motivo}\n"
                 "La senal quedo registrada, pero no hay ninguna posicion."
             )
-            logger.error("El broker rechazo la apertura de %s: %s",
-                         event.symbol, order.reason)
             return {
                 "status": "apertura_fallida",
-                "reason": order.reason,
-                "paper_trade": paper,
+                "reason": motivo,
+                "paper_trade": papers[0] if papers else None,
+                "paper_trades": papers,
                 "signal": event.to_dict(),
             }
 
@@ -376,56 +517,81 @@ class Engine:
         # aun asi ocupaba un lugar del cupo, dejando sin lugar a las que si
         # podian operar. El paper trade ya quedo escrito unas lineas arriba,
         # asi que la senal no se pierde: lo unico que no se gasta es el cupo.
+        #
+        # Se cuenta UNA VEZ por senal, no una por posicion: tres posiciones
+        # persiguiendo los tres TP de un mismo mensaje son una sola senal.
         self.store.bump_daily_counter()
 
-        # 3) Estado. El ticket es el del broker si hubo, o el sintetico del
-        #    paper broker, que igual sirve para atar cierres posteriores.
-        #
-        # El lote que se guarda es el que ACEPTO el broker, no el que se pidio.
-        # `_normalize_volume` lo ajusta al paso y al minimo del instrumento, asi
-        # que los dos numeros pueden diferir. Guardar el pedido dejaba al estado,
-        # a los avisos y sobre todo a la matematica de los cierres parciales
-        # trabajando sobre un lote que en MT5 no existe.
-        lot_abierto = order.lot if (order is not None and order.lot) else lot
-        position = OpenPosition(
-            trade_id=trade_id,
-            symbol=(event.symbol or "").upper(),
-            side=event.side.value if event.side else "",
-            lot=lot_abierto,
-            entry=event.entry,
-            stop_loss=event.stop_loss,
-            take_profits=take_profits,
-            opened_at=utc_now_iso(),
-            signal_message_id=event.telegram_message_id,
-            broker_ticket=order.ticket if order else None,
-            mode=self.settings.trading_mode,
-        )
-        self.store.add_position(position)
         if event.telegram_message_id is not None:
             self.store.marcar_que_opero(event.telegram_chat_id, event.telegram_message_id)
 
+        # UN evento "aceptada" por senal, no uno por posicion: el informe cuenta
+        # estos eventos para decir cuantas senales se operaron, y escribir tres
+        # haria que un dia de 4 senales se informara como 12.
+        #
+        # Pero el desenlace se lee POR TICKET, asi que los tickets van todos en
+        # `orders`. `order` en singular se mantiene para no romper lo que ya
+        # estaba escrito en el registro de antes de este cambio.
         self.store.append_event("aceptada", {
-            "trade_id": trade_id,
+            "trade_id": aperturas[0]["trade_id"],
             "signal": event.to_dict(),
-            "order": order.to_dict() if order else None,
+            "order": aperturas[0]["order"],
+            "orders": [a["order"] for a in aperturas],
+            "fallidas": fallidas,
             "warnings": event.warnings,
         })
 
         await self._notify(
-            self._format_open(event, lot_abierto, take_profits, order, precio_mercado)
+            self._format_open(
+                event, aperturas[0]["lot"], take_profits,
+                aperturas[0]["order_obj"], precio_mercado,
+                aperturas=aperturas, fallidas=fallidas,
+            )
         )
         logger.info(
-            "Senal aceptada %s %s lote=%s ticket=%s",
-            event.side.value if event.side else "?", event.symbol, lot_abierto,
-            order.ticket if order else "-",
+            "Senal aceptada %s %s en %d posicion(es) lote=%s tickets=%s",
+            event.side.value if event.side else "?", event.symbol, len(aperturas),
+            aperturas[0]["lot"],
+            ", ".join(str((a["order"] or {}).get("ticket") or "-") for a in aperturas),
         )
         return {
             "status": "aceptada",
-            "trade_id": trade_id,
-            "paper_trade": paper,
-            "order": order.to_dict() if order else None,
+            "trade_id": aperturas[0]["trade_id"],
+            "paper_trade": aperturas[0]["paper_trade"],
+            "paper_trades": papers,
+            "order": aperturas[0]["order"],
+            "orders": [a["order"] for a in aperturas],
+            "fallidas": fallidas,
             "signal": event.to_dict(),
         }
+
+    def _objetivos_de_apertura(self, take_profits: list[float]) -> list[float | None]:
+        """Que take profit lleva cada posicion que va a abrir esta senal.
+
+        Devuelve una lista: un elemento por posicion. Con POSITIONS_PER_SIGNAL=1
+        -el valor de fabrica- es exactamente lo de siempre, el TP mas cercano y
+        una sola posicion.
+
+        No se abren mas posiciones que TPs tenga la senal: una cuarta posicion
+        sin objetivo propio no persigue nada, solo duplica exposicion.
+
+        Y no se pasa de MAX_OPEN_TRADES. `evaluate_open` ya lo miro, pero mira
+        si entra UNA; si quedaba un solo lugar libre y la senal quiere abrir
+        tres, el techo se cruzaria igual. Recortar aca lo mantiene siendo un
+        techo de verdad.
+        """
+        if not take_profits:
+            return [None]
+
+        cuantas = max(1, getattr(self.settings, "positions_per_signal", 1))
+        cuantas = min(cuantas, len(take_profits))
+
+        libres = self.settings.max_open_trades - len(self.store.open_positions())
+        if libres > 0:
+            cuantas = min(cuantas, libres)
+
+        return list(take_profits[:cuantas])
+
 
     async def _send_open(
         self, event: SignalEvent, lot: float, take_profits: list[float]
@@ -594,8 +760,12 @@ class Engine:
         descartadas: list[str] = []
         for position in targets:
             # "a breakeven" significa el precio de entrada de ESA posicion,
-            # por eso se resuelve por posicion y no una sola vez.
-            new_sl = position.entry if event.move_sl_to_breakeven else event.stop_loss
+            # por eso se resuelve por posicion y no una sola vez. Y ese precio
+            # es al que el broker lleno, no el que dijo el mensaje: ver
+            # `_destino_del_stop`, que es donde vive el motivo.
+            new_sl = _destino_del_stop(
+                position, event, self.settings.breakeven_uses_real_entry
+            )
             if new_sl is None:
                 # `evaluate_management` solo rechaza si NINGUNA posicion tiene
                 # entrada. Con una mezcla, las que no la tienen se salteaban en
@@ -661,7 +831,16 @@ class Engine:
             "signal": event.to_dict(), "orders": results,
             "fallidas": fallidas, "descartadas": descartadas,
         })
-        destino = "breakeven" if event.move_sl_to_breakeven else str(event.stop_loss)
+        # El aviso dice breakeven tambien cuando el canal lo escribio como numero:
+        # "SL movido a 4467" y "SL movido a breakeven" describen lo mismo, y el
+        # segundo es el que se entiende desde el telefono.
+        fue_breakeven = event.move_sl_to_breakeven or any(
+            p.entry is not None
+            and event.stop_loss is not None
+            and _mismo_precio(event.stop_loss, p.entry)
+            for p in targets
+        )
+        destino = "breakeven" if fue_breakeven else str(event.stop_loss)
         problemas = fallidas + descartadas
 
         # `results` incluye los rechazos, asi que contarlos como movidas decia
@@ -887,6 +1066,8 @@ class Engine:
         take_profits: list[float],
         order: OrderResult | None,
         precio_mercado: float | None = None,
+        aperturas: list[dict[str, Any]] | None = None,
+        fallidas: list[str] | None = None,
     ) -> str:
         lines = [
             f"SENAL ACEPTADA  {event.side.value if event.side else '?'} {event.symbol}",
@@ -907,6 +1088,24 @@ class Engine:
             lines.append(f"Broker  : {estado} - {order.reason}")
             if order.ticket:
                 lines.append(f"Ticket  : {order.ticket}")
+
+        # Con una sola posicion el aviso queda exactamente como siempre. Las
+        # lineas de abajo solo aparecen cuando la senal abrio varias, que es
+        # cuando hace falta ver el tamano total: tres veces el lote es tres
+        # veces el riesgo, y eso tiene que estar en el aviso y no en el estado
+        # de cuenta del dia siguiente.
+        if aperturas and len(aperturas) > 1:
+            total = round(sum(a["lot"] for a in aperturas), 4)
+            lines.append(f"Abiertas: {len(aperturas)} posiciones, {total} de lote en total")
+            for apertura in aperturas:
+                ticket = (apertura["order"] or {}).get("ticket") or "-"
+                lines.append(
+                    f"  {apertura['etiqueta']} -> {apertura['tp']}  "
+                    f"lote {apertura['lot']}  ticket {ticket}"
+                )
+        if fallidas:
+            lines.append("NO se pudieron abrir:")
+            lines.extend(f"  {f}" for f in fallidas)
         if event.warnings:
             lines.append("Avisos  : " + "; ".join(event.warnings))
         return "\n".join(lines)

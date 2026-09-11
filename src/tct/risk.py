@@ -85,8 +85,34 @@ def evaluate_open(
             f"Ya hay {open_count} operaciones abiertas (MAX_OPEN_TRADES={settings.max_open_trades})"
         )
 
-    if store.find_positions(symbol):
-        reasons.append(f"Ya hay una posicion abierta en {symbol}")
+    # Cuantas posiciones del mismo instrumento se toleran a la vez.
+    #
+    # Historicamente era 1 y estaba clavado: cualquier senal de XAUUSD se
+    # rechazaba mientras hubiera una abierta. Con una posicion por senal eso
+    # casi no molestaba, porque la operacion moria en el TP en minutos. Con
+    # POSITIONS_PER_SIGNAL=3 deja de ser cierto: la del TP mas lejano puede
+    # quedar viva horas, y mientras tanto bloquearia TODAS las senales de un
+    # canal que opera un solo instrumento.
+    #
+    # Por eso el tope es configurable y 0 significa sin tope. Lo que limita es
+    # cuantas SENALES entran, no el tamano de una: las posiciones que abre una
+    # sola senal las gobierna POSITIONS_PER_SIGNAL, y esta regla se evalua
+    # antes de que exista ninguna de ellas.
+    tope_por_simbolo = getattr(settings, "max_positions_per_symbol", 1)
+    if tope_por_simbolo:
+        abiertas_aca = len(store.find_positions(symbol))
+        if abiertas_aca >= tope_por_simbolo:
+            # En singular cuando es una. El motivo lo lee alguien que no
+            # programa, en una notificacion de Telegram, y "1 posicion(es)"
+            # es ruido gratis.
+            cuantas = (
+                "una posicion abierta" if abiertas_aca == 1
+                else f"{abiertas_aca} posiciones abiertas"
+            )
+            reasons.append(
+                f"Ya hay {cuantas} en {symbol} "
+                f"(MAX_POSITIONS_PER_SYMBOL={tope_por_simbolo})"
+            )
 
     # --- Tope de perdida diaria ------------------------------------------
     # Se evalua contra el balance con el que abrio el dia. Es la proteccion

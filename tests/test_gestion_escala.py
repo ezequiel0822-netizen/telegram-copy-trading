@@ -186,11 +186,17 @@ def test_sin_precio_de_mercado_no_se_inventa_un_descarte(tmp_path):
 
 def test_el_breakeven_tambien_se_verifica(tmp_path):
     """El breakeven usa la entrada guardada, que puede ser vieja o mal leida.
-    No hay motivo para confiar mas en ella que en un numero del mensaje."""
+    No hay motivo para confiar mas en ella que en un numero del mensaje.
+
+    Se ensucian LAS DOS entradas. `entry_real` es el precio que dio el broker y
+    por lo tanto no puede venir mal leido, pero queda en None en paper trading
+    y en las posiciones abiertas antes de que el campo existiera: ahi el
+    breakeven vuelve a apoyarse en `entry`, y este chequeo es la unica red.
+    """
     store, engine, _, _ = armar(tmp_path)
     send(engine, SENAL_ORO, message_id=1)
-    # Se ensucia la entrada registrada, como si hubiera entrado mal leida.
     store.open_positions()[0].entry = 444.0
+    store.open_positions()[0].entry_real = None
 
     resultado = send(engine, "Move SL to BE", message_id=2)
 
@@ -210,7 +216,9 @@ def test_un_breakeven_sin_entrada_no_se_saltea_en_silencio(tmp_path):
     send(engine, SENAL_EUR, message_id=2)
     for p in store.open_positions():
         if p.symbol == "EURUSD":
+            # Las dos: sin ninguna de las dos no hay a donde llevar el stop.
             p.entry = None
+            p.entry_real = None
 
     resultado = send(engine, "Move SL to BE", message_id=3)
 
@@ -220,14 +228,19 @@ def test_un_breakeven_sin_entrada_no_se_saltea_en_silencio(tmp_path):
 
 
 def test_un_move_sl_normal_sigue_funcionando(tmp_path):
-    """El caso feliz, que es el 99% de los mensajes."""
+    """El caso feliz, que es el 99% de los mensajes.
+
+    El stop queda en 4438.5 y no en 4438.0: el mensaje dijo 4438, pero la orden
+    a mercado entro al ASK, que en este fake es 4438.5. Breakeven es el precio
+    al que la posicion existe, no el que anuncio el canal.
+    """
     store, engine, _, _ = armar(tmp_path)
     send(engine, SENAL_ORO, message_id=1)
 
     resultado = send(engine, "Move SL to BE", message_id=2)
 
     assert resultado["status"] == "sl_movido"
-    assert store.open_positions()[0].stop_loss == 4438.0
+    assert store.open_positions()[0].stop_loss == 4438.5
 
 
 # --------------------------------------------------------------------------

@@ -846,6 +846,9 @@ Todo en el `.env`, y todo editable:
 | `REQUIRE_STOP_LOSS` | Rechazar señales sin SL. **Dejalo en true.** |
 | `MAX_SPREAD_FROM_ENTRY_PCT` | Cuánto puede alejarse la entrada del mensaje del precio **real** del instrumento, en órdenes a mercado. Ataja símbolos mal leídos y mensajes viejos. |
 | `MAX_PENDING_DISTANCE_PCT` | Lo mismo para órdenes pendientes, que se ponen lejos del mercado a propósito y necesitan más aire. |
+| `POSITIONS_PER_SIGNAL` | Cuántas operaciones abre **una** señal. Ver abajo. |
+| `MAX_POSITIONS_PER_SYMBOL` | Cuántas puede haber abiertas a la vez en el mismo instrumento. `0` = sin tope. |
+| `BREAKEVEN_USES_REAL_ENTRY` | Dónde poner el stop cuando el grupo manda "mover a breakeven". **Dejalo en true.** |
 
 Los dos últimos son los únicos que comparan la señal contra el mundo real. Si
 no sabés qué número poner, no adivines: dejá que el bot te lo diga con los
@@ -854,6 +857,78 @@ mensajes de tu propio grupo (solo lee cotizaciones, no opera):
 ```
 .\.venv\Scripts\python.exe -m tct simular --horas 2 --con-precios
 ```
+
+### Los tres take profit
+
+Si tu grupo manda **TP1, TP2 y TP3**, hay algo que conviene saber: MetaTrader
+acepta **un solo take profit por operación**. No es una limitación del bot.
+
+Entonces hay dos formas de trabajar:
+
+```
+POSITIONS_PER_SIGNAL=1   <- una operación, cierra en el TP1
+POSITIONS_PER_SIGNAL=3   <- tres operaciones, una por objetivo
+```
+
+Con `3`, cada señal abre tres operaciones iguales salvo por el objetivo: una
+apunta al TP1, otra al TP2, otra al TP3. Las tres comparten el mismo stop loss.
+Así, si el precio sigue de largo, cobrás los tres escalones en vez de solo el
+primero.
+
+> ### ⚠️ Esto triplica lo que arriesgás en cada señal
+>
+> El lote mínimo (0.01) **no se puede partir en tres**. Cada una de las tres
+> operaciones va con el lote entero:
+>
+> ```
+> POSITIONS_PER_SIGNAL=1  ->  0.01 por señal
+> POSITIONS_PER_SIGNAL=3  ->  0.03 por señal
+> ```
+>
+> No es "lo mismo repartido": es **tres veces más**. En una cuenta demo no
+> importa y sirve para juntar datos. Antes de pasar a dinero real, volvelo a 1
+> o bajá el `DEFAULT_LOT`.
+>
+> El bot te lo dice al arrancar, en la línea `Por senal`:
+>
+> ```
+> Por senal       : 3 posiciones, una por TP = 0.03 de lote por senal
+> ```
+
+**Lo otro que hay que tocar.** La operación que apunta al TP3 puede quedar
+abierta horas, porque es la que más lejos está. Y hay una regla que rechaza una
+señal nueva si ya hay una operación abierta en ese instrumento. Si tu grupo
+opera siempre lo mismo (oro, por ejemplo), esa operación colgada te bloquearía
+**todas** las señales que vengan después.
+
+Por eso, si ponés `POSITIONS_PER_SIGNAL=3`, poné también:
+
+```
+MAX_POSITIONS_PER_SYMBOL=0
+```
+
+Eso quita el tope. Si preferís un freno intermedio, poné un número: con `6`
+caben dos señales de oro a la vez y la tercera se rechaza.
+
+### El breakeven, y por qué el stop parecía mal puesto
+
+Cuando el grupo manda **"mover el SL a la entrada"** (muchos lo escriben
+directamente con el número: `MOVER SL A 4467`), el bot pone el stop en el
+precio al que **tu operación entró de verdad**, no en el número del mensaje.
+
+Parece un detalle y no lo es. Una orden a mercado entra al precio **de ese
+instante**, que nunca es exactamente el del mensaje: hay unas décimas de
+diferencia. Poniendo el stop en el número del mensaje, el "breakeven" quedaba
+del lado equivocado por esa distancia, y en vez de salir en cero salías
+perdiendo un poquito. Medido en operaciones reales: **perdía dos de cada tres**.
+
+```
+BREAKEVEN_USES_REAL_ENTRY=true    <- dejalo así
+```
+
+Si el grupo pide un stop en **cualquier otro número** que no sea la entrada, el
+bot lo respeta tal cual. Eso no se toca nunca: es un stop que alguien eligió a
+propósito.
 
 ### Si escribir esa ruta larga te cansa
 
@@ -941,6 +1016,19 @@ copialo aparte antes de reemplazar la carpeta, y pegalo de vuelta después.
 Sirve para comparar dos brókers con las mismas señales, o para tener la demo y
 la real conviviendo. Son **dos bots corriendo en paralelo**, cada uno en su
 ventana.
+
+> **El caso concreto de esta instalación: FxPro.** La cuenta que viene
+> funcionando es `MetaQuotes-Demo`, la demo genérica que MetaTrader crea sola.
+> Sirvió para validar todo, pero tiene dos límites: **no tiene cripto** —y el
+> grupo manda señales de BTCUSD, que hoy se pierden— y no dice nada sobre cómo
+> se va a comportar FxPro, que es donde vas a operar de verdad. Lo que cambia
+> entre brókers es justo lo delicado: los nombres de los instrumentos, el lote
+> mínimo y el modo de ejecución.
+>
+> La plantilla `.env.segunda.example` ya viene armada para eso: trae
+> `INSTANCE_NAME=fxpro`, `MT5_BROKER_PROFILE=fxpro` y BTCUSD en la lista de
+> instrumentos. Seguí los cuatro pasos de abajo y al final corré
+> `tct probar --env-file .env.segunda` para ver qué instrumentos expone.
 
 > **Por qué dos bots y no uno con dos cuentas.** MetaTrader admite **una cuenta
 > por terminal**, y el paquete de Python admite **una terminal por proceso**.

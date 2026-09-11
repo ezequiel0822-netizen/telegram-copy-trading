@@ -48,6 +48,15 @@ class OpenPosition:
     broker_ticket: int | None = None
     remaining_fraction: float = 1.0
     mode: str = "paper"
+    # `entry` es el numero que dijo el MENSAJE; `entry_real` es el precio al
+    # que el broker lleno de verdad. Son cosas distintas: una orden a mercado
+    # entra al precio de AHORA, no al del mensaje. En las senales medidas de
+    # este canal la diferencia fue de 0.02% a 0.07% -decimas de punto en oro-,
+    # y es justo lo que separa un breakeven de una perdida chica.
+    #
+    # Queda None en paper trading y en posiciones guardadas antes de que este
+    # campo existiera; quien lo use tiene que caer en `entry`.
+    entry_real: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -56,6 +65,7 @@ class OpenPosition:
             "side": self.side,
             "lot": self.lot,
             "entry": self.entry,
+            "entry_real": self.entry_real,
             "stop_loss": self.stop_loss,
             "take_profits": self.take_profits,
             "opened_at": self.opened_at,
@@ -73,6 +83,7 @@ class OpenPosition:
             side=data["side"],
             lot=float(data.get("lot") or 0),
             entry=data.get("entry"),
+            entry_real=data.get("entry_real"),
             stop_loss=data.get("stop_loss"),
             take_profits=list(data.get("take_profits") or []),
             opened_at=data.get("opened_at") or utc_now_iso(),
