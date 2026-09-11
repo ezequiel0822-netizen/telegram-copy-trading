@@ -44,6 +44,17 @@ es un sistema que se está montando: es uno que corre y del que hay datos.
   intervención. Una de ellas —SELL 4467— se puede seguir entera en el
   historial de MT5: entró en 4467.57, el `MOVER SL A 4467` le movió el stop a
   breakeven, y cerró ahí en **+0.57**.
+- **2026-09-11**: **segunda instancia contra FxPro demo, funcionando.** La
+  cadena completa se probó con una orden real (`GOLD` en 4345.74, abrir, mover
+  el stop dos veces, cerrar). Dos datos que salieron de ahí:
+  - **FxPro sí tiene cripto**, y el bot lo resolvió solo: llama `BITCOIN` a
+    BTCUSD, `ETHEREUM` a ETHUSD, `GOLD` a XAUUSD y `SILVER` a XAGUSD. Nada de
+    eso está en la tabla de `symbol_map.py` — sale de preguntarle a la
+    terminal, que es el camino principal y por eso funciona sin configurar.
+  - **El spread del oro es 35% más chico**: 0.15 contra 0.23 de
+    MetaQuotes-Demo, medidos con minutos de diferencia. Importa directo para
+    el breakeven (§5): menos spread es menos distancia entre la entrada del
+    mensaje y el precio real de llenado.
 
 ### La configuración de hoy
 
@@ -869,13 +880,14 @@ Ordenado por lo que más importa antes de dinero real.
    se contesta lo de §2, y de paso se sabe si el canal sirve —que es el
    objetivo de todo el proyecto—. **Correr el informe una vez no alcanza: son
    3 señales por día.**
-2. **Repetir contra FxPro lo que ya funcionó contra MetaQuotes-Demo.** La
-   cadena entera —conectar, resolver el símbolo, cotizar, normalizar el
-   volumen, `order_send`, cerrar— está probada contra una terminal real desde
-   el 2026-09-04. Pero el *filling mode*, los sufijos de los nombres y los
-   lotes mínimos son **exactamente** lo que cambia entre brókers, así que ese
-   resultado no se traslada. `tct probar` en las dos cuentas y comparar.
-   Además, FxPro es lo que destraba BTCUSD.
+2. **Repetir contra FxPro lo que ya funcionó contra MetaQuotes-Demo.** ✅
+   **Hecho el 2026-09-11.** `tct probar --operar --env-file .env.segunda` abrió
+   `GOLD` en 4345.74 (ticket 330645574), movió el stop, lo volvió a mover al
+   mismo precio —el `10025`, que cada bróker puede contestar distinto— y cerró.
+   El *filling mode* de FxPro es compatible.
+
+   Lo que queda de esto es **comparar las dos cuentas con las mismas señales**,
+   que es para lo que están las dos corriendo.
 3. **Volver a bajar las protecciones antes de dinero real.** Hoy están en
    `100 / 100` y sin freno diario (§2), que para demo está bien y para real no.
    Es un cambio de `.env`, pero es fácil de olvidar justo en el momento en que
