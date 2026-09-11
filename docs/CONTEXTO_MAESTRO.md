@@ -514,6 +514,15 @@ cuando alguien pide `tct informe --con-resultados`. Meterla en el motor
 "para tener el dato fresco" le agregaría una consulta al bróker a cada
 mensaje: dejaría de ser gratis y dejaría de cumplir lo que se pidió.
 
+**`cli.py` — `--env-file` se acepta ANTES y DESPUÉS del comando.** Argparse
+solo da lo primero; lo segundo (`tct probar --env-file .env.segunda`) es lo que
+sale solo de escribir, y es la forma que usaban la guía y la propia plantilla.
+Daba `unrecognized arguments`, que no dice que haya que mover el argumento de
+lugar. Se arregló agregando las opciones comunes a cada subcomando con
+`default=argparse.SUPPRESS`: **el `SUPPRESS` es lo que las hace convivir**, sin
+él el subcomando escribe su `None` encima del valor que puso el parser
+principal y la forma que sí andaba deja de andar.
+
 **`.gitattributes` — `.sh` en LF, `.bat`/`.ps1` en CRLF.** Un `.bat` con LF
 falla en `cmd.exe` de formas difíciles de diagnosticar.
 

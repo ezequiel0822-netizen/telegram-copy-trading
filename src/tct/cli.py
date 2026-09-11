@@ -1642,7 +1642,40 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
 # --------------------------------------------------------------------------
 
 
+def _opciones_comunes() -> argparse.ArgumentParser:
+    """Las opciones que valen para todos los comandos.
+
+    Se agregan al parser principal Y a cada subcomando, para que las dos
+    formas funcionen:
+
+        tct --env-file .env.segunda probar
+        tct probar --env-file .env.segunda
+
+    Argparse solo acepta la primera, y la segunda es la que sale sola de
+    escribir: uno piensa "quiero probar ESTE archivo", no "con este archivo,
+    quiero probar". El error de argparse -"unrecognized arguments"- no dice
+    que hay que moverlo de lugar, y quien no programa no tiene por que
+    deducirlo. Dos cuentas a la vez es justo cuando esta opcion se usa todo
+    el tiempo.
+
+    `SUPPRESS` es lo que hace que convivan: sin el, el subcomando escribiria
+    su default None encima del valor que ya habia puesto el parser principal,
+    y la forma que SI funcionaba dejaria de funcionar.
+    """
+    comunes = argparse.ArgumentParser(add_help=False)
+    comunes.add_argument(
+        "--env-file", default=argparse.SUPPRESS,
+        help="Ruta a un .env alternativo",
+    )
+    comunes.add_argument(
+        "-v", "--verbose", action="store_true", default=argparse.SUPPRESS,
+        help="Logs de debug",
+    )
+    return comunes
+
+
 def build_parser() -> argparse.ArgumentParser:
+    comunes = _opciones_comunes()
     parser = argparse.ArgumentParser(
         prog="tct",
         description="Copy trading de senales de Telegram a MT5 (paper primero).",
@@ -1651,12 +1684,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true", help="Logs de debug")
 
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("check", help="Diagnostico del entorno y la configuracion")
-    sub.add_parser("mt5", help="Lee tu cuenta de MetaTrader 5 y dice que poner en el .env")
-    sub.add_parser("chatid", help="Averigua el chat id para las notificaciones de Telegram")
+    sub.add_parser("check", parents=[comunes], help="Diagnostico del entorno y la configuracion")
+    sub.add_parser("mt5", parents=[comunes], help="Lee tu cuenta de MetaTrader 5 y dice que poner en el .env")
+    sub.add_parser("chatid", parents=[comunes], help="Averigua el chat id para las notificaciones de Telegram")
 
     simular = sub.add_parser(
-        "simular", help="Reproduce los mensajes reales de hoy contra el sistema")
+        "simular", parents=[comunes],
+        help="Reproduce los mensajes reales de hoy contra el sistema")
     simular.add_argument("--horas", type=int, default=24,
                          help="Cuantas horas hacia atras traer (por defecto 24)")
     simular.add_argument("--limite", type=int, default=200,
@@ -1670,21 +1704,23 @@ def build_parser() -> argparse.ArgumentParser:
                               "(solo lee cotizaciones, no opera)")
 
     probar = sub.add_parser(
-        "probar", help="Verifica la cadena completa contra MetaTrader 5")
+        "probar", parents=[comunes],
+        help="Verifica la cadena completa contra MetaTrader 5")
     probar.add_argument("--operar", action="store_true",
                         help="Abrir y cerrar una posicion real de prueba en la demo")
     probar.add_argument("--simbolo", default="XAUUSD",
                         help="Simbolo para la prueba de orden (por defecto XAUUSD)")
 
-    chats = sub.add_parser("chats", help="Lista tus chats de Telegram con sus IDs")
+    chats = sub.add_parser("chats", parents=[comunes], help="Lista tus chats de Telegram con sus IDs")
     chats.add_argument("--limit", type=int, default=60)
 
-    test = sub.add_parser("test", help="Prueba el parser con un mensaje")
+    test = sub.add_parser("test", parents=[comunes], help="Prueba el parser con un mensaje")
     test.add_argument("message", nargs="*", help="Mensaje (si se omite, se lee de stdin)")
 
-    sub.add_parser("status", help="Posiciones abiertas y estadisticas")
+    sub.add_parser("status", parents=[comunes], help="Posiciones abiertas y estadisticas")
     informe = sub.add_parser(
-        "informe", help="Que hizo el bot y POR QUE no opero algunas senales")
+        "informe", parents=[comunes],
+        help="Que hizo el bot y POR QUE no opero algunas senales")
     informe.add_argument(
         "--con-resultados", action="store_true", dest="con_resultados",
         help="Leer del historial de MetaTrader como termino cada operacion. "
@@ -1692,7 +1728,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     informe.add_argument("--horas", type=int, default=24,
                          help="Cuantas horas hacia atras mirar (por defecto 24)")
-    run = sub.add_parser("run", help="Arranca el bot")
+    run = sub.add_parser("run", parents=[comunes], help="Arranca el bot")
     run.add_argument(
         "--esperar-mt5", type=int, default=0, dest="esperar_mt5", metavar="SEGUNDOS",
         help="Reintentar la conexion con el broker hasta N segundos antes de "
