@@ -964,6 +964,33 @@ Te dice cómo está ahora y te deja activarlo o apagarlo. También busca
 MetaTrader en la máquina y te ofrece ponerlo en el inicio, que hace falta
 igual.
 
+**Si tenés dos cuentas**, el mismo script se ocupa de las dos. Detecta que
+existe `.env.segunda` y te lo dice:
+
+```
+  principal   apagado
+  segunda     apagado
+
+  Activar el arranque automatico de los 2 bots? [S/n]
+```
+
+Contestás **S** una vez y quedan los dos. Al prender la PC se van a abrir
+**dos ventanas negras**, una por bot — es lo esperado. Cerrar una para el bot
+de esa cuenta y deja la otra andando.
+
+Y cuando te ofrezca MetaTrader, **elegí los dos**: cada bot necesita el suyo
+abierto. Ahí se pueden escribir varios números separados por coma:
+
+```
+     [1] C:\Program Files\MetaTrader 5\terminal64.exe
+     [2] C:\Program Files\FxPro Markets MT5\terminal64.exe
+     [0] ninguno, los agrego a mano
+
+  Podes elegir varios separados por coma. Ejemplo:  1,2
+
+  Cual(es) agrego al inicio?  1,2
+```
+
 > **Por qué no alcanza con copiar el acceso directo del escritorio.** Ese apunta
 > a `iniciar_bot.bat`, que aborta si MetaTrader no está listo. Al iniciar
 > sesión, MetaTrader y el bot arrancan casi al mismo tiempo, pero MetaTrader

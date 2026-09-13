@@ -19,11 +19,28 @@ REM
 REM  Para apagar el arranque automatico:  scripts\autoarranque.bat
 REM ---------------------------------------------------------------------------
 chcp 65001 >nul
-title Bot de Trading (arranque automatico)
 cd /d "%~dp0.."
+
+REM  Con QUE configuracion arranca. Sin argumento es el .env de siempre, que
+REM  es como lo llamaba el acceso directo antes de que existiera la segunda
+REM  instancia: los accesos viejos siguen funcionando igual.
+REM
+REM     iniciar_auto.bat                  -> .env
+REM     iniciar_auto.bat .env.segunda     -> el segundo bot
+set "ARCHIVO=%~1"
+if "%ARCHIVO%"=="" set "ARCHIVO=.env"
+
+title Bot de Trading (arranque automatico - %ARCHIVO%)
 
 if not exist ".venv\Scripts\python.exe" (
     echo No se encontro el entorno virtual. Corre primero scripts\instalar.bat
+    pause
+    exit /b 1
+)
+
+if not exist "%ARCHIVO%" (
+    echo No existe el archivo de configuracion "%ARCHIVO%".
+    echo Revisa el acceso directo del inicio, o corre scripts\autoarranque.bat
     pause
     exit /b 1
 )
@@ -34,12 +51,13 @@ set INTENTOS=0
 echo.
 echo ==============================================================
 echo   Bot de Trading  -  arranque automatico
+echo   Configuracion: %ARCHIVO%
 echo ==============================================================
 echo   Espera hasta 5 minutos a que MetaTrader este listo.
 echo   Para pararlo del todo: cerra esta ventana.
 echo.
 
-".venv\Scripts\python.exe" -m tct run --esperar-mt5 300
+".venv\Scripts\python.exe" -m tct --env-file "%ARCHIVO%" run --esperar-mt5 300
 set CODIGO=%ERRORLEVEL%
 
 REM Codigo 1 = el bot decidio no arrancar (config mala, carpeta ocupada, o
@@ -58,7 +76,8 @@ set /a INTENTOS+=1
 if %INTENTOS% GEQ 20 (
     echo.
     echo   Se reinicio 20 veces. Algo esta mal de verdad: se corta el bucle
-    echo   para que puedas leer que pasa en logs\tct.log
+    echo   para que puedas leer que pasa en la carpeta logs\
+    echo   (el archivo exacto lo dice LOG_PATH de %ARCHIVO%)
     echo.
     pause
     exit /b 1
