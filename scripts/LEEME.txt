@@ -1,0 +1,94 @@
+===========================================================================
+  QUE ES CADA ARCHIVO DE ESTA CARPETA
+===========================================================================
+
+  Son muchos, pero en el dia a dia se usan CINCO. El resto son atajos, o
+  cosas que se usan una sola vez, o partes internas que llama otro script.
+
+  NO HACE FALTA BORRAR NINGUNO. Ocupan 1 KB cada uno, y varios se llaman
+  entre si: borrar uno puede romper el arranque automatico sin avisar.
+
+
+---------------------------------------------------------------------------
+  LOS QUE USAS
+---------------------------------------------------------------------------
+
+  consola.bat
+      Abre una ventana con el entorno del bot activado. Es donde se
+      escriben los comandos cortos:  tct check, tct informe, tct probar...
+      Si algun dia ves "No module named tct", es porque no estas en esta
+      ventana.
+
+  iniciar_bot.bat
+      Arranca el bot principal, con el .env de siempre.
+
+  iniciar_segunda.bat
+      Arranca el SEGUNDO bot, con .env.segunda. Solo si montaste dos
+      cuentas.
+
+  autoarranque.bat
+      Prende o apaga que los bots arranquen solos al encender la PC.
+      Te muestra como esta ahora y te deja cambiarlo.
+
+  instalar.bat
+      Instala todo. Se corre una vez, en una maquina nueva.
+
+
+---------------------------------------------------------------------------
+  ATAJOS  (hacen lo mismo que un comando, pero con doble clic)
+---------------------------------------------------------------------------
+
+  diagnostico.bat     =  tct check
+  probar_mt5.bat      =  tct probar
+  simular.bat         =  tct simular --horas 24
+  datos_mt5.bat       =  tct mt5
+
+  Si ya te acostumbraste a consola.bat, estos no te hacen falta. Estan
+  para quien prefiere no escribir nada.
+
+  instalar_ia.bat
+      Instala la IA local (Ollama) y baja el modelo. Una sola vez, y solo
+      si no la instalaste durante instalar.bat.
+
+
+---------------------------------------------------------------------------
+  PARTES INTERNAS  (no se abren a mano)
+---------------------------------------------------------------------------
+
+  autoarranque.ps1    el que hace el trabajo de autoarranque.bat
+  setup_windows.ps1   el que hace el trabajo de instalar.bat
+  iniciar_auto.bat    el que corre solo al prender la PC
+
+  OJO con iniciar_auto.bat: el acceso directo que queda en la carpeta de
+  inicio de Windows apunta aca. Si lo borras o lo renombras, los bots
+  dejan de arrancar solos y no te enteras hasta que falten operaciones.
+
+
+---------------------------------------------------------------------------
+  PARA MAS ADELANTE  (o para otra maquina)
+---------------------------------------------------------------------------
+
+  iniciar_real.bat        arranca con .env.real  (cuenta con dinero real)
+  diagnostico_real.bat    revisa la configuracion de .env.real
+  setup_mac.sh            instalador para macOS
+
+  Los tres son para situaciones que hoy no aplican. No molestan.
+
+
+===========================================================================
+  POR QUE NO CONVIENE BORRARLOS
+===========================================================================
+
+  1. Estan en el repositorio. Si los borras, "git pull" te va a dar
+     conflictos la proxima vez que alguno cambie, y la carpeta queda
+     marcada como modificada para siempre.
+
+  2. Varios se llaman entre si. El caso mas silencioso: autoarranque.ps1
+     crea un acceso directo que apunta a iniciar_auto.bat. Si ese archivo
+     no esta, el acceso queda apuntando a la nada y los bots no arrancan
+     al prender la PC. Nadie te avisa: simplemente no operan.
+
+  3. Pesan 1 KB cada uno.
+
+  El problema no es que sobren archivos, es no saber cual es cual. Para
+  eso esta este LEEME.
