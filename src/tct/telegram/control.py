@@ -271,6 +271,13 @@ class ControlTelegram:
         lineas += [
             f"Modo      : {self.settings.trading_mode}",
             f"Broker    : {self.engine.broker.name}",
+            # La cuenta, cuando el broker la sabe. Con dos bots corriendo es lo
+            # unico que distingue un /estado del otro: el resto de las lineas
+            # puede ser identico aunque esten apuntando a la misma terminal.
+            *(
+                [f"Cuenta    : {self.engine.broker.cuenta}"]
+                if getattr(self.engine.broker, "cuenta", "") else []
+            ),
             f"Abiertas  : {len(abiertas)}",
             f"Senales   : {self.store.signals_today()}/{self.settings.max_signals_per_day} hoy",
             f"Lote      : {self.settings.default_lot}",

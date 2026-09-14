@@ -247,6 +247,12 @@ class MT5NativeBroker(Broker):
             return False
 
         self._ready = True
+        # Se guarda para poder decirlo despues. Con DOS bots corriendo, "contra
+        # que cuenta esta este" es la pregunta que mas importa y la unica que
+        # no se puede contestar desde el telefono: /estado decia "Broker: mt5"
+        # en los dos, que es cierto y no sirve para nada. Si los dos apuntan a
+        # la misma terminal -un MT5_PATH mal puesto- nada avisa.
+        self.cuenta = f"{account.server} #{account.login}"
         logger.info("MT5 listo | servidor=%s balance=%s", account.server, account.balance)
         return True
 

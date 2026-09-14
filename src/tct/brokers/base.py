@@ -53,6 +53,10 @@ class Broker(ABC):
     """Contrato minimo que tiene que cumplir cualquier destino de ordenes."""
 
     name: str = "base"
+    # Contra que cuenta esta operando este broker, en una linea, para mostrarle
+    # a la persona. Queda vacio hasta conectar, y los brokers que no tienen
+    # cuenta -el de papel- lo dejan asi.
+    cuenta: str = ""
 
     @abstractmethod
     async def connect(self) -> bool:
