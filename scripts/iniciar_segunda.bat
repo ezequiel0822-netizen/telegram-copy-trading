@@ -29,7 +29,22 @@ if not exist ".env.segunda" (
     echo.
     echo   No existe el archivo .env.segunda
     echo.
-    echo   Crealo copiando la plantilla y completalo:
+    echo   Los archivos de configuracion que SI hay en esta carpeta:
+    echo.
+    REM  *env* y no .env*: el error mas comun es que el archivo haya quedado
+    REM  SIN el punto de adelante -Windows no deja crear nombres que empiecen
+    REM  con punto desde el Explorador-, y con el patron .env* ese caso, que
+    REM  es justo el que hay que mostrar, no aparecia en la lista.
+    REM  /a-d deja afuera las carpetas, o la lista incluiria .venv.
+    dir /b /a-d *env* 2>nul
+    echo.
+    echo   Si en esa lista ves uno con el contenido que completaste pero con
+    echo   otro nombre, NO lo copies de nuevo: renombralo, asi no perdes lo
+    echo   que ya escribiste adentro.
+    echo.
+    echo       ren "el-nombre-que-tiene" .env.segunda
+    echo.
+    echo   Y si no esta, crealo desde la plantilla:
     echo       copy .env.segunda.example .env.segunda
     echo.
     echo   Adentro esta explicado que cinco cosas TIENEN que ser distintas
