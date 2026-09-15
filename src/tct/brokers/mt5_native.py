@@ -684,6 +684,69 @@ class MT5NativeBroker(Broker):
             raw={"retcode": result.retcode, "sin_cambios": sin_cambios},
         )
 
+    async def modify_take_profit(
+        self, *, ticket: int | None, symbol: str, take_profit: float
+    ) -> OrderResult:
+        if not await self.is_ready():
+            return OrderResult(False, "modify_tp", "MT5 no esta conectado", symbol=symbol)
+        if ticket is None:
+            return OrderResult(False, "modify_tp", "Falta el ticket de la posicion", symbol=symbol)
+        return await asyncio.to_thread(self._modify_tp_sync, ticket, symbol, take_profit)
+
+    def _modify_tp_sync(self, ticket: int, symbol: str, take_profit: float) -> OrderResult:
+        """Espejo de `_modify_sl_sync`: el mismo pedido SLTP, con el STOP conservado.
+
+        MetaTrader no tiene un pedido para cambiar solo el TP: TRADE_ACTION_SLTP
+        lleva los dos, y un 0 en el que no se quiere tocar lo BORRA. Mover el TP
+        mandando sl=0 dejaria la posicion sin stop. Por eso se relee la posicion
+        y se manda el stop que tiene puesto.
+        """
+        mt5 = self._mt5
+        positions = mt5.positions_get(ticket=ticket)
+        if positions is None:
+            return OrderResult(
+                False, "modify_tp",
+                f"No se pudo consultar la posicion {ticket}: {mt5.last_error()}",
+                ticket=ticket, symbol=symbol,
+            )
+        if not positions:
+            return OrderResult(
+                False, "modify_tp",
+                f"La posicion {ticket} ya no existe en MT5: no hay take profit que mover.",
+                ticket=ticket, symbol=symbol, raw={"ausente": True},
+            )
+        position = positions[0]
+
+        result = mt5.order_send({
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": ticket,
+            "symbol": position.symbol,
+            "sl": float(position.sl or 0.0),  # conservar el stop vigente
+            "tp": float(take_profit),
+        })
+        if result is None:
+            return OrderResult(
+                False, "modify_tp", f"order_send devolvio None: {mt5.last_error()}",
+                ticket=ticket, symbol=symbol,
+            )
+        # 10025 igual que con el stop: el TP ya estaba en ese precio, que es la
+        # prueba de que el pedido se cumple, no un rechazo.
+        sin_cambios = result.retcode == getattr(mt5, "TRADE_RETCODE_NO_CHANGES", 10025)
+        ok = result.retcode == mt5.TRADE_RETCODE_DONE or sin_cambios
+
+        if sin_cambios:
+            reason = f"el take profit ya estaba en {take_profit}: no habia nada que cambiar"
+        elif ok:
+            reason = "TP modificado"
+        else:
+            reason = f"rechazado: retcode={result.retcode} {result.comment}"
+
+        return OrderResult(
+            ok=ok, action="modify_tp", reason=reason,
+            ticket=ticket, price=take_profit, symbol=symbol,
+            raw={"retcode": result.retcode, "sin_cambios": sin_cambios},
+        )
+
     # -- Auxiliares (portados de tradingalertaIA) --------------------------
 
     def _ensure_symbol(self, symbol: str):

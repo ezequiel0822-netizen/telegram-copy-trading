@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-11 · v1.2.1 · 528 tests · el último commit que describe
-es `dddfb13`, más este mismo cambio (que es el que trae la v1.2.1)
+Actualizado: 2026-09-14 · v1.3.0 · 572 tests · el último commit que describe
+es `e1eb73d`, más este mismo cambio (que es el que trae la v1.3.0)
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -505,6 +505,42 @@ afirman sobre el TEXTO FUENTE (`inspect.getsource`), no sobre comportamiento:
 se comprobó que parchear `Notifier.enabled()` para devolver `False` dejaba la
 suite entera en verde. `test_nivel_de_avisos.py` son los primeros que se ponen
 en rojo si los avisos dejan de salir.
+
+**`engine.py` — "mover TP" mueve SOLO la posición del TP1, y la reconoce por
+índice, no por precio.** Así lo pidió el usuario el 2026-09-14: si el canal
+manda "mover TP a X", se mueve el TP de la posición que persigue el TP1, las
+del TP2 y el TP3 se quedan, y queda registrado cuál se movió y por qué las
+otras no (evento `mover_tp`, con `movidas` y `no_movidas`). Con FxPro en
+`POSITIONS_PER_SIGNAL=1` se mueve siempre; con MetaQuotes en 3, una de tres.
+
+Tres cosas del diseño que no hay que "simplificar":
+
+- **Hace falta un verbo explícito** (`_MOVE_TP_RE`). Medido contra el parser:
+  `TP1 4450` a secas y `nuestro TP1 era 4436` —un relato— también traían un TP
+  con precio y llegaban como `UPDATE`. Si cualquier TP con precio moviera
+  posiciones, una crónica del canal llevaría el objetivo a un precio viejo.
+  Los verbos que describen al *precio* (sube, baja, lleva, toca) quedan
+  afuera, y también SET/UPDATE (`Update: TP1 4436 hit` es un resultado).
+- **`tp_indice` va separado de `tp_objetivo`.** El segundo cambia cuando se
+  mueve el TP; el primero no. Deducir "cuál es la del TP1" comparando precios
+  deja de funcionar después del primer movimiento. Las posiciones abiertas
+  antes de este campo tienen `tp_indice=None` y **no se mueven**: adivinar
+  podría mover la del TP3.
+- **Mover el TP conserva el stop** (`_modify_tp_sync` relee la posición y
+  manda su SL). MT5 no tiene un pedido para cambiar solo el TP: el SLTP lleva
+  los dos, y un 0 en el que no se quiere tocar lo borra.
+
+**Límite conocido, a propósito:** `Mover SL a 4432 y TP a 4450` mueve el stop
+pero NO el TP, porque entre el verbo y el TP hay un SL. `Mover TP a 4450 y SL a
+4432` sí mueve los dos. El caso que se quiere evitar es `Mover SL a 4432, TP se
+mantiene en 4440`, que pide dejar el TP quieto.
+
+**Y de paso apareció un bug de la v1.1.0, el de los tres TP:**
+`tickets_operados` leía solo `order` —la primera posición de cada señal— así
+que `tct informe --con-resultados` perdía en silencio la del TP2 y la del TP3,
+que es el dato para el que se abrieron. Ahora lee `aperturas` (ticket + TP de
+cada una), cae en `orders` para los eventos de los primeros días, y en `order`
+para los de antes.
 
 **`mt5_native.py` — el retcode `10025 NO_CHANGES` es ÉXITO.** MT5 lo devuelve
 cuando se le pide mover el stop al precio donde el stop **ya está**. O sea:

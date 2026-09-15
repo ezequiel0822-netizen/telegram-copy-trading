@@ -111,7 +111,7 @@ def resumir(
 
     gestion = Counter(
         e.get("kind", "") for e in eventos
-        if e.get("kind") in {"mover_sl", "cierre", "cierre_parcial",
+        if e.get("kind") in {"mover_sl", "mover_tp", "cierre", "cierre_parcial",
                              "cerrada_en_el_broker", "gestion_rechazada"}
     )
 
@@ -132,6 +132,18 @@ def resumir(
     # mensaje puede aparecer tres veces. Contar eventos infla el numero hasta
     # no coincidir con lo que uno ve en el grupo, que es contra lo que se
     # compara.
+    # Que paso con cada "mover TP": cuantas posiciones del TP1 se movieron, y
+    # por que no se movieron las demas. Se pidio que quede a la vista para
+    # poder revisar los datos despues.
+    tp_movidos = 0
+    tp_no_movidos: Counter[str] = Counter()
+    for e in eventos:
+        if e.get("kind") != "mover_tp":
+            continue
+        tp_movidos += len(e.get("movidas") or [])
+        for no in e.get("no_movidas") or []:
+            tp_no_movidos[_familia_de_no_movido(no.get("motivo", ""))] += 1
+
     ids = [f["message_id"] for f in detalle if f["message_id"] is not None]
     mensajes = len(set(ids)) + sum(1 for f in detalle if f["message_id"] is None)
 
@@ -143,8 +155,26 @@ def resumir(
         "detalle": detalle,
         "gestion": dict(gestion),
         "motivos_gestion": motivos_gestion.most_common(),
+        "tp_movidos": tp_movidos,
+        "tp_no_movidos": tp_no_movidos.most_common(),
         "distancias": _distancias(paper_trades or []),
     }
+
+
+def _familia_de_no_movido(motivo: str) -> str:
+    """Agrupa por que una posicion no se movio con un "mover TP".
+
+    Los motivos traen precios, y sin agruparlos cada uno sale en su propia
+    linea. Los de "persigue el TP2" y "persigue el TP3" se dejan tal cual: son
+    pocos y son justamente la distincion que interesa ver.
+    """
+    if "lado equivocado" in motivo:
+        return "el TP nuevo quedaba del lado equivocado del precio"
+    if "no da la escala" in motivo:
+        return "el TP nuevo no correspondia a ese instrumento"
+    if "no se sabe que TP perseguia" in motivo:
+        return "posicion abierta antes de registrar que TP perseguia"
+    return motivo
 
 
 def _familia_de_motivo_gestion(motivo: str) -> str:
@@ -164,6 +194,8 @@ def _familia_de_motivo_gestion(motivo: str) -> str:
         return "No se entendio que fraccion cerrar"
     if "MOVE_SL sin precio" in motivo:
         return "Un 'mover el stop' sin decir a que precio ni a breakeven"
+    if "MOVE_TP sin precio" in motivo:
+        return "Un 'mover el TP' sin decir a que precio"
     if "precio de entrada para calcular el breakeven" in motivo:
         return "Se pidio breakeven sin tener registrada la entrada"
     return motivo
@@ -227,30 +259,81 @@ def _distancias(paper_trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def tickets_operados(eventos: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Las senales que llegaron a abrir una posicion, con su ticket.
+    """Las posiciones que se llegaron a abrir: una fila por TICKET.
 
     El ticket vive en el evento "aceptada", que es el unico lugar durable
     donde queda: el paper trade se escribe ANTES de llamar al broker, asi que
     todavia no lo conoce, y el estado lo borra cuando la posicion cierra.
+
+    UNA FILA POR POSICION, NO POR SENAL. Con POSITIONS_PER_SIGNAL=3 una sola
+    senal abre tres posiciones, y antes esto leia solo `order` -la primera-:
+    la del TP2 y la del TP3 desaparecian del informe en silencio, que es
+    justamente el dato para el que se abrieron.
+
+    Cada fila dice que TP perseguia (`tp_indice`) y, si un "mover TP" la
+    toco, a donde se movio (`tp_movido_a`). El motivo por el que las demas no
+    se movieron queda en el evento "mover_tp".
     """
+    tp_movido: dict[Any, float] = {}
+    for evento in eventos:
+        if evento.get("kind") != "mover_tp":
+            continue
+        for movida in evento.get("movidas") or []:
+            if movida.get("ticket"):
+                tp_movido[movida["ticket"]] = movida.get("tp_nuevo")
+
     operadas = []
     for evento in eventos:
         if evento.get("kind") != "aceptada":
             continue
-        ticket = (evento.get("order") or {}).get("ticket")
-        if not ticket:
-            continue
         senal = evento.get("signal") or {}
-        operadas.append({
-            "ts": evento.get("ts"),
-            "ticket": ticket,
-            "symbol": senal.get("symbol"),
-            "side": senal.get("side"),
-            "entry": senal.get("entry"),
-            "stop_loss": senal.get("stop_loss"),
-            "take_profits": list(senal.get("take_profits") or []),
-        })
+        objetivos = list(senal.get("take_profits") or [])
+        for ticket, indice in _posiciones_del_evento(evento, objetivos):
+            operadas.append({
+                "ts": evento.get("ts"),
+                "ticket": ticket,
+                "symbol": senal.get("symbol"),
+                "side": senal.get("side"),
+                "entry": senal.get("entry"),
+                "stop_loss": senal.get("stop_loss"),
+                "take_profits": objetivos,
+                "tp_indice": indice,
+                "tp_movido_a": tp_movido.get(ticket),
+            })
     return operadas
+
+
+def _posiciones_del_evento(
+    evento: dict[str, Any], objetivos: list[float]
+) -> list[tuple[Any, int | None]]:
+    """(ticket, que TP persigue) de cada posicion que abrio una senal.
+
+    Tres formas de evento, de la mas nueva a la mas vieja:
+
+    - `aperturas`: dice el ticket Y el TP de cada una. Es la unica exacta
+      cuando fallo una posicion del medio y las otras entraron.
+    - `orders`: todos los tickets, en el orden en que se abrieron. Se asume
+      que el primero persigue el TP1, y asi; es cierto salvo que haya fallado
+      una del medio. Son las senales de los primeros dias con tres TP, y no
+      se pueden perder.
+    - `order`: el formato de antes de las tres posiciones, uno solo.
+    """
+    if evento.get("aperturas"):
+        return [
+            (a.get("ticket"), a.get("tp_indice"))
+            for a in evento["aperturas"] if a.get("ticket")
+        ]
+    if evento.get("orders"):
+        salida = []
+        for i, orden in enumerate(evento["orders"], start=1):
+            ticket = (orden or {}).get("ticket")
+            if ticket:
+                salida.append((ticket, i if i <= len(objetivos) else None))
+        return salida
+    ticket = (evento.get("order") or {}).get("ticket")
+    if not ticket:
+        return []
+    return [(ticket, 1 if objetivos else None)]
 
 
 def clasificar_desenlace(operada: dict[str, Any], desenlace: dict[str, Any]) -> str:
@@ -266,6 +349,13 @@ def clasificar_desenlace(operada: dict[str, Any], desenlace: dict[str, Any]) -> 
     entrada = operada.get("entry")
 
     if motivo == "tp":
+        # Si un "mover TP" la toco y cerro en el TP nuevo, se dice asi. Si no,
+        # `_que_tp` la compararia contra los TPs originales de la senal y la
+        # etiquetaria mal -o como un TP generico- justo en el dato que se pidio
+        # poder revisar.
+        movido = operada.get("tp_movido_a")
+        if movido and precio and _cerca(precio, movido, precio):
+            return f"TP{operada.get('tp_indice') or 1} movido"
         return _que_tp(operada, precio)
 
     if motivo == "sl":

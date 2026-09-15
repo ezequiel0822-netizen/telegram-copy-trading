@@ -193,12 +193,16 @@ class FakeMT5:
             if posicion is None:
                 return FakeResult(TRADE_RETCODE_INVALID_STOPS, comment="posicion inexistente")
             nuevo_sl = request.get("sl", 0.0)
-            if posicion.sl == nuevo_sl:
+            nuevo_tp = request.get("tp", 0.0)
+            if posicion.sl == nuevo_sl and posicion.tp == nuevo_tp:
                 # Sin esto el fake devolvia DONE y los tests del camino de
                 # mover el stop pasaban sin ejercitar el caso que importa.
+                # Se comparan LOS DOS: el pedido SLTP de MT5 lleva stop y TP
+                # juntos, y mover solo uno deja el otro como estaba.
                 return FakeResult(TRADE_RETCODE_NO_CHANGES,
                                   comment="No changes")
             posicion.sl = nuevo_sl
+            posicion.tp = nuevo_tp
             return FakeResult(TRADE_RETCODE_DONE)
 
         # Cerrar: un DEAL que nombra una posicion existente.

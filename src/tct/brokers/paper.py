@@ -135,3 +135,26 @@ class PaperBroker(Broker):
             symbol=symbol,
             raw={"simulated": True},
         )
+
+    async def modify_take_profit(
+        self, *, ticket: int | None, symbol: str, take_profit: float
+    ) -> OrderResult:
+        position = self._positions.get(ticket) if ticket else None
+        if ticket is not None and position is None:
+            return OrderResult(
+                ok=False, action="modify_tp",
+                reason=f"El ticket simulado {ticket} ya no existe",
+                ticket=ticket, symbol=symbol, raw={"ausente": True},
+            )
+        if position is not None:
+            position["take_profit"] = take_profit
+
+        return OrderResult(
+            ok=True,
+            action="modify_tp",
+            reason=f"simulado (TP -> {take_profit})",
+            ticket=ticket,
+            price=take_profit,
+            symbol=symbol,
+            raw={"simulated": True},
+        )

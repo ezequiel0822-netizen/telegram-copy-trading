@@ -1274,6 +1274,7 @@ def cmd_informe(args: argparse.Namespace) -> int:
             "cierre_parcial": "cierres parciales",
             "cerrada_en_el_broker": "se cerraron solas (TP, SL o a mano)",
             "gestion_rechazada": "gestion que no se pudo aplicar",
+            "mover_tp": "mensajes de mover el TP",
         }
         for kind, cuantas in r["gestion"].items():
             print(f"      {cuantas:>3}  {etiquetas.get(kind, kind)}")
@@ -1283,6 +1284,15 @@ def cmd_informe(args: argparse.Namespace) -> int:
         # distinguirlo de un problema de verdad.
         for motivo, veces in r["motivos_gestion"]:
             print(f"\n           {veces}x  {motivo}")
+
+        # Que paso con cada "mover TP". Se pidio explicitamente que quede a la
+        # vista cual se movio y cual no: solo se mueve la posicion del TP1, y
+        # las del TP2 y el TP3 se quedan donde estaban.
+        if r.get("tp_movidos") or r.get("tp_no_movidos"):
+            print()
+            print(f"      TP movidos: {r.get('tp_movidos', 0)}  (solo la posicion del TP1)")
+            for motivo, veces in r.get("tp_no_movidos", []):
+                print(f"      {veces:>3}  sin mover: {motivo}")
 
     _informar_distancias(r["distancias"], settings)
 
@@ -1344,12 +1354,18 @@ async def _informar_desenlaces(settings: Settings, eventos: list) -> None:
     print()
     for fila in filas:
         hora = str(fila.get("ts", ""))[11:16]
+        # Que TP perseguia cada posicion, y si un "mover TP" la toco. Con tres
+        # posiciones por senal, sin esta columna las tres filas se ven iguales.
+        persigue = f"TP{fila['tp_indice']}" if fila.get("tp_indice") else "-"
+        movido = (f"  (TP movido a {fila['tp_movido_a']})"
+                  if fila.get("tp_movido_a") is not None else "")
         if fila["resultado"] is None:
-            print(f"      {hora}  {fila['symbol']:<8} sigue abierta o sin historial")
+            print(f"      {hora}  {fila['symbol']:<8} {persigue:<4} "
+                  f"sigue abierta o sin historial{movido}")
             continue
-        print(f"      {hora}  {fila['symbol']:<8} {fila['side']:<5} "
+        print(f"      {hora}  {fila['symbol']:<8} {fila['side']:<5} {persigue:<4} "
               f"entrada={fila['entry']:<10} cerro={fila.get('precio_cierre')} "
-              f"{fila['resultado']:<14} {fila.get('profit'):+.2f}")
+              f"{fila['resultado']:<14} {fila.get('profit'):+.2f}{movido}")
 
     r = resumir_desenlaces(filas)
     if not r["conocidos"]:

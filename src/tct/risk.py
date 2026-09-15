@@ -353,4 +353,7 @@ def evaluate_management(
         if event.move_sl_to_breakeven and all(p.entry is None for p in targets):
             return RiskDecision(False, ["No hay precio de entrada para calcular el breakeven"]), targets
 
+    if event.event_type is EventType.MOVE_TP and not event.take_profits:
+        return RiskDecision(False, ["MOVE_TP sin precio"]), targets
+
     return RiskDecision(True), targets

@@ -28,7 +28,7 @@ from tct.risk import (
     usable_take_profits,
 )
 from tct.signals.models import EventType, SignalEvent, Side
-from tct.signals.parser import es_descarte_deliberado, parse_signal
+from tct.signals.parser import es_descarte_deliberado, parse_signal, pide_mover_tp
 from tct.store import OpenPosition, Store, utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -322,6 +322,7 @@ class Engine:
             EventType.CLOSE: self._handle_close,
             EventType.PARTIAL_CLOSE: self._handle_partial_close,
             EventType.MOVE_SL: self._handle_move_sl,
+            EventType.MOVE_TP: self._handle_move_tp,
             EventType.UPDATE: self._handle_update,
         }
         handler = handlers.get(event.event_type)
@@ -336,6 +337,17 @@ class Engine:
 
         try:
             result = await handler(event)
+            # Un mismo mensaje puede pedir las dos cosas ("Mover TP a 4450 y SL
+            # a 4432"). El parser lo clasifica como MOVE_SL -el stop es lo que
+            # protege-, y aca se atiende tambien el TP. Solo con un verbo
+            # apuntando al TP: `pide_mover_tp` no toma "TP se mantiene en 4440"
+            # como pedido de moverlo.
+            if (
+                event.event_type is EventType.MOVE_SL
+                and event.take_profits
+                and pide_mover_tp(event.raw_message or "")
+            ):
+                result = {**result, "mover_tp": await self._handle_move_tp(event)}
         except Exception:
             logger.exception("Error procesando %s", event.event_type.value)
             self.store.append_event("error", {"signal": event.to_dict()})
@@ -478,12 +490,18 @@ class Engine:
                 # convierte un "MOVER SL A <la entrada>" en un breakeven real y
                 # no en una perdida del tamano del spread.
                 entry_real=order.price if order else None,
+                # Que TP de la senal persigue esta posicion y el que tiene
+                # puesto. Hace falta para "mover TP": se mueve solo la del TP1,
+                # y sin este dato no hay forma de saber cual es.
+                tp_indice=indice if objetivo is not None else None,
+                tp_objetivo=objetivo,
             )
             self.store.add_position(position)
             aperturas.append({
                 "trade_id": trade_id,
                 "tp": objetivo,
                 "etiqueta": etiqueta,
+                "indice": indice if objetivo is not None else None,
                 "lot": lot_abierto,
                 # El dict es lo que va al registro; el objeto es lo que usa el
                 # aviso. Guardar solo uno obliga a reconstruir el otro.
@@ -547,6 +565,17 @@ class Engine:
             "orders": [a["order"] for a in aperturas],
             "fallidas": fallidas,
             "warnings": event.warnings,
+            # Ticket y TP de cada posicion. `orders` tiene los tickets en orden,
+            # pero si falla una del medio ya no se sabe cual persigue que TP; el
+            # informe usa esto para decir TP1, TP2 o TP3 sin adivinar.
+            "aperturas": [
+                {
+                    "ticket": (a["order"] or {}).get("ticket"),
+                    "tp_indice": a["indice"],
+                    "tp": a["tp"],
+                }
+                for a in aperturas
+            ],
         })
 
         # Una apertura que entro A MEDIAS avisa por su cuenta.
@@ -893,6 +922,134 @@ class Engine:
 
         await self._notify(f"SL movido a {destino} en {movidas} posicion(es)")
         return {"status": "sl_movido", "count": movidas, "orders": results}
+
+    async def _handle_move_tp(self, event: SignalEvent) -> dict[str, Any]:
+        """Mueve el take profit, pero SOLO de las posiciones que persiguen el TP1.
+
+        LA REGLA, COMO SE PIDIO
+        -----------------------
+        Si el canal manda "mover TP a X", se mueve el TP de la posicion que
+        persigue el TP1, y las del TP2 y el TP3 se quedan donde estaban. Y todo
+        queda registrado -cual se movio, de donde a donde, y por que las otras
+        no- para poder revisarlo en el informe.
+
+        Con POSITIONS_PER_SIGNAL=1 hay una sola posicion por senal y es la del
+        TP1, asi que se mueve. Con 3, se mueve una de las tres.
+
+        LO QUE NO SE MUEVE AUNQUE PERSIGA EL TP1
+        ----------------------------------------
+        - Una posicion abierta antes de que existiera `tp_indice`: no se sabe
+          que TP perseguia, y adivinar podria mover el de la del TP3.
+        - Un TP del lado equivocado: en un BUY va arriba del precio, en un SELL
+          abajo. MT5 lo rechazaria igual, pero asi queda registrado con
+          palabras y no con un numero de retcode.
+        - Un TP que no da la escala del instrumento, como con el stop: un
+          "mover TP a 4450" sin simbolo le llegaria tambien a un EURUSD.
+        """
+        decision, targets = evaluate_management(self.settings, self.store, event)
+        if not decision.ok:
+            self.store.append_event(
+                "gestion_rechazada", {"signal": event.to_dict(), "reasons": decision.reasons}
+            )
+            return {"status": "rechazada", "reasons": decision.reasons}
+
+        nuevo_tp = event.take_profits[0]
+        movidas: list[dict[str, Any]] = []
+        no_movidas: list[dict[str, Any]] = []
+        fallidas: list[str] = []
+        results: list[dict[str, Any]] = []
+
+        for position in targets:
+            ficha = {
+                "trade_id": position.trade_id,
+                "ticket": position.broker_ticket,
+                "symbol": position.symbol,
+                "tp_indice": position.tp_indice,
+                "tp_actual": position.tp_objetivo,
+            }
+
+            if position.tp_indice is None:
+                no_movidas.append({**ficha, "motivo": (
+                    "no se sabe que TP perseguia (se abrio antes de que se "
+                    "registrara ese dato)"
+                )})
+                continue
+            if position.tp_indice != 1:
+                no_movidas.append({**ficha, "motivo": (
+                    f"persigue el TP{position.tp_indice}: solo se mueve el TP1"
+                )})
+                continue
+
+            precio = await self._precio_de_mercado(position.symbol)
+            if stop_fuera_de_escala(nuevo_tp, precio) is not None:
+                no_movidas.append({**ficha, "motivo": (
+                    f"el TP {nuevo_tp} no da la escala del precio de "
+                    f"{position.symbol} ({precio})"
+                )})
+                continue
+            if precio is not None:
+                compra = (position.side or "").upper() == "BUY"
+                if (compra and nuevo_tp <= precio) or (not compra and nuevo_tp >= precio):
+                    lado = "arriba" if compra else "abajo"
+                    no_movidas.append({**ficha, "motivo": (
+                        f"el TP {nuevo_tp} quedaria del lado equivocado: en un "
+                        f"{position.side} tiene que ir {lado} del precio ({precio})"
+                    )})
+                    continue
+
+            order = await self.broker.modify_take_profit(
+                ticket=position.broker_ticket, symbol=position.symbol, take_profit=nuevo_tp
+            )
+            results.append(order.to_dict())
+            if not order.ok:
+                if self._reconciliar_ausente(position, order):
+                    no_movidas.append({**ficha, "motivo": (
+                        "ya no existia en el broker, se saco del estado"
+                    )})
+                    continue
+                logger.error("No se pudo mover el TP de %s: %s", position.symbol, order.reason)
+                fallidas.append(f"{position.symbol} TP1: {order.reason}")
+                continue
+
+            anterior = position.tp_objetivo
+            position.tp_objetivo = nuevo_tp
+            movidas.append({**ficha, "tp_anterior": anterior, "tp_nuevo": nuevo_tp})
+            self.store.append_paper_trade({
+                "trade_id": position.trade_id,
+                "status": "PAPER_TP_MOVED",
+                "symbol": position.symbol,
+                "tp_indice": position.tp_indice,
+                "tp_anterior": anterior,
+                "tp_nuevo": nuevo_tp,
+                "order": order.to_dict(),
+                "signal": event.to_dict(),
+            })
+
+        self.store.append_event("mover_tp", {
+            "signal": event.to_dict(),
+            "tp_nuevo": nuevo_tp,
+            "movidas": movidas,
+            "no_movidas": no_movidas,
+            "fallidas": fallidas,
+            "orders": results,
+        })
+
+        if fallidas:
+            await self._notify(
+                f"TP1 a {nuevo_tp}: NO se pudo mover en:\n"
+                + "\n".join(f"  {f}" for f in fallidas)
+                + "\nEsas posiciones siguen con el TP anterior.",
+                problema=True,
+            )
+            return {"status": "tp_movido_parcial", "movidas": movidas,
+                    "no_movidas": no_movidas, "fallidas": fallidas, "orders": results}
+
+        await self._notify(
+            f"TP1 movido a {nuevo_tp} en {len(movidas)} posicion(es). "
+            f"Sin mover: {len(no_movidas)}."
+        )
+        return {"status": "tp_movido", "movidas": movidas,
+                "no_movidas": no_movidas, "orders": results}
 
     async def _handle_update(self, event: SignalEvent) -> dict[str, Any]:
         """Modificacion suelta (SL/TP sin lado).

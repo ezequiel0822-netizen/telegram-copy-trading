@@ -109,6 +109,22 @@ class Broker(ABC):
     ) -> OrderResult:
         ...
 
+    async def modify_take_profit(
+        self, *, ticket: int | None, symbol: str, take_profit: float
+    ) -> OrderResult:
+        """Mueve el take profit de una posicion abierta.
+
+        No es abstracto a proposito: los brokers que no lo implementan -hoy,
+        MetaApi- contestan que no saben hacerlo y el motor lo registra como
+        un fallo, en vez de reventar. Mover el TP es una comodidad; no poder
+        hacerlo no puede tumbar al bot.
+        """
+        return OrderResult(
+            False, "modify_tp",
+            f"El broker '{self.name}' no sabe mover el take profit",
+            ticket=ticket, symbol=symbol,
+        )
+
     async def account_equity(self) -> float | None:
         """Valor actual de la cuenta, o None si no se puede leer.
 

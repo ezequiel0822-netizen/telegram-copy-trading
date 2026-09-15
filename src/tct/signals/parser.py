@@ -97,6 +97,27 @@ _MOVE_SL_RE = re.compile(
     r"|\b(?:SL|STOP\s*LOSS)\b[^\n]{0,20}?\b(?:TO\s+)?(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN|ENTRY|ENTRADA)\b"
     r"|\b(?:BREAK\s*EVEN|BREAKEVEN)\b"
 )
+# Pedido EXPLICITO de mover un take profit: un verbo de accion apuntando a un TP.
+#
+# Hace falta el verbo; no alcanza con que aparezca "TP 4450". Medido contra el
+# parser: "TP1 4450" a secas y "nuestro TP1 era 4436" -un RELATO- tambien traen
+# un TP con precio. Si cualquier TP con precio moviera posiciones, una cronica
+# del canal te llevaria el objetivo a un precio viejo.
+#
+# Los verbos que NO estan, a proposito: SUBE, BAJA, LLEVA, MUEVE, LLEGA, TOCA.
+# Describen al PRECIO ("el precio sube hasta el TP 4450"), no piden nada. Y
+# tampoco SET ni UPDATE: "Update: TP1 4436 hit" es un resultado.
+#
+# Entre el verbo y el TP no puede haber un SL o STOP: "Mover SL a 4432, TP se
+# mantiene en 4440" pide mover el STOP, y leerlo como "mover el TP a 4440"
+# pisaria un objetivo que el canal dijo que se queda.
+_MOVE_TP_RE = re.compile(
+    r"\b(?:MOVE|MOVING|MOVER|MOVEMOS|MOVAMOS|MUEVAN|CHANGE|CAMBIAR|CAMBIA|CAMBIEN|"
+    r"CAMBIAMOS|MODIFY|MODIFICAR|MODIFICA|MODIFICAMOS|ADJUST|AJUSTAR|AJUSTA|"
+    r"AJUSTAMOS|ACTUALIZAR|ACTUALIZA|ACTUALIZAMOS|PONER|PONEMOS)\b"
+    r"(?:(?!\b(?:SL|STOP)\b)[^\n]){0,30}?"
+    r"\b(?:TP\s*\d?|TAKE\s*PROFIT)\b"
+)
 # Marcas de que el mensaje CUENTA algo que ya paso, en vez de pedir algo.
 #
 # Es el filtro mas importante del parser. Los canales postean recaps todo el
@@ -169,6 +190,31 @@ def es_descarte_deliberado(text: str) -> bool:
     return bool(
         _NARRATIVA_RE.search(normalizado) or _RESULTADO_RE.search(normalizado)
     )
+
+
+def pide_mover_tp(text: str) -> bool:
+    """True si el mensaje pide, con un verbo, mover un take profit.
+
+    Lo usa el motor para un caso puntual: un mensaje que pide mover el stop Y
+    el TP sale clasificado como MOVE_SL, y hay que saber si ademas corresponde
+    tocar el TP. Recibe el texto CRUDO, igual que `es_descarte_deliberado`.
+    """
+    return _pide_mover_tp_normalizado(_normalize(text))
+
+
+def _pide_mover_tp_normalizado(normalizado: str) -> bool:
+    """El chequeo sobre texto ya normalizado (mayusculas, sin acentos).
+
+    Ademas del verbo descarta relatos y resultados. `_RESULTADO_RE` se mira sin
+    la frase TAKE PROFIT, porque PROFIT es una de sus marcas: sin sacarla, un
+    "mover el take profit a 4450" legitimo quedaria bloqueado.
+    """
+    if not _MOVE_TP_RE.search(normalizado):
+        return False
+    if _NARRATIVA_RE.search(normalizado):
+        return False
+    sin_take_profit = re.sub(r"\bTAKE\s*PROFITS?\b", " ", normalizado)
+    return not _RESULTADO_RE.search(sin_take_profit)
 
 
 _BREAKEVEN_RE = re.compile(r"\b(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN)\b")
@@ -540,6 +586,7 @@ def _classify(
     has_partial = bool(_PARTIAL_RE.search(text))
     has_close = bool(_CLOSE_RE.search(text))
     has_move_sl = bool(_MOVE_SL_RE.search(text))
+    has_move_tp = _pide_mover_tp_normalizado(text)
 
     # --- 1) Gestion pura -------------------------------------------------
     # Va primero, pero SOLO cuando el mensaje no trae una senal completa. Esa
@@ -557,6 +604,10 @@ def _classify(
             return EventType.CLOSE
         if has_move_sl:
             return EventType.MOVE_SL
+        # Un "mover TP a 4450" explicito. Va despues del stop: si un mensaje
+        # pide las dos cosas, el motor atiende el TP aparte (ver el despacho).
+        if has_move_tp and take_profits:
+            return EventType.MOVE_TP
 
     # --- 2) Recaps y resultados ------------------------------------------
     # Va DESPUES de la gestion y ANTES de la apertura. Un recap repite la

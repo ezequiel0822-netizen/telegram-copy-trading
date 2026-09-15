@@ -57,6 +57,18 @@ class OpenPosition:
     # Queda None en paper trading y en posiciones guardadas antes de que este
     # campo existiera; quien lo use tiene que caer en `entry`.
     entry_real: float | None = None
+    # Que TP de la senal persigue esta posicion (1, 2, 3...) y cual tiene
+    # puesto ahora. Con POSITIONS_PER_SIGNAL=3 una senal abre tres posiciones
+    # iguales salvo por el objetivo, y un "mover TP" tiene que tocar solo la
+    # del TP1: sin `tp_indice` no hay forma de saber cual es.
+    #
+    # `tp_objetivo` cambia cuando se mueve el TP; `tp_indice` no. Por eso van
+    # separados, en vez de deducir el indice comparando precios.
+    #
+    # Quedan en None en las posiciones abiertas antes de que existieran, y el
+    # motor NO las mueve: adivinar podria llevarle el TP a la del TP3.
+    tp_indice: int | None = None
+    tp_objetivo: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +85,8 @@ class OpenPosition:
             "broker_ticket": self.broker_ticket,
             "remaining_fraction": self.remaining_fraction,
             "mode": self.mode,
+            "tp_indice": self.tp_indice,
+            "tp_objetivo": self.tp_objetivo,
         }
 
     @classmethod
@@ -91,6 +105,8 @@ class OpenPosition:
             broker_ticket=data.get("broker_ticket"),
             remaining_fraction=float(data.get("remaining_fraction", 1.0)),
             mode=data.get("mode") or "paper",
+            tp_indice=data.get("tp_indice"),
+            tp_objetivo=data.get("tp_objetivo"),
         )
 
 

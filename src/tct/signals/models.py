@@ -19,6 +19,7 @@ class EventType(str, Enum):
     CLOSE = "CLOSE"                  # cerrar del todo
     PARTIAL_CLOSE = "PARTIAL_CLOSE"  # cerrar una fraccion (ej. "close 50%")
     MOVE_SL = "MOVE_SL"              # mover stop loss (incluye a breakeven)
+    MOVE_TP = "MOVE_TP"              # mover el take profit (solo el del TP1)
     UPDATE = "UPDATE"                # modificar TPs / SL sin cerrar
     UNKNOWN = "UNKNOWN"              # parece senal pero no se entendio
 
