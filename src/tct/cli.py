@@ -258,6 +258,12 @@ def cmd_mt5(args: argparse.Namespace) -> int:
         print(f"  Login      : {cuenta.login}")
         print(f"  Servidor   : {cuenta.server}")
         print(f"  Balance    : {cuenta.balance} {cuenta.currency}")
+        # El apalancamiento decide cuantas posiciones entran en una cuenta
+        # chica: con 1:20 una posicion de oro de 0.01 pide unos 214 de margen,
+        # con 1:500 unos 9. Sin verlo, MAX_OPEN_TRADES se elige a ciegas.
+        apalancamiento = getattr(cuenta, "leverage", None)
+        if apalancamiento:
+            print(f"  Apalanc.   : 1:{apalancamiento}")
         tipo = "DEMO" if es_demo else "REAL" if es_demo is False else "desconocido"
         print(f"  Tipo       : {tipo}")
 
@@ -287,11 +293,20 @@ def cmd_mt5(args: argparse.Namespace) -> int:
         # Avisos que evitan un fallo silencioso mas adelante.
         problemas = []
         if es_demo is False:
-            problemas.append(
-                "Esta cuenta es REAL, no demo. El bot se va a negar a operar en\n"
-                "     ella, que es justamente lo que queres. Crea una cuenta demo:\n"
-                "     en MetaTrader, Archivo -> Abrir una cuenta."
-            )
+            # No va en `problemas`: con una cuenta real puede ser justo lo que se
+            # busca, y "HAY QUE ARREGLAR ESTO" asusta a quien la esta
+            # configurando a proposito. Lo que tiene que quedar claro es que el
+            # bot NO la opera hasta que el .env tenga las dos llaves.
+            print("\n" + "=" * 58)
+            print("  ESTA CUENTA ES REAL")
+            print("=" * 58)
+            print("  El bot NO va a operar en ella a menos que el .env tenga LAS DOS:")
+            print()
+            print("      TRADING_MODE=LIVE")
+            print("      ALLOW_LIVE_TRADING=true")
+            print()
+            print("  Si lo que querias era una demo: en MetaTrader, Archivo ->")
+            print("  Abrir una cuenta.")
         if terminal is not None and getattr(terminal, "trade_allowed", True) is False:
             problemas.append(
                 "El boton 'Algo Trading' esta APAGADO. Ninguna orden va a entrar.\n"

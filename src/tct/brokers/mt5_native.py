@@ -265,8 +265,13 @@ class MT5NativeBroker(Broker):
         return self._ready and self._mt5 is not None
 
     def _ensure_demo(self, account: dict[str, Any]) -> tuple[bool, str]:
-        if self.settings.allow_live_trading:
-            return True, "ALLOW_LIVE_TRADING=true, chequeo de demo omitido"
+        # El chequeo se saltea SOLO con las dos llaves: `is_live` exige
+        # TRADING_MODE=LIVE y ALLOW_LIVE_TRADING=true. Antes miraba solo la
+        # segunda, y con TRADING_MODE=AUTO una cuenta real pasaba como demo.
+        # `config.py` ya rechaza esa combinacion al cargar; esto es la segunda
+        # red, para Settings armados sin pasar por `load_settings`.
+        if getattr(self.settings, "is_live", False):
+            return True, "TRADING_MODE=LIVE y ALLOW_LIVE_TRADING=true, chequeo de demo omitido"
         if account.get("trade_allowed") is False:
             return False, "La cuenta tiene trade_allowed=false"
 
@@ -280,7 +285,10 @@ class MT5NativeBroker(Broker):
         if "DEMO" in haystack:
             return True, "ok"
 
-        return False, "La cuenta no es demo. Se bloquea la ejecucion."
+        return False, (
+            "La cuenta no es demo. Se bloquea la ejecucion. Para operar una "
+            "cuenta real hacen falta TRADING_MODE=LIVE y ALLOW_LIVE_TRADING=true."
+        )
 
     async def account_equity(self) -> float | None:
         if not await self.is_ready():

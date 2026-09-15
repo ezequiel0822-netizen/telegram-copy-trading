@@ -119,8 +119,11 @@ class MetaApiBroker(Broker):
 
     def _ensure_demo(self, account_info: dict[str, Any]) -> tuple[bool, str]:
         """Bloquea cuentas que no sean demo. Es la barrera real del sistema."""
-        if self.settings.allow_live_trading:
-            return True, "ALLOW_LIVE_TRADING=true, chequeo de demo omitido"
+        # Solo con las dos llaves (`is_live`). Ver el mismo chequeo en
+        # mt5_native.py: mirar solo ALLOW_LIVE_TRADING dejaba pasar una cuenta
+        # real con TRADING_MODE=AUTO.
+        if getattr(self.settings, "is_live", False):
+            return True, "TRADING_MODE=LIVE y ALLOW_LIVE_TRADING=true, chequeo de demo omitido"
 
         account_type = str(account_info.get("type") or "").upper()
         if account_type in _DEMO_MARKERS:
@@ -135,7 +138,8 @@ class MetaApiBroker(Broker):
 
         return False, (
             f"La cuenta no figura como demo (type='{account_type or 'desconocido'}'). "
-            "Se bloquea la ejecucion. Para operar real hace falta ALLOW_LIVE_TRADING=true."
+            "Se bloquea la ejecucion. Para operar real hacen falta TRADING_MODE=LIVE "
+            "y ALLOW_LIVE_TRADING=true."
         )
 
     async def account_equity(self) -> float | None:

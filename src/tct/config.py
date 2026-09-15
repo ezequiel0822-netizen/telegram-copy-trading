@@ -468,6 +468,28 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
             "TRADING_MODE=LIVE requiere ademas ALLOW_LIVE_TRADING=true.\n"
             "Son dos llaves a proposito: nadie pasa a dinero real sin quererlo dos veces."
         )
+    # La otra mitad de las dos llaves. Sin esto eran UNA: con TRADING_MODE=AUTO
+    # y las credenciales de una cuenta real, AUTO resolvia a modo demo, la
+    # validacion de arriba no saltaba, y ALLOW_LIVE_TRADING=true le apagaba al
+    # ejecutor el chequeo de cuenta demo. El bot operaba la cuenta REAL creyendo
+    # que era demo: sin el cartel de dinero real, sin "*** REAL ***" en /estado,
+    # y sin la guarda que no deja arrancar una real sin control por Telegram,
+    # porque todo eso mira `is_live`, que exige TRADING_MODE=LIVE.
+    #
+    # Es exactamente el camino que sale natural para pasar a real: cambiar las
+    # credenciales en el .env que ya anda y prender ALLOW_LIVE_TRADING.
+    if allow_live and mode != LIVE:
+        raise ConfigError(
+            "ALLOW_LIVE_TRADING=true pero TRADING_MODE no es LIVE "
+            f"(quedo en {mode}).\n"
+            "    Con esa combinacion el bot operaria una cuenta REAL creyendo que es\n"
+            "    demo, sin las protecciones del dinero real. Las dos llaves van juntas:\n"
+            "\n"
+            "        TRADING_MODE=LIVE\n"
+            "        ALLOW_LIVE_TRADING=true\n"
+            "\n"
+            "    Si querias seguir en demo, deja ALLOW_LIVE_TRADING=false."
+        )
     if allow_live:
         warnings.append(
             "ALLOW_LIVE_TRADING=true: la proteccion de cuenta demo esta DESACTIVADA."

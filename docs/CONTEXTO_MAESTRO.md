@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-14 · v1.3.0 · 572 tests · el último commit que describe
-es `e1eb73d`, más este mismo cambio (que es el que trae la v1.3.0)
+Actualizado: 2026-09-15 · v1.3.1 · 583 tests · el último commit que describe
+es `1e91bb4`, más este mismo cambio (que es el que trae la v1.3.1)
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -899,6 +899,17 @@ enseñado a devolver `NO_CHANGES`, la misma mutación puso cuatro.
 mirá cuántos se ponen en rojo, y si son menos de los que escribiste, alguno no
 está probando nada.
 
+**Y la herramienta que mide las mutaciones también puede mentir.** El
+2026-09-15, verificando las dos llaves del dinero real, tres mutaciones dieron
+**0 en rojo**: parecía que los tests no protegían nada. Era el contador. Se le
+había pasado `-rs` a pytest para ver los salteados, y `-r` **reemplaza** el
+resumen por defecto: las líneas `FAILED` desaparecen de la salida, y un
+contador que las busca ve cero aunque todo falle. Repetido sin `-rs`, las
+mismas mutaciones dieron 3, 1 y 1.
+→ **Al medir mutaciones, contá también el código de salida de pytest**, que no
+depende del formato. Y si una mutación da 0, desconfiá primero de la medición
+y después de los tests.
+
 **Caché de bytecode.** Una vez `inspect.getsource` mostró el código nuevo
 mientras corría el viejo. Si algo no tiene sentido, limpiar `__pycache__`.
 
@@ -1039,7 +1050,15 @@ dos secciones que nadie contrastó contra el código.**
   después "¿por qué no tomó esta señal?".
 - Dinero real requiere **dos** llaves: `TRADING_MODE=LIVE` **y**
   `ALLOW_LIVE_TRADING=true`. La barrera de "solo demo" vive en el ejecutor, no
-  en la configuración.
+  en la configuración. **Y tienen que ser dos en las DOS direcciones:** hasta
+  la v1.3.0 solo se validaba LIVE sin ALLOW. Con `TRADING_MODE=AUTO`, las
+  credenciales de una cuenta real y `ALLOW_LIVE_TRADING=true`, AUTO resolvía a
+  modo demo y el ejecutor salteaba el chequeo de cuenta demo porque miraba solo
+  la segunda llave: **el bot operaba plata real creyendo que era demo**, sin
+  cartel, sin `*** REAL ***` y sin la guarda de control por Telegram (todo eso
+  mira `is_live`). Se encontró el 2026-09-15, justo antes de que el usuario
+  pasara FxPro a real por ese mismo camino. Ahora `config.py` rechaza ALLOW
+  sin LIVE, y `_ensure_demo` (MT5 y MetaApi) exige `is_live`.
 - Si el control por Telegram no se puede activar y la instancia es real, el bot
   **no arranca**.
 - La pausa **persiste**: un reinicio no reanuda solo.
