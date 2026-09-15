@@ -6,7 +6,11 @@ seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
 Actualizado: 2026-09-15 · v1.3.1 · 583 tests · el último commit que describe
-es `1e91bb4`, más este mismo cambio (que es el que trae la v1.3.1)
+es `4d71255`, más este mismo cambio
+
+**Si retomás en un chat nuevo:** leé §2 primero (dónde está parado el usuario
+hoy, incluido el paso a la cuenta real que está a medio hacer), después §5 y
+§9, que son las que evitan romper algo que costó caro.
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -56,47 +60,85 @@ es un sistema que se está montando: es uno que corre y del que hay datos.
     el breakeven (§5): menos spread es menos distancia entre la entrada del
     mensaje y el precio real de llenado.
 
-### La configuración de hoy
+### La configuración de hoy: DOS bots corriendo
 
-| | |
-|---|---|
-| Bróker | **`MetaQuotes-Demo`, NO FxPro** |
-| `MT5_PATH` | **vacío**, a propósito |
-| Lote / máx | 0.01 / 0.01 |
-| `MAX_OPEN_TRADES` / `MAX_SIGNALS_PER_DAY` | **100 / 100** (de fábrica son 5 y 20) |
-| `MAX_DAILY_LOSS_PCT` | **sin tope** |
-| `MAX_SPREAD_FROM_ENTRY_PCT` | 0.5% (sin calibrar, pero con margen de sobra) |
-| `OLLAMA_TIMEOUT_SECONDS` | 45 (bajado de 180) |
-| `POSITIONS_PER_SIGNAL` | **3** — una posición por TP, o sea 0.03 por señal |
-| `MAX_POSITIONS_PER_SYMBOL` | **0** — sin tope, para que la TP3 colgada no bloquee |
-| `BREAKEVEN_USES_REAL_ENTRY` | `true` (ver §5) |
+Desde el 2026-09-13 corren **dos instancias en paralelo**, sobre el mismo
+canal y con configuraciones distintas a propósito.
 
-Tres cosas de esa tabla merecen atención antes de dinero real:
+| | `.env` — instancia DEMO | `.env.segunda` — instancia FXPRO |
+|---|---|---|
+| Cuenta | MetaQuotes-Demo (~98.600) | FxPro-MT5 Demo (~109.600) |
+| Lote | **0.1** | **0.01** |
+| `POSITIONS_PER_SIGNAL` | **3** (0.3 por señal) | **1** (solo el TP1) |
+| `MAX_POSITIONS_PER_SYMBOL` | 30 | 10 |
+| `MAX_OPEN_TRADES` / señales día | 100 / 100 | 20 / 35 |
+| `MAX_DAILY_LOSS_PCT` | sin tope | sin tope |
+| `MT5_PATH` | puesto | puesto |
+| Avisos | apagados (falta el chat id) | apagados (falta el token) |
+| Datos | `data/` | `data/fxpro/` |
 
-- **`MetaQuotes-Demo` no es FxPro.** Valida la cañería —parser, motor, riesgo,
-  control— pero **nada** de lo que cambia entre brókers: nombres con sufijo,
-  lotes mínimos, spreads, *filling mode*. Correr `tct probar` en las dos y
-  comparar es lo que muestra la diferencia. Y **no tiene cripto**, que importa
-  porque el canal sí manda señales de BTCUSD.
-- **`MT5_PATH` vacío** es lo más robusto con UNA instancia: se engancha a la
-  terminal que esté abierta. Con dos deja de tener respuesta correcta (§5).
-  Efecto secundario: la cuenta con la que opera depende de en cuál esté
-  logueada esa ventana.
-- **100 / 100, sin freno diario y sin tope por instrumento** son cuatro
-  protecciones prácticamente desactivadas, y `POSITIONS_PER_SIGNAL=3`
-  triplica cada señal encima de eso. En demo da igual y es a propósito: el
-  objetivo declarado es juntar datos. **Antes de real hay que volver a
-  bajar las cuatro**, y el freno diario no se deja en 0.
+**El experimento que corren es doble:** MetaQuotes persigue los tres TP y
+FxPro solo el TP1, así que comparar los dos informes contesta a la vez *"¿los
+tres objetivos rinden más?"* y *"¿cuánto cambia el bróker?"*.
+
+Cuatro cosas de esa tabla que hay que tener presentes:
+
+- **Ninguna de las dos tiene freno diario.** En demo es deliberado. Antes de
+  real, no.
+- **Los avisos están apagados en las dos**, por motivos distintos: a `.env` le
+  falta `TELEGRAM_NOTIFY_CHAT_ID` y a `.env.segunda` el token. Lo pidió el
+  usuario, pero significa que ni el freno diario ni una apertura a medias
+  avisan de nada: hay que ir a `tct informe`.
+- **El lote de MetaQuotes es 0.1, diez veces el de los datos viejos.** Los
+  números en plata no son comparables con las 12 operaciones de la primera
+  semana; las proporciones (TP1/TP2/TP3) sí.
+- **El arranque automático NO está activado.** Los dos se arrancan a mano, con
+  `iniciar_bot.bat` y `iniciar_segunda.bat`.
 
 ### Decisiones tomadas que no hay que revisar
 
-- **BTCUSD se queda en `ALLOWED_SYMBOLS`** aunque este bróker no lo tenga. Las
-  señales se registran igual como paper trade —que es lo que sirve para
-  evaluar el canal— y desde el arreglo del cupo ya no gastan lugar del día.
-  Se resuelve solo cuando conecte FxPro.
+- **BTCUSD se queda en `ALLOWED_SYMBOLS`.** MetaQuotes no lo tiene y esas
+  señales quedan como paper trade; FxPro **sí** lo opera (lo llama `BITCOIN`).
 - **La IA local se queda como está.** Ver §4: subirle el nivel no ayudaría.
-- La cuenta **real no está configurada**. Existe `.env.real.example` sin
-  completar.
+- **Los avisos, apagados en demo.** Se construyó `TELEGRAM_NOTIFY_LEVEL` para
+  poder elegir; el usuario eligió silencio.
+
+### El paso a dinero real: decidido, a medio hacer
+
+**El 2026-09-15 el usuario decidió poner una cuenta REAL de FxPro con unos
+500** (dólares o euros, da igual: nada en el código supone una moneda). La idea
+es **reemplazar la demo de FxPro**, no agregar una tercera instancia.
+
+**Lo que ya está listo:**
+
+- El agujero de las dos llaves, cerrado (§9). Era crítico y estaba **en el
+  camino exacto** que el usuario iba a tomar.
+- `.env.real.example` al día: instancia `real`, carpeta `data/real/`, sesión de
+  Telegram propia, perfil `fxpro`, una posición por señal, avisos en
+  `problems`, solo XAUUSD, y las tablas de margen y de freno diario para 500.
+  Verificado cargándolo de verdad: da `is_live=True`, ejecutor `mt5`, modo
+  `LIVE`.
+- `tct mt5` muestra ahora el **apalancamiento**, que es lo que decide cuántas
+  posiciones entran en una cuenta chica.
+
+**Lo que falta son decisiones suyas, no código:**
+
+1. **Cuántas posiciones a la vez**, que depende del apalancamiento: con 1:20
+   una posición de oro de 0.01 pide ~214 de margen y en 500 entran 2; con
+   1:100, ~43; con 1:500, ~9.
+2. **Qué freno diario.** La plantilla trae 3%, que sobre 500 son 15: frena
+   después de UN stop de 8 puntos. 5% aguanta unos 3; 10%, unos 6.
+3. **Si prende los avisos en la real.** Con plata real son la única forma de
+   enterarse sin preguntar.
+4. **Si suma BTCUSD** a la real. Quedó afuera hasta ver su margen ahí.
+5. **Si la real arranca sola con la PC.** `autoarranque.ps1` hoy solo conoce
+   `.env` y `.env.segunda`. **No agregarlo sin que lo pida explícitamente:** es
+   plata real corriendo sin que nadie mire.
+
+**Y una advertencia que ya se le dio una vez**, para no repetirla como si fuera
+nueva: los datos de esta configuración son de pocos días, y un stop de 8 puntos
+en 0.01 cuesta unos 8, el 1,6% de 500. **La decisión está tomada y es suya**;
+el trabajo de acá en más es que salga bien, no volver a discutirla.
 
 ### La decisión de los tres TP, ya tomada
 
@@ -132,8 +174,8 @@ de cuenta del día siguiente.
 posición del TP más lejano puede quedar viva horas. Con la regla vieja de *"ya
 hay una posición abierta en XAUUSD"*, esa posición colgada bloquearía **todas**
 las señales siguientes de un canal que opera un solo instrumento. Por eso ahora
-el tope es `MAX_POSITIONS_PER_SYMBOL`, y en esta máquina está en **0** (sin
-tope). Antes de dinero real hay que volver a bajarlo.
+el tope es `MAX_POSITIONS_PER_SYMBOL`: hoy **30** en la instancia demo y **10**
+en la de FxPro. Antes de dinero real hay que bajarlo.
 
 ### Lo que sigue esperando datos
 
@@ -919,26 +961,32 @@ mientras corría el viejo. Si algo no tiene sentido, limpiar `__pycache__`.
 
 Ordenado por lo que más importa antes de dinero real.
 
-1. **Juntar una semana de resultados y decidir la pregunta de los tres TP.**
-   Es lo único que hoy bloquea una decisión de verdad, y ya no falta código:
-   `tct informe --con-resultados` lee el historial de MT5 y clasifica cada
-   operación en TP, SL, breakeven o cierre a mano. Lo que falta es **tiempo
-   corriendo**. Con la proporción entre "llegó al TP1" y "murió en breakeven"
-   se contesta lo de §2, y de paso se sabe si el canal sirve —que es el
-   objetivo de todo el proyecto—. **Correr el informe una vez no alcanza: son
-   3 señales por día.**
+1. **Juntar resultados y comparar los dos informes.** Es lo único que hoy
+   bloquea una decisión de verdad, y ya no falta código:
+
+   ```
+   tct informe --horas 48 --con-resultados
+   tct informe --horas 48 --con-resultados --env-file .env.segunda
+   ```
+
+   Clasifica cada operación en TP1/TP2/TP3, stop, breakeven o cierre a mano.
+   Lo que falta es **tiempo corriendo**. Con las dos salidas se contestan las
+   dos preguntas abiertas: si el TP2 y el TP3 se alcanzan lo suficiente como
+   para justificar tres posiciones, y cuánto cambia el bróker con la misma
+   señal. **Correr el informe una vez no alcanza: son unas 3 señales por día.**
 2. **Repetir contra FxPro lo que ya funcionó contra MetaQuotes-Demo.** ✅
    **Hecho el 2026-09-11.** `tct probar --operar --env-file .env.segunda` abrió
    `GOLD` en 4345.74 (ticket 330645574), movió el stop, lo volvió a mover al
    mismo precio —el `10025`, que cada bróker puede contestar distinto— y cerró.
    El *filling mode* de FxPro es compatible.
+3. **Terminar el paso a la cuenta real de FxPro.** Está decidido y a medio
+   hacer: el detalle, lo que ya está listo y las cinco decisiones que faltan
+   están en **§2, "El paso a dinero real"**. El código está; lo que falta son
+   números que elige el usuario.
 
-   Lo que queda de esto es **comparar las dos cuentas con las mismas señales**,
-   que es para lo que están las dos corriendo.
-3. **Volver a bajar las protecciones antes de dinero real.** Hoy están en
-   `100 / 100` y sin freno diario (§2), que para demo está bien y para real no.
-   Es un cambio de `.env`, pero es fácil de olvidar justo en el momento en que
-   más importa.
+   Y lo de siempre, que es fácil de olvidar justo cuando más importa: las
+   protecciones de la demo (100/100, sin freno diario, 30 por instrumento)
+   **no** se heredan a la real. `.env.real.example` ya trae valores propios.
 4. **Punto como separador de miles.** `"DAX SELL 18.500"` → 18.5. Los tres
    números escalan juntos, así que la geometría no lo nota. El contraste con
    el mercado ahora lo ataja *si el bróker cotiza ese símbolo*, pero eso es una
