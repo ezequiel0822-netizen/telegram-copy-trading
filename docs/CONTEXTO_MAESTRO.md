@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-15 · v1.3.1 · 583 tests · el último commit que describe
-es `4d71255`, más este mismo cambio
+Actualizado: 2026-09-16 · v1.4.0 · 604 tests · el último commit que describe
+es `2e83ba7`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé §2 primero (dónde está parado el usuario
 hoy, incluido el paso a la cuenta real que está a medio hacer), después §5 y
@@ -121,19 +121,30 @@ es **reemplazar la demo de FxPro**, no agregar una tercera instancia.
 - `tct mt5` muestra ahora el **apalancamiento**, que es lo que decide cuántas
   posiciones entran en una cuenta chica.
 
-**Lo que falta son decisiones suyas, no código:**
+**Las decisiones, tomadas el 2026-09-15.** Ya están en `.env.real.example`:
 
-1. **Cuántas posiciones a la vez**, que depende del apalancamiento: con 1:20
-   una posición de oro de 0.01 pide ~214 de margen y en 500 entran 2; con
-   1:100, ~43; con 1:500, ~9.
-2. **Qué freno diario.** La plantilla trae 3%, que sobre 500 son 15: frena
-   después de UN stop de 8 puntos. 5% aguanta unos 3; 10%, unos 6.
-3. **Si prende los avisos en la real.** Con plata real son la única forma de
-   enterarse sin preguntar.
-4. **Si suma BTCUSD** a la real. Quedó afuera hasta ver su margen ahí.
-5. **Si la real arranca sola con la PC.** `autoarranque.ps1` hoy solo conoce
-   `.env` y `.env.segunda`. **No agregarlo sin que lo pida explícitamente:** es
-   plata real corriendo sin que nadie mire.
+| | Elegido | Por qué |
+|---|---|---|
+| Freno diario | **5%** (25 sobre 500) | Él lo pidió como *"que a partir del 4to-5to stop loss ya tenga freno"*. Con 0.01 de oro, 1 punto = 1 dólar y cada stop cuesta 4 a 8: 5% frena en el 4º stop grande o el 6º chico. Había marcado 10%, que frena recién en el 6º al 12º —o sea casi nunca con un bot que abre 7 por día—; se le mostró la cuenta y eligió el número que hace lo que había descrito. |
+| Señales/día | **10** | Medido son ~3. Con los 5 de la plantilla vieja, la 6ª se rechazaba sin haber perdido nada: el día lo tiene que cortar el freno de plata, no un contador. |
+| Avisos | **prendidos, en `problems`** | Con plata real es la única forma de enterarse sin preguntar. Falta `tct chatid` para el chat id; el token se copia del `.env` de siempre. |
+| Símbolos | **solo XAUUSD** | BTCUSD espera a ver su margen en la cuenta real. |
+| Autoarranque | **no** | Arranca a mano, como las demos. |
+
+**La única que sigue abierta es `MAX_OPEN_TRADES`**, porque depende del
+apalancamiento y ese dato está en la máquina de él: con 1:20 una posición de
+oro de 0.01 pide ~214 de margen y en 500 entran 2; con 1:100, ~43; con 1:500,
+~9. Sale de `tct mt5` con la terminal de FxPro abierta en la cuenta real.
+
+**Y ojo con `autoarranque.ps1`:** solo conoce `.env` y `.env.segunda`. **No
+agregar la real sin que lo pida explícitamente:** es plata real corriendo sin
+que nadie mire. Verificado además que si el autoarranque estuvo prendido con
+dos instancias y después se jubila `.env.segunda`, el acceso directo de la
+segunda **sobrevive** en la carpeta de inicio: el script solo maneja las
+instancias cuyo `.env` existe, así que no puede borrar el que quedó huérfano.
+No hace daño —`iniciar_auto.bat` corta diciendo que el archivo no existe— pero
+si el `.env.segunda` sigue ahí, arranca la demo de FxPro sola y se pelea con la
+real por la terminal.
 
 **Y una advertencia que ya se le dio una vez**, para no repetirla como si fuera
 nueva: los datos de esta configuración son de pocos días, y un stop de 8 puntos
@@ -873,6 +884,53 @@ habría encontrado: hacía falta mirar los **resultados**.
   herramienta, las tres operaciones figuraban como "breakeven" y nadie iba a
   sospechar nada.
 
+### Sexta ronda: los que solo se ven mirando el camino de la cuenta real
+
+Salieron auditando el camino `is_live` justo antes de poner los 500 en FxPro.
+Ninguno lo habría encontrado la suite: los 583 tests estaban en verde con los
+tres adentro.
+
+- **Una `.env.real` a medio llenar operaba la cuenta que encontrara.** El más
+  grave, y estaba en el camino exacto de copiar la plantilla y completarla a
+  mano. Eran **tres cosas apiladas**: `LIVE` no exigía ninguna credencial de
+  MT5 (MetaApi sí exigía las suyas); `connect()` solo llama a `login()` con las
+  TRES puestas y si falta una **se lo saltea sin decir nada**; y nadie comparaba
+  jamás la cuenta conectada contra `MT5_LOGIN`. Arriba de todo eso,
+  `_ensure_demo` no opina porque con las dos llaves da por autorizado todo.
+  Medido con la plantilla tal cual: `tct check` contestaba
+  *"Ejecución: [OK] Modo LIVE"* y `connect()` devolvía `True` enganchado a
+  `MetaQuotes-Demo #98600`. Con dos MetaTrader instalados, *"la terminal que
+  encuentre"* no tiene respuesta correcta.
+- **`tct simular --ejecutar` operaba contra la cuenta real sin pedir nada.**
+  `simular` reproduce mensajes **viejos**: ejecutarlos abre posiciones
+  siguiendo señales de hace horas a precios que ya pasaron. No hay ninguna
+  situación en que eso sea lo que alguien quería. Y el riesgo era concreto:
+  `simular` se usa en demo desde el primer día, así que agregarle
+  `--env-file .env.real` por costumbre alcanzaba. Medido contra una FxPro real
+  de 500: abrió dos posiciones y cerró con *"Si operaste contra MT5 demo,
+  revisalas y cerralas a mano"*.
+- **El freno diario no medía contra el saldo con el que abrió el día.** Medía
+  contra el equity del momento de la **primera señal**. Con la cuenta abriendo
+  en 500 y bajando a 486 antes de que llegara un mensaje, tomaba 486 de
+  referencia y un día que perdió 5.6% no lo frenaba un tope del 5%. Y si
+  `account_equity()` lanzaba, `balance_actual` **conservaba la lectura vieja**:
+  con la terminal caída mientras la cuenta bajaba, el freno comparaba contra un
+  número de hace horas. *Sin dato no se rechaza nada* es correcto; seguir usando
+  el dato viejo no es lo mismo que no tener dato.
+
+**Lo que tienen en común** es de dónde salieron: no de leer el código sino de
+**ejecutar el camino que nadie había ejecutado**. La suite entera corre contra
+`is_live=False`. Es el mismo punto ciego de §6 —probar la unidad, no el
+cableado— corrido un nivel: ahora hay un *modo* que ningún test recorría.
+
+**Y el rescate también es una lección repetida.** Los cinco auditores murieron
+por límite de uso sin reportar nada, como en la tercera ronda. Esta vez el
+trabajo estaba en un tercer lugar, además de los dos de §7: **los scripts que
+habían dejado en el scratchpad**. Veintiséis archivos que corrían solos y
+reproducían cada hallazgo. Uno de ellos había dejado además una mutación puesta
+en `cli.py` sin revertir —murió entre romper y arreglar—, así que lo primero
+después de una caída es `git status`.
+
 ---
 
 ## 7. Errores de proceso que costaron tiempo
@@ -955,6 +1013,21 @@ y después de los tests.
 **Caché de bytecode.** Una vez `inspect.getsource` mostró el código nuevo
 mientras corría el viejo. Si algo no tiene sentido, limpiar `__pycache__`.
 
+**Y el primo hermano: `python -m tct` desde un worktree corre el repo
+PRINCIPAL.** El `.venv` está instalado en modo editable apuntando al checkout
+de siempre, así que un `tct check` lanzado desde `.claude/worktrees/...` no
+ejecuta el código que acabás de editar. Pasó verificando el arreglo de las
+credenciales: `tct check` seguía dando *"[OK] Modo LIVE"* con la plantilla
+vacía mientras `load_settings` —importado directo— ya la rechazaba.
+→ Para probar el código de un worktree:
+`PYTHONPATH=<worktree>/src python -m tct ...`. Y si un arreglo "no tiene
+efecto", verificá **qué copia estás corriendo** antes de tocar nada.
+
+**El `$?` después de un pipe es del último comando del pipe.** `... | tail -3;
+echo "exit: $?"` informa el código de `tail`, que es siempre 0. Da la misma
+clase de mentira tranquilizadora que el `-rs` de §7: parece que pasó y no se
+midió nada. → `${PIPESTATUS[0]}`.
+
 ---
 
 ## 8. Qué falta
@@ -1015,6 +1088,55 @@ Ordenado por lo que más importa antes de dinero real.
    el mercado abierto, las entradas reales del canal midieron **0.02% a 0.07%**
    contra un límite de 0.5%. Hay diez veces de margen. Apretarlo es posible,
    pero mientras el canal siga scalpeando oro no cambia nada.
+
+### Lo que la auditoría del camino real dejó SIN arreglar
+
+Confirmados ejecutando el 2026-09-15, ninguno arreglado todavía. Van en orden
+de cuánto importan con la cuenta real andando:
+
+10. **Una orden PENDIENTE viva se borra del estado como "se cerró sola".**
+    `posicion_existe()` solo consulta `positions_get()`, y una pendiente vive en
+    `orders_get()`: la reconciliación de §9 la lee como ausente, la saca del
+    registro y avisa *"se cerraron solas en el broker"*. La orden **sigue viva**
+    y puede dispararse en cualquier momento, abriendo una posición real que el
+    bot no gestiona (sin breakeven, sin parcial) y que no cuenta para
+    `MAX_OPEN_TRADES`. Medido: el bot quedó con 2 posiciones en el estado y el
+    bróker con 2 posiciones **más una pendiente** que nadie miraba. Hoy no
+    dispara porque este canal manda órdenes a mercado —hace falta que escriba
+    `BUY LIMIT` o `SELL STOP`—, pero es peor que el punto 7 de esta lista: no es
+    que no se puedan cancelar, es que el bot cree que ya no existen. El arreglo
+    es chico: preguntar también por `orders_get(ticket=...)` antes de concluir
+    que no está.
+11. **`ENABLE_TELEGRAM_CONTROL=false` con dinero real arranca igual.** La guarda
+    de §9 cubre *"estaba prendido y falló"*, no *"está apagado"*. Verificado: con
+    `is_live=True` y el control desactivado, el bot arranca y se pone a escuchar
+    sin ninguna forma de frenarlo desde el teléfono. La plantilla lo trae en
+    `true`, así que hoy no aplica; es un pie de apoyo que no debería existir.
+12. **Cruzando la medianoche con el bróker caído, la referencia de ayer queda
+    pegada.** La primera señal del día nuevo no puede leer el equity, así que
+    `day_start_balance` se queda con el de ayer; cuando el bróker vuelve, un día
+    que no perdió nada puede aparecer como si hubiera perdido. Frena de más, que
+    es el lado barato, pero deja un día muerto y solo se ve por el aviso de
+    señal rechazada.
+13. **El candado se ata a `state.json`, no a la carpeta.** Dos `.env` con la
+    misma `DATA_DIR` y distinto `STATE_PATH` **arrancan los dos** y comparten
+    `events.jsonl` y `paper_trades.jsonl`. Y nada vigila la terminal: dos
+    instancias con el mismo `MT5_PATH` arrancan las dos sin que nadie avise
+    —hay un `[AVISO]` en `tct check` que lo describe, pero no frena—. Ver la
+    corrección de §9.
+14. **Roster desparejo: `/pausa real` pausa también la demo.** Si el `.env` de
+    siempre queda en `INSTANCE_NAMES=demo,fxpro` y la real declara `demo,real`,
+    la demo no reconoce "real" como instancia y lo lee como **motivo**, así que
+    se pausa con motivo `real`. Verificado. `/cerrar` está sano en los dos
+    rosters —el peor bug del proyecto sigue arreglado, probado con roster
+    correcto y desparejo—, porque `cerrar` sí tiene vocabulario cerrado y
+    contesta *"No entendí 'real'"*. La asimetría entre los dos comandos es lo
+    que conviene mirar si algún día se toca `control.py`.
+15. **`_ensure_demo` se saltea `account.trade_allowed` cuando `is_live`.** El
+    atajo `if is_live: return True` está antes del chequeo. Con una cuenta real
+    que el bróker tiene deshabilitada, el bot arranca y las órdenes fallan una
+    por una en vez de decirlo al inicio. `connect()` sí mira el
+    `trade_allowed` de la *terminal*, que es el caso común.
 
 ### Hallazgos sin verificar, listos para levantar
 
@@ -1142,9 +1264,31 @@ dos secciones que nadie contrastó contra el código.**
   (crónica, hipotético, resultado) no llega a la IA. Ver §5.
 - **Leer cómo terminó una operación no toca nada.** Solo `history_deals_get()`,
   solo cuando alguien pide el informe, nunca en el camino de una señal.
-- **Dos instancias no comparten carpeta de datos.** El lock es del sistema
+- **Dos instancias no comparten `state.json`.** El lock es del sistema
   operativo (`msvcrt.locking` / `fcntl.flock`), así que se libera solo si el
-  proceso muere: un corte de luz no deja un candado trabado.
+  proceso muere: un corte de luz no deja un candado trabado. **Y se ata al
+  `state.json`, no a la carpeta** —decirlo mal es fácil y engaña—: dos `.env`
+  con la misma `DATA_DIR` y distinto `STATE_PATH` arrancan los dos y se pisan
+  `events.jsonl` y `paper_trades.jsonl`. Tampoco vigila la terminal ni la
+  sesión de Telethon. Verificado con los cuatro casos.
+- **Con dinero real, las credenciales de MT5 son obligatorias, y la cuenta a la
+  que se LLEGA tiene que ser la del `.env`.** Son las dos mitades del mismo
+  agujero (§6, sexta ronda): `connect()` solo hace `login()` con las tres
+  credenciales puestas, así que sin ellas opera la cuenta que la terminal tenga
+  cargada. Ahora `LIVE` exige `MT5_LOGIN`/`MT5_PASSWORD`/`MT5_SERVER`, y
+  `connect()` aborta si `account.login` no es el del `.env`. **Esa segunda
+  verificación no es solo de dinero real**: corre siempre que haya `MT5_LOGIN`,
+  porque las dos instancias demo también pueden terminar cada una en la cuenta
+  de la otra.
+- **`tct simular --ejecutar` no toca una cuenta real.** Reproduce mensajes
+  viejos: con `is_live` ni siquiera se construye el bróker. Lo que sí se puede
+  contra la real es `simular --con-precios` (no manda una orden) y
+  `probar --operar` (una posición mínima, abierta y cerrada).
+- **La referencia del freno diario se toma al ARRANCAR**, no con la primera
+  señal, que es la diferencia entre *"el saldo con el que abrió el día"* y *"el
+  saldo que había cuando llegó el primer mensaje"*. Y si no se puede leer el
+  equity, `balance_actual` queda en `None`: sin dato no se rechaza nada, pero
+  **tampoco se sigue usando el dato viejo**, que es otra forma de mentir.
 - `tct simular` **sin** `--ejecutar` no manda una sola orden, ni siquiera con
   `--con-precios`: ahí el bróker se conecta únicamente para leer cotizaciones.
   `tct informe` no manda ninguna nunca, ni con `--con-resultados`.
