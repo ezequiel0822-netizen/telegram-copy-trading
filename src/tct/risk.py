@@ -278,6 +278,76 @@ def stop_fuera_de_escala(
     return None
 
 
+def stop_agranda_el_riesgo(
+    side: str | None,
+    stop_actual: float | None,
+    stop_nuevo: float | None,
+    hay_varias: bool = True,
+) -> str | None:
+    """Motivo por el que este stop ALEJA el stop de una posicion, o None.
+
+    POR QUE HACE FALTA, si ya esta el chequeo de escala
+    ---------------------------------------------------
+    Un `MOVER SL A 4432` no nombra instrumento, asi que va a TODAS las
+    posiciones abiertas —eso es deliberado y esta bien—. El chequeo de escala
+    separa un stop de oro de uno de EURUSD, pero **no separa dos posiciones del
+    MISMO instrumento**: 4432 es un stop perfectamente plausible para cualquier
+    posicion de oro.
+
+    Y este canal opera un solo instrumento y manda un `MOVER SL A <entrada>`
+    detras de CADA senal. Con dos posiciones de oro abiertas, el breakeven de
+    la primera le llega tambien a la segunda:
+
+        A: entro en 4432.5, SL 4424   -> riesgo 8.5 puntos
+        B: entro en 4460.5, SL 4452   -> riesgo 8.5 puntos
+        "MOVER SL A 4432"
+        A: SL 4432.5  (breakeven, correcto)
+        B: SL 4432.0  -> riesgo 28.5 puntos, mas del triple
+
+    Con 0.01 de oro eso son ~28 dolares en UNA operacion, y el tope de perdida
+    diaria de una cuenta de 500 al 5% son 25: un mensaje de gestion rutinario
+    arma sola una perdida mayor que el presupuesto del dia entero. El freno
+    diario no lo ataja, porque solo mira aperturas. Y MT5 tampoco: el stop
+    sigue del lado correcto del mercado, asi que lo acepta sin chistar.
+
+    LA REGLA, y por que es ESTRECHA a proposito
+    -------------------------------------------
+    El problema no es "alejar el stop": un stop de swing 5% abajo es legitimo y
+    hay un test que lo exige. El problema es un mensaje SIN SIMBOLO pisando una
+    posicion de la que no hablaba.
+
+    Con UNA sola posicion abierta el mensaje no es ambiguo: dice lo que dice y
+    se obedece, aunque aleje el stop. Con VARIAS del mismo instrumento si lo
+    es, y ahi el numero casi siempre es la entrada de una de ellas. Entonces
+    solo en ese caso se descartan las que el stop empeoraria.
+
+    Por eso quien llama pasa `hay_varias`: el mismo numero es una orden clara
+    en un caso y una coincidencia en el otro.
+
+    Sin stop previo cualquier stop es una mejora: no hay con que comparar.
+    """
+    if not hay_varias:
+        return None
+    if stop_nuevo is None or stop_actual is None or not side:
+        return None
+
+    lado = side.upper()
+    if lado == "BUY":
+        aleja = stop_nuevo < stop_actual
+    elif lado == "SELL":
+        aleja = stop_nuevo > stop_actual
+    else:
+        return None
+
+    if not aleja:
+        return None
+    return (
+        f"{_num(stop_nuevo)} aleja el stop (estaba en {_num(stop_actual)}): "
+        "un mensaje de gestion no agranda el riesgo de una posicion. "
+        "Casi siempre es el breakeven de OTRA senal del mismo instrumento"
+    )
+
+
 def _num(valor: float | None) -> str:
     """Precio legible: 4438.5 y no 4438.500000000001; 1.0855 y no 1.09."""
     if valor is None:

@@ -24,6 +24,7 @@ from tct.config import Settings
 from tct.risk import (
     evaluate_management,
     evaluate_open,
+    stop_agranda_el_riesgo,
     stop_fuera_de_escala,
     usable_take_profits,
 )
@@ -851,6 +852,19 @@ class Engine:
             # mejor que no mover nada, y lo que quedo sin tocar se avisa.
             motivo = stop_fuera_de_escala(
                 new_sl, await self._precio_de_mercado(position.symbol)
+            )
+            if motivo is not None:
+                logger.error("No se movio el SL de %s: %s", position.symbol, motivo)
+                descartadas.append(f"{position.symbol}: {motivo}")
+                continue
+
+            # Y el que la escala NO puede ver: dos posiciones del MISMO
+            # instrumento. El breakeven de una senal le llega a la otra —este
+            # canal opera solo oro y manda un MOVER SL detras de cada senal— y
+            # le ALEJA el stop. Ver `stop_agranda_el_riesgo`, que tiene los
+            # numeros medidos.
+            motivo = stop_agranda_el_riesgo(
+                position.side, position.stop_loss, new_sl, hay_varias=len(targets) > 1
             )
             if motivo is not None:
                 logger.error("No se movio el SL de %s: %s", position.symbol, motivo)
