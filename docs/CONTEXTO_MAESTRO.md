@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-16 · v1.4.0 · 604 tests · el último commit que describe
-es `2e83ba7`, más este mismo cambio
+Actualizado: 2026-09-16 · v1.4.1 · 617 tests · el último commit que describe
+es `f1c87f0`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé §2 primero (dónde está parado el usuario
 hoy, incluido el paso a la cuenta real que está a medio hacer), después §5 y
@@ -456,6 +456,31 @@ una entrada rechazaría stops sanos todos los días. Por eso `FACTOR_ESCALA_STOP
 es un **factor de 2**, enorme a propósito: lo único que ningún stop legítimo
 hace es valer el doble o la mitad que el instrumento que protege. Apretar ese
 número creyendo que "más estricto es más seguro" rompe el filtro.
+
+**`risk.py` — la escala NO separa dos posiciones del MISMO instrumento, y por
+eso existe `stop_agranda_el_riesgo`.** El chequeo de escala distingue un stop
+de oro de uno de EURUSD. No puede distinguir dos posiciones de oro: 4432 es un
+stop plausible para cualquiera de las dos. Y este canal opera un solo
+instrumento y manda un `MOVER SL A <entrada>` detrás de **cada** señal, así que
+el breakeven de una le llegaba a la otra y le **alejaba** el stop:
+
+| | entró en | SL antes | SL después de `MOVER SL A 4432` | riesgo |
+|---|---|---|---|---|
+| A | 4432.5 | 4424 | 4432.5 | 0 — correcto |
+| B | 4460.5 | 4452 | **4432.0** | 8.5 → **28.5 puntos** |
+
+Con 0.01 de oro son ~28 dólares en una sola operación, contra un tope diario de
+25 sobre una cuenta de 500: un mensaje de gestión rutinario armaba solo una
+pérdida mayor que el presupuesto del día entero. **El freno diario no lo ataja**
+—solo mira aperturas— y MT5 tampoco, porque el stop sigue del lado correcto del
+mercado. Con avisos en `problems` no salía **nada**.
+
+La guarda es **estrecha a propósito**: no prohíbe alejar un stop, que es
+legítimo y tiene su test (un stop de swing 5% abajo). Solo opina cuando el
+mensaje aplica a **varias** posiciones, porque ahí el número casi siempre es la
+entrada de una de ellas. Con una sola abierta el mensaje no es ambiguo y se
+obedece. Por eso quien llama pasa `hay_varias`: el mismo número es una orden
+clara en un caso y una coincidencia en el otro.
 
 **`risk.py` — el chequeo de escala en la gestión descarta POR POSICIÓN, no
 rechaza el mensaje.** Un `MOVER SL A 4430` sin símbolo va a todo lo abierto:
@@ -1137,6 +1162,37 @@ de cuánto importan con la cuenta real andando:
     que el bróker tiene deshabilitada, el bot arranca y las órdenes fallan una
     por una en vez de decirlo al inicio. `connect()` sí mira el
     `trade_allowed` de la *terminal*, que es el caso común.
+
+### Del parser: lo que se midió el 2026-09-16 y NO se tocó
+
+Tres variaciones de formato que el parser lee mal. **Las tres terminan en señal
+RECHAZADA con aviso**, no en una operación mala: es §12 funcionando —un mensaje
+que no se entiende es barato—. Se anotan porque cuestan señales, no plata:
+
+16. **`TP1:4436` sin espacio pierde TODOS los TP y el SL.** Devuelve
+    `TPs=[] SL=None`, y `REQUIRE_STOP_LOSS` la rechaza. Con espacio o sin dos
+    puntos funciona bien; el único formato que falla es `etiqueta:numero` pegado.
+17. **Cualquier número delante del `DEAL |` se lleva puesta la entrada.**
+    *"Señal 2 de hoy. DEAL | GOLD BUY XAUUSD 4438…"* → entrada **2.0**. Lo
+    atajan dos guardas a la vez: la geometría (*"BUY con SL 4430 por encima de
+    la entrada 2.0"*) y el contraste con el mercado (100% de distancia contra un
+    límite de 0.3%). Es exactamente el error de lectura para el que se escribió
+    esa red.
+18. **Una señal que escribe `Take Profit` en vez de `TP` se descarta como si
+    fuera un recap**, por el `PROFITS?` de `_RESULTADO_RE`. Y al ser descarte
+    *deliberado* **no se le pregunta a la IA**: desaparece sin dejar rastro.
+    **Se decidió no tocarlo**, y el motivo es §12: `_RESULTADO_RE` es el filtro
+    más importante del parser, y sacarle `PROFIT` deja pasar los recaps cuya
+    única marca sea esa palabra. Perder una señal es más barato que abrir una
+    operación que nadie pidió. Hoy no muerde porque el canal escribe `TP1:`. Si
+    algún día cambia el formato, esto es lo primero a mirar.
+19. **La palabra `limit` o `stop` suelta ANTES del lado convierte una orden a
+    mercado en PENDIENTE.** *"Atención: hay un limit importante en 4450. GOLD
+    BUY XAUUSD 4432…"* → `OrderType.LIMIT`. Encadenado con el punto 10 —una
+    pendiente que el bot borra del estado creyendo que se cerró sola— es el
+    único camino por el que este canal podría dejar una orden viva sin gestión.
+    Requiere que el canal escriba esa palabra en inglés y suelta; no se observó
+    nunca.
 
 ### Hallazgos sin verificar, listos para levantar
 
