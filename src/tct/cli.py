@@ -273,7 +273,8 @@ def cmd_mt5(args: argparse.Namespace) -> int:
         print("  Copia estas lineas tal cual (la password es la de tu cuenta):\n")
         print(f"      MT5_LOGIN={cuenta.login}")
         print(f"      MT5_SERVER={cuenta.server}")
-        print("      MT5_PASSWORD=<la de tu cuenta demo>")
+        cual = "esta cuenta" if es_demo is False else "tu cuenta demo"
+        print(f"      MT5_PASSWORD=<la de {cual}>")
 
         # La ruta de ESTA terminal.
         #
@@ -326,7 +327,11 @@ def cmd_mt5(args: argparse.Namespace) -> int:
             for i, p in enumerate(problemas, 1):
                 print(f"  {i}. {p}")
         else:
-            print("\n  Todo en orden: cuenta demo y Algo Trading activado.")
+            # Con la cuenta REAL abierta -que es como se corre este comando
+            # para sacar el login y el servidor de .env.real- decir "cuenta
+            # demo" es tranquilizar con el dato equivocado.
+            tipo_ok = "cuenta REAL" if es_demo is False else "cuenta demo"
+            print(f"\n  Todo en orden: {tipo_ok} y Algo Trading activado.")
 
         return 1 if problemas else 0
     finally:
@@ -538,6 +543,34 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
         return 0
 
     # --- Modo ejecucion: el ciclo completo, con broker real ---------------
+    #
+    # Contra una cuenta REAL no se ejecuta nunca, y no es una precaucion
+    # exagerada: `simular` reproduce mensajes VIEJOS. Ejecutarlos de verdad
+    # abre posiciones siguiendo senales de hace horas, a precios que ya no
+    # existen. No hay ninguna razon para querer eso con plata real.
+    #
+    # El riesgo era concreto: `simular` se usa en demo desde el primer dia, y
+    # agregarle `--env-file .env.real` por costumbre alcanzaba para operar.
+    # Medido: abria las posiciones y despues cerraba con "Si operaste contra
+    # MT5 demo, revisalas y cerralas a mano".
+    if settings.is_live:
+        print("\n" + "=" * 66)
+        print("  NO SE EJECUTA: ESTA CONFIGURACION ES DE DINERO REAL")
+        print("=" * 66)
+        print("  'simular --ejecutar' reproduce los mensajes de las ultimas")
+        print(f"  {args.horas} horas. Contra la cuenta real eso abriria posiciones")
+        print("  siguiendo senales viejas, a precios que ya pasaron.")
+        print()
+        print("  Lo que si podes hacer con la cuenta real:")
+        print()
+        print("      python -m tct simular --con-precios --env-file <este .env>")
+        print("          mira que habria hecho, sin mandar una sola orden.")
+        print()
+        print("      python -m tct probar --operar --env-file <este .env>")
+        print("          una posicion del tamano minimo, abierta y cerrada")
+        print("          enseguida, para verificar la cadena de verdad.")
+        return 1
+
     # Se usa un almacenamiento aparte para no mezclar esta prueba con el
     # historial real del bot.
     carpeta = settings.data_dir / "simulacion"
@@ -936,7 +969,13 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
         print("\n  Lo mas comun: MetaTrader cerrado, sin loguear, o Algo Trading")
         print("  apagado. 'python -m tct mt5' lo dice con mas detalle.")
         return 1
-    print("      OK: conectado, cuenta demo y AutoTrading activo.")
+    # El texto no puede decir "cuenta demo" siempre: con `.env.real` esto se
+    # imprime conectado a una cuenta con plata adentro, y es justo el momento
+    # en que alguien esta verificando que la real quedo bien puesta.
+    if settings.is_live:
+        print("      OK: conectado a la cuenta REAL, con AutoTrading activo.")
+    else:
+        print("      OK: conectado, cuenta demo y AutoTrading activo.")
 
     mt5 = broker._mt5
     try:
@@ -1587,6 +1626,16 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
             logger.warning("IA local desactivada. %s", detalle)
 
     engine = Engine(settings, store, broker, notifier, ollama=ollama)
+
+    # La referencia del freno diario se toma ACA, al arrancar, y no con la
+    # primera senal del dia. Es la diferencia entre "el saldo con el que abrio
+    # el dia" -que es lo que promete el .env- y "el saldo que habia cuando
+    # llego el primer mensaje", que puede ser horas mas tarde y varias
+    # operaciones despues. Medido: con la cuenta abriendo en 500 y bajando a
+    # 486 antes de la primera senal, el freno tomaba 486 de referencia y un dia
+    # que perdio 5.6% no lo frenaba ningun tope del 5%.
+    await engine.fijar_referencia_del_dia()
+
     reader = TelegramReader(settings, engine.handle_message)
 
     if not await reader.start():

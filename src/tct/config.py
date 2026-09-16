@@ -729,3 +729,32 @@ def _validate_mode_requirements(settings: Settings) -> None:
                 f"existe para Windows (PyPI solo publica wheels win_amd64).\n"
                 f"En macOS usa {PAPER_ONLY} o {PAPER_AND_METAAPI_DEMO}."
             )
+
+    # Con dinero real las credenciales son OBLIGATORIAS, y no por prolijidad.
+    # `mt5_native.connect()` solo llama a `login()` si estan las TRES; si falta
+    # una, se saltea el login en silencio y el bot se queda operando la cuenta
+    # que la terminal ya tuviera cargada. En modo demo eso es una comodidad
+    # (engancharse a lo que haya abierto); en LIVE es plata real entrando a una
+    # cuenta que nadie eligio. Y `_ensure_demo` no lo ataja, porque con las dos
+    # llaves puestas da por autorizado todo.
+    if settings.trading_mode == LIVE:
+        faltan = [
+            clave
+            for clave, valor in (
+                ("MT5_LOGIN", settings.mt5_login),
+                ("MT5_PASSWORD", settings.mt5_password),
+                ("MT5_SERVER", settings.mt5_server),
+            )
+            if not valor
+        ]
+        if faltan:
+            raise ConfigError(
+                "TRADING_MODE=LIVE es dinero real y necesita las credenciales "
+                f"completas de la cuenta. Falta: {', '.join(faltan)}.\n"
+                "    Con la terminal de tu broker abierta y logueada en la cuenta\n"
+                "    REAL, corre 'python -m tct mt5': te da el login, el servidor y\n"
+                "    la ruta para copiar al .env. La password es la MASTER, no la\n"
+                "    de inversor.\n"
+                "    Sin las tres, el bot NO se loguea: opera la cuenta que la\n"
+                "    terminal tenga cargada en ese momento, sea cual sea."
+            )

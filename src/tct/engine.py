@@ -1066,6 +1066,17 @@ class Engine:
         )
         return {"status": "actualizacion_registrada", "signal": event.to_dict()}
 
+    async def fijar_referencia_del_dia(self) -> None:
+        """Toma el valor de la cuenta al arrancar, antes de la primera senal.
+
+        El freno diario promete medir contra "el saldo con el que abrio el
+        dia". Si la referencia se tomara con el primer mensaje que llega, seria
+        el saldo de ese momento: horas mas tarde y, con posiciones abiertas de
+        la noche anterior, varios dolares mas abajo. La perdida de ese tramo
+        quedaria afuera de la cuenta del dia.
+        """
+        await self._actualizar_equity()
+
     # -- Auxiliares --------------------------------------------------------
 
     async def _actualizar_equity(self) -> None:
@@ -1079,7 +1090,13 @@ class Engine:
         try:
             equity = await self.broker.account_equity()
         except Exception:
+            # Sin dato no se rechaza nada, pero TAMPOCO se sigue usando el
+            # anterior. Antes esto era un `return` pelado y `balance_actual`
+            # conservaba la lectura vieja: con la terminal caida mientras la
+            # cuenta bajaba, el freno comparaba contra un numero de hace horas
+            # y daba por bueno un dia que ya se habia pasado del tope.
             logger.warning("No se pudo leer el equity de la cuenta", exc_info=True)
+            self.store.balance_actual = None
             return
 
         self.store.balance_actual = equity

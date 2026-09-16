@@ -241,6 +241,37 @@ class MT5NativeBroker(Broker):
             logger.error("No se pudo leer account_info() de MT5")
             return False
 
+        # La cuenta a la que se LLEGO tiene que ser la que dice el .env.
+        #
+        # Nada lo garantizaba: si falta alguna credencial no se llama a
+        # `login()`, y si MT5_PATH esta vacio `initialize()` se engancha a la
+        # terminal que encuentre. Las dos cosas terminan igual -operando una
+        # cuenta que nadie eligio- y hasta ahora el unico rastro era la linea
+        # 'MT5 listo | servidor=...' del arranque, que nadie mira cuando el bot
+        # levanta solo. Con dos terminales instaladas y dos cuentas del mismo
+        # broker, esto deja de ser hipotetico.
+        if self.settings.mt5_login:
+            try:
+                esperado = int(self.settings.mt5_login)
+            except ValueError:
+                logger.error("MT5_LOGIN tiene que ser numerico")
+                return False
+            if account.login != esperado:
+                logger.error(
+                    "La terminal quedo en OTRA cuenta:\n"
+                    "            el .env pide  %s\n"
+                    "            y se conecto a %s (%s)\n"
+                    "        No se opera nada. Casi siempre es una de dos:\n"
+                    "          1. MT5_PATH apunta a la terminal equivocada, o esta\n"
+                    "             vacio y se engancho a la primera que encontro.\n"
+                    "          2. La password o el servidor estan mal y el login\n"
+                    "             fallo sin cambiar la cuenta que ya estaba cargada.",
+                    esperado,
+                    account.login,
+                    account.server,
+                )
+                return False
+
         ok, reason = self._ensure_demo(account._asdict())
         if not ok:
             logger.error("MT5: %s", reason)
