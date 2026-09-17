@@ -973,6 +973,28 @@ class Engine:
         fallidas: list[str] = []
         results: list[dict[str, Any]] = []
 
+        # Primero: a cuantas posiciones les podria corresponder este TP.
+        #
+        # Con POSITIONS_PER_SIGNAL=1 TODAS las posiciones persiguen el TP1, asi
+        # que con dos senales abiertas "la del TP1" no identifica a ninguna. Un
+        # "mover TP a 4470" sin simbolo se aplicaba a las dos, y la que buscaba
+        # +3.5 puntos pasaba a buscar +37.5: una ganancia chica probable
+        # convertida en una moneda al aire, y el lugar ocupado mientras tanto.
+        #
+        # El usuario eligio que en ese caso NO se mueva ninguna y se le avise
+        # (2026-09-16). No hay forma de saber desde el mensaje de cual habla, y
+        # adivinar es peor que preguntar. Se cuentan solo las que de verdad
+        # podrian recibirlo -mismo filtro que el de abajo-: si una es de otra
+        # escala o el TP le quedaria del lado equivocado, no hay ambiguedad.
+        motivos = {
+            position.trade_id: await self._motivo_para_no_mover_tp(position, nuevo_tp)
+            for position in targets
+        }
+        candidatas = [p for p in targets if motivos[p.trade_id] is None]
+
+        if len(candidatas) > 1:
+            return await self._tp_ambiguo(event, nuevo_tp, targets, candidatas, motivos)
+
         for position in targets:
             ficha = {
                 "trade_id": position.trade_id,
@@ -982,34 +1004,10 @@ class Engine:
                 "tp_actual": position.tp_objetivo,
             }
 
-            if position.tp_indice is None:
-                no_movidas.append({**ficha, "motivo": (
-                    "no se sabe que TP perseguia (se abrio antes de que se "
-                    "registrara ese dato)"
-                )})
+            motivo = motivos[position.trade_id]
+            if motivo is not None:
+                no_movidas.append({**ficha, "motivo": motivo})
                 continue
-            if position.tp_indice != 1:
-                no_movidas.append({**ficha, "motivo": (
-                    f"persigue el TP{position.tp_indice}: solo se mueve el TP1"
-                )})
-                continue
-
-            precio = await self._precio_de_mercado(position.symbol)
-            if stop_fuera_de_escala(nuevo_tp, precio) is not None:
-                no_movidas.append({**ficha, "motivo": (
-                    f"el TP {nuevo_tp} no da la escala del precio de "
-                    f"{position.symbol} ({precio})"
-                )})
-                continue
-            if precio is not None:
-                compra = (position.side or "").upper() == "BUY"
-                if (compra and nuevo_tp <= precio) or (not compra and nuevo_tp >= precio):
-                    lado = "arriba" if compra else "abajo"
-                    no_movidas.append({**ficha, "motivo": (
-                        f"el TP {nuevo_tp} quedaria del lado equivocado: en un "
-                        f"{position.side} tiene que ir {lado} del precio ({precio})"
-                    )})
-                    continue
 
             order = await self.broker.modify_take_profit(
                 ticket=position.broker_ticket, symbol=position.symbol, take_profit=nuevo_tp
@@ -1064,6 +1062,79 @@ class Engine:
         )
         return {"status": "tp_movido", "movidas": movidas,
                 "no_movidas": no_movidas, "orders": results}
+
+    async def _motivo_para_no_mover_tp(self, position, nuevo_tp: float) -> str | None:
+        """Por que ESTA posicion no puede recibir este TP, o None si puede.
+
+        Es un solo filtro para dos preguntas: cuales se mueven, y cuantas
+        candidatas hay antes de decidir si el mensaje es ambiguo. Si fueran dos
+        copias, tarde o temprano dirian cosas distintas.
+        """
+        if position.tp_indice is None:
+            return ("no se sabe que TP perseguia (se abrio antes de que se "
+                    "registrara ese dato)")
+        if position.tp_indice != 1:
+            return f"persigue el TP{position.tp_indice}: solo se mueve el TP1"
+
+        precio = await self._precio_de_mercado(position.symbol)
+        if stop_fuera_de_escala(nuevo_tp, precio) is not None:
+            return (f"el TP {nuevo_tp} no da la escala del precio de "
+                    f"{position.symbol} ({precio})")
+        if precio is not None:
+            compra = (position.side or "").upper() == "BUY"
+            if (compra and nuevo_tp <= precio) or (not compra and nuevo_tp >= precio):
+                lado = "arriba" if compra else "abajo"
+                return (f"el TP {nuevo_tp} quedaria del lado equivocado: en un "
+                        f"{position.side} tiene que ir {lado} del precio ({precio})")
+        return None
+
+    async def _tp_ambiguo(self, event, nuevo_tp, targets, candidatas, motivos):
+        """No se mueve ninguna: el mensaje no dice de cual posicion habla.
+
+        Se registra igual que un movimiento -con todas en `no_movidas`- para que
+        el informe lo vea, y se avisa como PROBLEMA: con TELEGRAM_NOTIFY_LEVEL
+        en 'problems' es la unica forma de enterarse de que el canal pidio algo
+        que el bot no hizo.
+        """
+        motivo_ambiguo = (
+            f"hay {len(candidatas)} posiciones que podrian recibir ese TP y el "
+            "mensaje no dice de cual habla"
+        )
+        no_movidas = [
+            {
+                "trade_id": p.trade_id,
+                "ticket": p.broker_ticket,
+                "symbol": p.symbol,
+                "tp_indice": p.tp_indice,
+                "tp_actual": p.tp_objetivo,
+                "motivo": motivos[p.trade_id] or motivo_ambiguo,
+            }
+            for p in targets
+        ]
+        self.store.append_event("mover_tp", {
+            "signal": event.to_dict(),
+            "tp_nuevo": nuevo_tp,
+            "ambiguo": True,
+            "movidas": [],
+            "no_movidas": no_movidas,
+            "fallidas": [],
+            "orders": [],
+        })
+
+        lineas = []
+        for p in candidatas:
+            entrada = p.entry_real or p.entry
+            lineas.append(f"  {p.symbol} {p.side} entrada {entrada}, TP {p.tp_objetivo}")
+        await self._notify(
+            f"NO se movio el TP a {nuevo_tp}: hay {len(candidatas)} operaciones "
+            "abiertas que podrian recibirlo y el mensaje no dice de cual habla.\n"
+            + "\n".join(lineas)
+            + "\nTodas siguen con su TP de antes. Si querias moverlo, hacelo a "
+            "mano en MetaTrader.",
+            problema=True,
+        )
+        return {"status": "tp_ambiguo", "movidas": [], "no_movidas": no_movidas,
+                "orders": []}
 
     async def _handle_update(self, event: SignalEvent) -> dict[str, Any]:
         """Modificacion suelta (SL/TP sin lado).

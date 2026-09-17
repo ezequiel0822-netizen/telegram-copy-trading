@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-16 · v1.4.1 · 617 tests · el último commit que describe
-es `f1c87f0`, más este mismo cambio
+Actualizado: 2026-09-16 · v1.4.2 · 624 tests · el último commit que describe
+es `509acd3`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé §2 primero (dónde está parado el usuario
 hoy, incluido el paso a la cuenta real que está a medio hacer), después §5 y
@@ -588,8 +588,20 @@ en rojo si los avisos dejan de salir.
 índice, no por precio.** Así lo pidió el usuario el 2026-09-14: si el canal
 manda "mover TP a X", se mueve el TP de la posición que persigue el TP1, las
 del TP2 y el TP3 se quedan, y queda registrado cuál se movió y por qué las
-otras no (evento `mover_tp`, con `movidas` y `no_movidas`). Con FxPro en
-`POSITIONS_PER_SIGNAL=1` se mueve siempre; con MetaQuotes en 3, una de tres.
+otras no (evento `mover_tp`, con `movidas` y `no_movidas`). Con MetaQuotes en
+`POSITIONS_PER_SIGNAL=3` se mueve una de tres.
+
+**Y si hay VARIAS candidatas, no se mueve ninguna** (decisión del usuario,
+2026-09-16). Con `POSITIONS_PER_SIGNAL=1` —la cuenta real— todas las posiciones
+persiguen el TP1, así que con dos señales abiertas "la del TP1" no identifica a
+ninguna. Antes un `MOVER TP A 4470` se aplicaba a las dos, y la que buscaba +3.5
+puntos pasaba a buscar +37.5: el stop quedaba intacto, pero una ganancia chica
+probable se volvía una moneda al aire. Ahora queda como evento `mover_tp` con
+`ambiguo: true` y avisa **como problema**, con las dos posiciones y *"hacelo a
+mano en MetaTrader"*. Solo cuentan como candidatas las que de verdad podrían
+recibir el TP —mismo filtro que decide cuáles se mueven, en
+`_motivo_para_no_mover_tp`—: si a una le quedaría del lado equivocado o fuera
+de escala, no hay ambigüedad y se mueve la otra.
 
 Tres cosas del diseño que no hay que "simplificar":
 
