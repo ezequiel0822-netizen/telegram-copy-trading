@@ -353,10 +353,22 @@ class MT5NativeBroker(Broker):
             # es "no se sabe", que no es lo mismo que "no paso nada".
             return None
 
-        salida = getattr(self._mt5, "DEAL_ENTRY_OUT", 1)
-        cierres = [d for d in deals if getattr(d, "entry", None) == salida]
+        # Un cierre es OUT, y tambien OUT_BY: cerrar una posicion contra otra
+        # opuesta ("close by") no deja un OUT, y sin contarlo la operacion
+        # figuraba como "sigue abierta" y su plata no entraba al neto.
+        salidas = {getattr(self._mt5, "DEAL_ENTRY_OUT", 1),
+                   getattr(self._mt5, "DEAL_ENTRY_OUT_BY", 3)}
+        cierres = [d for d in deals if getattr(d, "entry", None) in salidas]
         if not cierres:
             return None
+
+        # El precio al que ENTRO de verdad. El bot pone el breakeven ahi, no en
+        # el numero del mensaje, asi que es contra este precio que se decide si
+        # un cierre por stop fue breakeven o stop. Contra el del mensaje, un
+        # llenado 3 puntos corrido -pasa, medido- contaba un breakeven como stop.
+        entrada_codigo = getattr(self._mt5, "DEAL_ENTRY_IN", 0)
+        entradas = [d for d in deals if getattr(d, "entry", None) == entrada_codigo]
+        precio_entrada = (float(getattr(entradas[0], "price", 0.0) or 0.0) or None) if entradas else None
 
         # Con cierres parciales hay varios. El ultimo es el que termino de
         # cerrar la posicion; el profit se suma, porque el resultado de la
@@ -379,6 +391,7 @@ class MT5NativeBroker(Broker):
         fee = _suma("fee", deals)
         return {
             "precio": float(getattr(ultimo, "price", 0.0) or 0.0),
+            "precio_entrada": precio_entrada,
             "profit": bruto,
             "comision": comision,
             "swap": swap,

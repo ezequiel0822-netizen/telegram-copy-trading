@@ -172,17 +172,38 @@ def resumir(
             "motivos": [],
         }
 
+        # Los motivos de TODAS las ediciones con ese mismo resultado, no solo de
+        # la ultima: si la primera se rechazo por el tope y la ultima por el
+        # freno diario, las dos cosas pasaron y las dos explican por que no se
+        # opero. Cada motivo cuenta UNA vez por mensaje.
+        crudos: list[str] = []
         if kind == "rechazada":
-            for motivo in evento.get("reasons", []):
-                motivos[_familia_de_motivo(motivo)] += 1
-            fila["motivos"] = list(evento.get("reasons", []))
+            for e in ediciones:
+                if e.get("kind") == "rechazada":
+                    crudos.extend(e.get("reasons", []) or [])
+            fila["motivos"] = list(dict.fromkeys(crudos))
+            for familia in dict.fromkeys(_familia_de_motivo(m) for m in fila["motivos"]):
+                motivos[familia] += 1
         elif kind == "apertura_fallida":
-            razon = (evento.get("order") or {}).get("reason", "")
-            if razon:
+            for e in ediciones:
+                if e.get("kind") == "apertura_fallida":
+                    razon = (e.get("order") or {}).get("reason", "")
+                    if razon:
+                        crudos.append(razon)
+            fila["motivos"] = list(dict.fromkeys(crudos))
+            for razon in fila["motivos"]:
                 motivos[f"el broker rechazo: {razon}"] += 1
-                fila["motivos"] = [razon]
 
         detalle.append(fila)
+
+    # Que mensajes llegaron a abrir de verdad: las distancias son de "senales
+    # operadas", y el paper trade se escribe ANTES de llamar al broker.
+    operadas = {
+        _clave_de_mensaje(e, orden)
+        for orden, e in enumerate(eventos)
+        if e.get("kind") == "aceptada"
+        and (e.get("signal") or {}).get("telegram_message_id") is not None
+    }
 
     gestion = Counter(
         e.get("kind", "") for e in eventos
@@ -227,7 +248,7 @@ def resumir(
         "motivos_gestion": motivos_gestion.most_common(),
         "tp_movidos": tp_movidos,
         "tp_no_movidos": tp_no_movidos.most_common(),
-        "distancias": _distancias(paper_trades or []),
+        "distancias": _distancias(paper_trades or [], operadas),
     }
 
 
@@ -300,7 +321,9 @@ def _familia_de_motivo(motivo: str) -> str:
     return motivo
 
 
-def _distancias(paper_trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _distancias(
+    paper_trades: list[dict[str, Any]], operadas: set[tuple] | None = None
+) -> list[dict[str, Any]]:
     """Entrada contra precio real, del momento EXACTO en que llego la senal.
 
     Es el dato con el que se calibra MAX_SPREAD_FROM_ENTRY_PCT sin el problema
@@ -311,9 +334,16 @@ def _distancias(paper_trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deja tres paper trades con la misma entrada y el mismo precio de mercado
     -una sola lectura-, y el informe los listaba tres veces bajo el titulo
     "senales operadas". Con datos reales decia 23 donde habia 15.
+
+    SOLO LAS QUE ABRIERON, y con el precio del intento que abrio. El paper
+    trade se escribe ANTES de llamar al broker, asi que una senal que el broker
+    no pudo abrir -un BTCUSD en un broker sin cripto- tambien deja uno, y
+    figuraba como "operada". Y si el primer intento fallo y una edicion
+    posterior si abrio, se medía con el precio del intento fallido. `operadas`
+    son las claves de los mensajes con evento "aceptada"; los paper trades sin
+    id de mensaje no se pueden cruzar y se muestran igual.
     """
-    medidas = []
-    vistas: set[tuple] = set()
+    por_clave: dict[tuple, dict[str, Any]] = {}
     for trade in paper_trades:
         entrada = trade.get("entry")
         mercado = trade.get("precio_mercado")
@@ -322,22 +352,23 @@ def _distancias(paper_trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
         senal = trade.get("signal") or {}
         if senal.get("telegram_message_id") is not None:
             clave = ("mensaje", senal.get("telegram_chat_id"), senal.get("telegram_message_id"))
+            if operadas is not None and clave not in operadas:
+                continue
         else:
             # Sin id, las posiciones de una misma senal comparten entrada Y la
             # misma lectura del mercado. Dos senales distintas con los dos
             # numeros iguales hasta el ultimo decimal no pasan en la practica.
             clave = ("precios", trade.get("symbol"), entrada, mercado)
-        if clave in vistas:
-            continue
-        vistas.add(clave)
-        medidas.append({
+        # Gana el ULTIMO: el intento que abrio es el ultimo que escribio paper
+        # trades, porque despues de abrir las ediciones ya no se reprocesan.
+        por_clave[clave] = {
             "ts": trade.get("ts"),
             "symbol": trade.get("symbol"),
             "entry": entrada,
             "mercado": mercado,
             "distancia_pct": abs(entrada - mercado) / mercado * 100,
-        })
-    return medidas
+        }
+    return list(por_clave.values())
 
 
 # --------------------------------------------------------------------------
@@ -416,11 +447,31 @@ def _posiciones_del_evento(
             for a in evento["aperturas"] if a.get("ticket")
         ]
     if evento.get("orders"):
+        # `orders` solo tiene las que ENTRARON. Si fallo la del medio, asignar
+        # por orden le pone TP2 a la del TP3, y desde que el informe confia en
+        # el indice en vez de adivinar por precio, eso se afirmaba como cierto.
+        # Las que fallaron quedaron en `fallidas` como "TP2: motivo": se sacan
+        # de la cuenta. Si alguna no se puede leer, no se asigna ningun indice
+        # y la etiqueta vuelve a decidirse por el precio de cierre.
+        import re
+
+        fallados: set[int] = set()
+        legibles = True
+        for fallida in evento.get("fallidas") or []:
+            coincide = re.match(r"^TP(\d+):", str(fallida))
+            if coincide:
+                fallados.add(int(coincide.group(1)))
+            else:
+                legibles = False
+        restantes = [i for i in range(1, len(objetivos) + 1) if i not in fallados]
+
         salida = []
-        for i, orden in enumerate(evento["orders"], start=1):
+        for n, orden in enumerate(evento["orders"]):
             ticket = (orden or {}).get("ticket")
-            if ticket:
-                salida.append((ticket, i if i <= len(objetivos) else None))
+            if not ticket:
+                continue
+            indice = restantes[n] if legibles and n < len(restantes) else None
+            salida.append((ticket, indice))
         return salida
     ticket = (evento.get("order") or {}).get("ticket")
     if not ticket:
@@ -438,7 +489,11 @@ def clasificar_desenlace(operada: dict[str, Any], desenlace: dict[str, Any]) -> 
     """
     motivo = desenlace.get("motivo")
     precio = desenlace.get("precio")
-    entrada = operada.get("entry")
+    # La entrada REAL si MT5 la dio. El bot pone el breakeven en el precio de
+    # llenado, no en el del mensaje: medido contra el del mensaje, un llenado
+    # a 3 puntos contaba un breakeven como stop, y una senal sin numero de
+    # entrada contaba como stop siempre. La del mensaje queda de respaldo.
+    entrada = desenlace.get("precio_entrada") or operada.get("entry")
 
     if motivo == "tp":
         # Si un "mover TP" la toco y cerro en el TP nuevo, se dice asi. Si no,

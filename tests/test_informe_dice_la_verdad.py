@@ -138,7 +138,174 @@ def test_las_distancias_son_una_por_senal():
         for _ in range(3)
     ]
 
-    assert len(resumir([], trades)["distancias"]) == 1
+    assert len(resumir([ev("aceptada", 5)], trades)["distancias"]) == 1
+
+
+def paper(mid, mercado, entrada=4386.0, simbolo="XAUUSD"):
+    return {"ts": AHORA.isoformat(), "symbol": simbolo, "entry": entrada,
+            "precio_mercado": mercado,
+            "signal": {"telegram_message_id": mid, "telegram_chat_id": -100}}
+
+
+def test_una_senal_que_el_broker_no_pudo_abrir_no_es_una_distancia_operada():
+    """El paper trade se escribe ANTES de llamar al broker. El BTCUSD de un
+    broker sin cripto dejaba uno y figuraba bajo "senales operadas"."""
+    eventos = [ev("aceptada", 1),
+               ev("apertura_fallida", 2, simbolo="BTCUSD", order={"reason": "no expone"})]
+    trades = [paper(1, 4389.0), paper(2, 79610.0, entrada=79600.0, simbolo="BTCUSD")]
+
+    distancias = resumir(eventos, trades)["distancias"]
+
+    assert [d["symbol"] for d in distancias] == ["XAUUSD"]
+
+
+def test_si_el_primer_intento_fallo_se_mide_el_que_abrio():
+    eventos = [ev("apertura_fallida", 3, order={"reason": "requote"}), ev("aceptada", 3)]
+    trades = [paper(3, 4380.0), paper(3, 4389.0)]
+
+    distancias = resumir(eventos, trades)["distancias"]
+
+    assert len(distancias) == 1
+    assert distancias[0]["mercado"] == 4389.0, "se quedo con el precio del intento fallido"
+
+
+def test_los_motivos_de_todas_las_ediciones_rechazadas_se_ven():
+    """Rechazada por el tope al llegar y por el freno diario en la edicion: las
+    dos cosas pasaron. Mostrar solo la ultima escondia la que la hizo perder."""
+    eventos = [
+        ev("rechazada", 11, reasons=["Ya hay 2 operaciones abiertas (MAX_OPEN_TRADES=2)"]),
+        ev("rechazada", 11, reasons=["Tope de perdida diaria alcanzado: -5.2% (limite 5.0%)"]),
+        ev("rechazada", 11, reasons=["Tope de perdida diaria alcanzado: -5.4% (limite 5.0%)"]),
+    ]
+
+    r = resumir(eventos)
+    motivos = dict(r["motivos"])
+
+    assert motivos.get("Se llego al tope de operaciones abiertas (MAX_OPEN_TRADES)") == 1
+    assert motivos.get("Freno por perdida diaria") == 1, "cada motivo cuenta una vez por mensaje"
+    assert r["por_tipo"] == {"rechazada": 1}
+
+
+# --------------------------------------------------------------------------
+# 6) Breakeven contra la entrada REAL, y el TP cuando fallo la del medio
+# --------------------------------------------------------------------------
+
+
+def test_un_breakeven_con_llenado_corrido_sigue_siendo_breakeven():
+    """El bot pone el breakeven en el precio de llenado. Medido contra el del
+    mensaje, un llenado 3 puntos corrido -la de las 11:39 del usuario- contaba
+    como stop."""
+    operada = {"entry": 4386.0, "take_profits": [4390.0]}
+    desenlace = {"motivo": "sl", "precio": 4389.05, "precio_entrada": 4389.05}
+
+    assert clasificar_desenlace(operada, desenlace) == "breakeven"
+
+
+def test_un_stop_de_verdad_con_llenado_corrido_sigue_siendo_stop():
+    operada = {"entry": 4386.0, "take_profits": [4390.0]}
+    desenlace = {"motivo": "sl", "precio": 4381.0, "precio_entrada": 4389.05}
+
+    assert clasificar_desenlace(operada, desenlace) == "stop"
+
+
+def test_una_senal_sin_numero_de_entrada_puede_ser_breakeven():
+    operada = {"entry": None, "take_profits": [4436.0]}
+    desenlace = {"motivo": "sl", "precio": 4432.5, "precio_entrada": 4432.5}
+
+    assert clasificar_desenlace(operada, desenlace) == "breakeven"
+
+
+def test_sin_entrada_real_se_usa_la_del_mensaje():
+    operada = {"entry": 4467.0, "take_profits": [4463.0]}
+
+    assert clasificar_desenlace(operada, {"motivo": "sl", "precio": 4467.0}) == "breakeven"
+
+
+def test_con_la_del_medio_fallida_la_del_tp3_sigue_siendo_tp3():
+    """Formato "orders" (antes de "aperturas"): solo estan las que entraron."""
+    from tct.informe import tickets_operados
+
+    evento = ev("aceptada", 1, orders=[{"ticket": 11}, {"ticket": 33}],
+                fallidas=["TP2: requote"])
+    evento["signal"]["take_profits"] = [4390.0, 4392.0, 4394.0]
+
+    indices = {f["ticket"]: f["tp_indice"] for f in tickets_operados([evento])}
+
+    assert indices == {11: 1, 33: 3}
+
+
+def test_una_fallida_ilegible_no_inventa_indices():
+    """Si no se sabe cual fallo, mejor no afirmar nada: la etiqueta vuelve a
+    decidirse por el precio de cierre."""
+    from tct.informe import tickets_operados
+
+    evento = ev("aceptada", 1, orders=[{"ticket": 11}, {"ticket": 33}],
+                fallidas=["algo raro"])
+    evento["signal"]["take_profits"] = [4390.0, 4392.0, 4394.0]
+
+    assert all(f["tp_indice"] is None for f in tickets_operados([evento]))
+
+
+def test_mt5_da_el_precio_de_entrada_y_cuenta_el_close_by():
+    from pathlib import Path
+
+    from tct.brokers.mt5_native import MT5NativeBroker
+    from tests.test_engine import build_settings
+
+    broker = MT5NativeBroker(build_settings(Path(".")))
+    broker._mt5 = SimpleNamespace(
+        DEAL_ENTRY_IN=0, DEAL_ENTRY_OUT=1, DEAL_ENTRY_OUT_BY=3,
+        DEAL_REASON_TP=5, DEAL_REASON_SL=4, DEAL_REASON_CLIENT=0, DEAL_REASON_EXPERT=3,
+        history_deals_get=lambda position=None, **_: [
+            Deal(0, price=4389.05),
+            Deal(3, price=4392.0, profit=2.95, reason=0),
+        ],
+    )
+
+    d = broker._desenlace_sync(1)
+
+    assert d is not None, "un cierre por close-by figuraba como 'sigue abierta'"
+    assert d["precio_entrada"] == pytest.approx(4389.05)
+    assert d["profit"] == pytest.approx(2.95)
+
+
+# --------------------------------------------------------------------------
+# 7) tct status tampoco toca un estado corrupto, y no inventa un cero
+# --------------------------------------------------------------------------
+
+
+def test_tct_status_no_mueve_un_estado_corrupto_ni_dice_cero(tmp_path, capsys):
+    env = _env(tmp_path)
+    (tmp_path / "state.json").write_text('{"open_positions": [', encoding="utf-8")
+
+    codigo = cli.main(["--env-file", str(env), "status"])
+    salida = capsys.readouterr().out
+
+    assert (tmp_path / "state.json").exists(), "tct status movio el state.json"
+    assert "Posiciones abiertas: 0" not in salida, "informo 0 posiciones sin saberlo"
+    assert "ILEGIBLE" in salida
+    assert codigo == 1
+
+
+def test_tct_status_con_estado_sano_sigue_igual(tmp_path, capsys):
+    env = _env(tmp_path)
+
+    codigo = cli.main(["--env-file", str(env), "status"])
+
+    assert codigo == 0
+    assert "Posiciones abiertas: 0" in capsys.readouterr().out
+
+
+def test_una_linea_que_no_es_un_registro_no_tumba_el_informe(tmp_path, capsys):
+    env = _env(tmp_path)
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(ev("aceptada", 1, hace=0)) + "\n[1, 2, 3]\n4386.0\n"
+        + json.dumps(ev("aceptada", 2, hace=0)) + "\n",
+        encoding="utf-8")
+
+    cli.main(["--env-file", str(env), "informe", "--horas", "0"])
+
+    assert "Senales de apertura que vio el bot: 2" in capsys.readouterr().out
 
 
 def test_sin_id_las_posiciones_de_una_senal_se_juntan_por_sus_precios():

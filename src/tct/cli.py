@@ -1507,12 +1507,23 @@ def cmd_status(args: argparse.Namespace) -> int:
     from tct.store import Store
 
     settings = load_settings(args.env_file)
-    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    # Solo lectura: un Store normal RENOMBRABA un state.json corrupto y seguia
+    # con un estado vacio, asi que `status` movia el archivo de las posiciones
+    # abiertas y encima decia "Posiciones abiertas: 0" como un hecho.
+    store = Store(settings.events_path, settings.paper_trades_path,
+                  settings.state_path, solo_lectura=True)
 
     print(settings.describe())
 
+    if store.estado_ilegible:
+        print(f"\nESTADO ILEGIBLE: {settings.state_path} esta danado y NO se toco.")
+        print("  Las posiciones abiertas son DESCONOCIDAS: miralas en MetaTrader.")
+        print("  Cuando el bot arranque, va a guardar una copia del archivo danado")
+        print("  al lado (state.corrupt.json) y va a empezar con el estado vacio.")
+
     positions = store.open_positions()
-    print(f"\nPosiciones abiertas: {len(positions)}")
+    if not store.estado_ilegible:
+        print(f"\nPosiciones abiertas: {len(positions)}")
     for position in positions:
         print(
             f"  {position.symbol:<8} {position.side:<4} lote={position.lot} "
@@ -1529,6 +1540,9 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     trades = store.read_paper_trades()
     print(f"\nPaper trades: {len(trades)}")
+    if store.estado_ilegible:
+        print("Senales hoy : desconocido (estado ilegible)")
+        return 1
     print(f"Senales hoy : {store.signals_today()}/{settings.max_signals_per_day}")
     return 0
 

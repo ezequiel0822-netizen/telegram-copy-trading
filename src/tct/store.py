@@ -178,14 +178,20 @@ class Store:
         self.state_path = Path(state_path)
         self.solo_lectura = solo_lectura
 
-        # SOLO LECTURA no es una cortesia: es lo que promete `tct informe`, y
-        # antes no lo cumplia. Cargar el estado no es inocente -si el state.json
-        # esta corrupto, `_load_state` lo RENOMBRA para respaldarlo-, asi que un
-        # informe corrido para diagnosticar un bot caido despues de un corte de
-        # luz le sacaba de abajo el archivo con las posiciones abiertas. Quien
-        # solo lee eventos no necesita el estado para nada: ni se abre.
+        # True si el state.json existe pero no se pudo leer. Solo tiene sentido en
+        # solo lectura: ahi no se repara nada, y quien muestra el estado tiene que
+        # poder decir "no se sabe" en vez de "0 posiciones abiertas".
+        self.estado_ilegible = False
+
+        # SOLO LECTURA no es una cortesia: es lo que prometen `tct informe` y
+        # `tct status`, y antes no lo cumplian. Cargar el estado no era inocente:
+        # si el state.json estaba corrupto, `_load_state` lo RENOMBRABA para
+        # respaldarlo. Un comando corrido para diagnosticar un bot caido despues
+        # de un corte de luz le sacaba de abajo el archivo con las posiciones
+        # abiertas, y encima `status` decia "Posiciones abiertas: 0" como un
+        # hecho. En solo lectura se lee si se puede, y si no, no se toca.
         if solo_lectura:
-            self.state = State()
+            self.state = self._leer_estado_sin_tocar()
             return
 
         for path in (self.events_path, self.paper_trades_path, self.state_path):
@@ -346,6 +352,17 @@ class Store:
             Path(tmp_path).unlink(missing_ok=True)
             raise
 
+    def _leer_estado_sin_tocar(self) -> State:
+        """Como `_load_state`, pero un estado corrupto NO se mueve: se avisa."""
+        if not self.state_path.exists():
+            return State()
+        try:
+            with self.state_path.open(encoding="utf-8") as file:
+                return State.from_dict(json.load(file))
+        except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError, AttributeError):
+            self.estado_ilegible = True
+            return State()
+
     def _load_state(self) -> State:
         if not self.state_path.exists():
             return State()
@@ -382,8 +399,16 @@ class Store:
                 if not line:
                     continue
                 try:
-                    rows.append(json.loads(line))
+                    fila = json.loads(line)
                 except json.JSONDecodeError:
                     # Una linea rota no invalida el resto del historial.
                     logger.warning("Linea invalida en %s:%d, se saltea", path, line_number)
+                    continue
+                # JSON valido pero que no es un registro: un pedazo de linea que
+                # casualmente parsea como `[1,2]` o `4386.0`. Sin esto entraba a
+                # la lista y el primer `.get()` tumbaba el informe entero.
+                if not isinstance(fila, dict):
+                    logger.warning("Linea %s:%d no es un registro, se saltea", path, line_number)
+                    continue
+                rows.append(fila)
         return rows
