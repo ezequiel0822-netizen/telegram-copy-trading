@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-16 · v1.4.2 · 624 tests · el último commit que describe
-es `509acd3`, más este mismo cambio
+Actualizado: 2026-09-17 · v1.5.0 · 664 tests · el último commit que describe
+es `b99967e`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé §2 primero (dónde está parado el usuario
 hoy, incluido el paso a la cuenta real que está a medio hacer), después §5 y
@@ -174,6 +174,39 @@ sigue de largo hasta el TP3 con alguna frecuencia, el TP1 está dejando plata
 arriba de la mesa. Pero eso no se sabía, porque los TP2 y TP3 nunca se habían
 mandado al bróker.
 
+**Lo que dijeron los datos después (2026-09-17)**, con
+`tct informe --horas 300 --con-resultados` sobre MetaQuotes: 20 mensajes de
+apertura, 15 operados. **La premisa de arriba se cayó: el canal SÍ toca el
+stop.** Dos de 15 señales fueron a stop de verdad.
+
+| Señal | Qué pasó | Resultado |
+|---|---|---|
+| 11 señales en 0.01 × 1 posición | 9 en TP1, 2 en breakeven | +23.30 |
+| 12:13 BUY 4295, en 0.1 × 3 | stop, las tres | −158.10 |
+| 14:20 BUY 4274, en 0.1 × 3 | stop, las tres | −213.80 |
+| 11:25 SELL 4284, en 0.1 × 3 | breakeven, las tres | 0.00 |
+| 11:39 SELL 4281, en 0.1 × 3 | TP1, TP2 y TP3 | +188.70 |
+
+El −159.90 total no dice nada del canal: lo arman dos señales con 30 veces la
+exposición de las anteriores (lote 0.1 contra 0.01, y tres posiciones). Lo que
+sí dice:
+
+- **Con la configuración de la cuenta real** (0.01, solo el TP1) esas 15 señales
+  habrían dado **cerca de +15** sobre 500. Estimado dividiendo por 10 la
+  posición del TP1 de las últimas cuatro, y sin comisiones: el informe de ese
+  día todavía no las descontaba.
+- **Los tres TP, por ahora, no rinden.** De 4 señales con tres posiciones, 1
+  llegó al TP2 y al TP3. Contra abrir solo la del TP1 con el mismo lote, las
+  tres terminaron unos 100 peor: TP2+TP3 sumaron +145 en la que salió bien y
+  restaron −248 en los dos stops. Cuatro señales no deciden nada.
+- **Una entrada tarde se come el TP1.** Dos operadas ganaron +0.86 y +1.14:
+  el mensaje decía 4386 y llenó cerca de 4389, con el TP1 en 4390. Con el stop
+  a 8 puntos de la entrada del mensaje, arriesgaban ~11 para ganar ~1. El límite
+  de `.env.real.example` (0.3%, ~13 puntos en oro) es más de tres veces el TP1:
+  **bajarlo a 0.05 es una decisión pendiente del usuario.**
+- **El arreglo del breakeven funciona en producción:** las de antes cerraban en
+  −0.42 y −1.08; la de 11:25, después, cerró en **+0.00 exacto** en las tres.
+
 **Cómo quedó implementado.** `POSITIONS_PER_SIGNAL=3` abre tres posiciones, una
 por objetivo, todas con el mismo SL. MT5 admite un solo TP por posición, así
 que no hay otra forma de expresarlo. Y como el lote mínimo (0.01) no se puede
@@ -190,10 +223,12 @@ en la de FxPro. Antes de dinero real hay que bajarlo.
 
 ### Lo que sigue esperando datos
 
-Ahora que los tres objetivos se mandan de verdad, lo que falta es dejar correr
-una semana y mirar `tct informe --con-resultados`: cuántas llegan al TP2 y al
-TP3. Recién con eso se sabe si tres posiciones rinden más que una, que es la
-pregunta que originalmente motivó todo esto.
+La pregunta de los tres TP tiene 4 señales de datos (arriba) y hacen falta
+muchas más. **Antes de sacar conclusiones, el informe tiene que estar al día:**
+hasta el 2026-09-17 contaba cada edición como una señal, no descontaba
+comisiones y podía contar un breakeven como stop (§5). Los números de arriba se
+revisaron a mano contra esos errores y aguantan, pero los siguientes tienen que
+salir del informe arreglado (`git pull` en la PC de trading).
 
 ### Fricciones recurrentes que va a tener de nuevo
 
@@ -666,6 +701,44 @@ orden y quedarse con el primero que entra reporta TP2 sistemáticamente. Es un
 error de etiqueta, no de dinero, pero corrompe justo el dato con el que se va
 a decidir la pregunta de los tres TP (§2).
 
+**`informe.py` — TODO se cuenta por MENSAJE, no solo el título.** Este canal
+edita lo que manda y cada edición se reprocesa. El título ya agrupaba por
+`message_id`, pero el desglose, los motivos, la lista una por una y las
+distancias seguían sumando eventos: con datos reales decía *"20 mensajes"*
+arriba y sumaba 30 abajo, y listaba 23 "señales operadas" donde había 15. Si
+alguna edición se operó, el mensaje se operó; si no, vale la última. Los motivos
+salen de todas las ediciones con ese mismo resultado, una vez por mensaje.
+
+**`informe.py` — el paper trade se escribe ANTES de llamar al bróker**, así que
+existe también para señales que el bróker no pudo abrir. Las distancias solo
+cuentan mensajes con evento `aceptada`, y del mismo mensaje gana el ÚLTIMO
+intento: si el primero falló y una edición abrió, medir el primero da el precio
+de una orden que nunca existió.
+
+**`informe.py` — breakeven o stop se decide contra la entrada REAL.** El bot
+pone el breakeven en el precio de llenado (arriba en esta sección), así que
+decidirlo contra el número del mensaje contaba un breakeven como stop con un
+llenado de 3 puntos, y una señal sin número de entrada como stop siempre.
+`_desenlace_sync` da `precio_entrada` —el deal de entrada— y la del mensaje
+queda de respaldo. Y el TP que tocó una posición sale de su `tp_indice`, no del
+precio de cierre: con TPs a 2 puntos, un llenado 1.2 puntos mejor la hacía
+figurar como TP2 persiguiendo el TP1. En el formato viejo `orders` el índice se
+reconstruye descontando `fallidas`; si no se entiende, no se asigna ninguno.
+
+**`informe.py` — "neto" es neto.** MT5 trae `commission`, `swap` y `fee` en
+campos aparte del `profit`, y la comisión se cobra en el deal de ENTRADA. Se
+suman sobre todos los deals de la posición. A 0.01 lotes, con resultados de ±1,
+los costos son del tamaño del resultado mismo.
+
+**`store.py` — `solo_lectura=True` para todo comando que promete no tocar
+nada.** Abrir un `Store` normal no es inocente: si el `state.json` está
+corrupto, `_load_state` lo RENOMBRA para respaldarlo. `tct informe` y
+`tct status`, corridos para diagnosticar un bot caído tras un corte de luz, le
+movían el archivo de las posiciones abiertas; y `status` encima decía
+*"Posiciones abiertas: 0"* como un hecho. En solo lectura el estado se lee si
+se puede, no se toca nunca, `estado_ilegible` lo avisa, y cualquier escritura
+revienta con `RuntimeError`.
+
 **La lectura de desenlaces es de SOLO LECTURA, y es un requisito, no un
 detalle.** El usuario lo pidió así con todas las letras: *"que no interfiera
 en nada, solo que almacene data sin retrasar nada ni afectar nada"*.
@@ -1060,6 +1133,14 @@ vacía mientras `load_settings` —importado directo— ya la rechazaba.
 `PYTHONPATH=<worktree>/src python -m tct ...`. Y si un arreglo "no tiene
 efecto", verificá **qué copia estás corriendo** antes de tocar nada.
 
+**Y en Git Bash, `PYTHONPATH="C:/a:C:/b"` tampoco apunta al worktree.** El
+separador de Windows es `;`, y Git Bash solo traduce la lista si las rutas
+están en forma `/c/...` —como `$PWD`—; con `C:/...` el `:` de la letra de
+unidad la rompe, y Python cae en silencio en la copia del repo principal. Lo
+encontró un agente de revisión en su primera corrida. → Usar `$PWD`, o
+`sys.path.insert` dentro del script, y **verificar con `tct.__file__`** qué
+copia corre.
+
 **El `$?` después de un pipe es del último comando del pipe.** `... | tail -3;
 echo "exit: $?"` informa el código de `tail`, que es siempre 0. Da la misma
 clase de mentira tranquilizadora que el `-rs` de §7: parece que pasó y no se
@@ -1205,6 +1286,24 @@ que no se entiende es barato—. Se anotan porque cuestan señales, no plata:
     único camino por el que este canal podría dejar una orden viva sin gestión.
     Requiere que el canal escriba esa palabra en inglés y suelta; no se observó
     nunca.
+
+### Lo que quedó sin arreglar del informe y de la gestión
+
+20. **`--con-resultados` hace `mt5.login()`.** Construye el bróker y conecta,
+    y `connect()` loguea si hay credenciales: con OTRO `.env` cuyo `MT5_PATH`
+    esté vacío o apunte a la terminal de otro bot, le cambia la cuenta a esa
+    terminal. Con el mismo `.env` del bot no pasa nada (loguea a la cuenta que
+    ya está). Es el mismo riesgo que `tct mt5` y `simular --con-precios`;
+    analizado leyendo, no ejecutado. Contradice el *"Solo lectura"* que imprime.
+21. **Con `--horas` que corta un mensaje por la mitad**, la fila muestra la hora
+    de la edición que quedó adentro, no la del mensaje. El resultado es correcto.
+22. **Sin verificar**, de la auditoría del 2026-09-16 (agentes que murieron):
+    el aviso de un cierre parcial diría "50%" cuando cerró el 100%; el cierre
+    parcial sería el único handler que calla una posición reconciliada; una
+    edición que corrige el SL de una señal ya abierta se ignora sin avisar;
+    `/estado` y `/posiciones` mentirían tras una reconciliación; `tct check`
+    daría por bueno LIVE con `ENABLE_TELEGRAM_CONTROL=false`; y la verificación
+    de que la cuenta sea la del `.env` corre una sola vez, en `connect()`.
 
 ### Hallazgos sin verificar, listos para levantar
 
