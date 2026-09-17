@@ -61,7 +61,7 @@ def test_agrupa_los_motivos_que_dicen_lo_mismo():
     assert len(motivos) == 1
     texto, veces = motivos[0]
     assert veces == 5
-    assert "Ya habia una posicion abierta" in texto
+    assert "posiciones abiertas en ese simbolo" in texto
 
 
 def test_motivos_distintos_no_se_mezclan():

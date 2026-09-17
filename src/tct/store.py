@@ -166,13 +166,38 @@ class State:
 
 
 class Store:
-    def __init__(self, events_path: Path, paper_trades_path: Path, state_path: Path) -> None:
+    def __init__(
+        self,
+        events_path: Path,
+        paper_trades_path: Path,
+        state_path: Path,
+        solo_lectura: bool = False,
+    ) -> None:
         self.events_path = Path(events_path)
         self.paper_trades_path = Path(paper_trades_path)
         self.state_path = Path(state_path)
+        self.solo_lectura = solo_lectura
+
+        # SOLO LECTURA no es una cortesia: es lo que promete `tct informe`, y
+        # antes no lo cumplia. Cargar el estado no es inocente -si el state.json
+        # esta corrupto, `_load_state` lo RENOMBRA para respaldarlo-, asi que un
+        # informe corrido para diagnosticar un bot caido despues de un corte de
+        # luz le sacaba de abajo el archivo con las posiciones abiertas. Quien
+        # solo lee eventos no necesita el estado para nada: ni se abre.
+        if solo_lectura:
+            self.state = State()
+            return
+
         for path in (self.events_path, self.paper_trades_path, self.state_path):
             path.parent.mkdir(parents=True, exist_ok=True)
         self.state = self._load_state()
+
+    def _prohibido_en_solo_lectura(self, que: str) -> None:
+        if self.solo_lectura:
+            raise RuntimeError(
+                f"Store abierto en solo lectura: no puede {que}. Si esto salta, "
+                "un comando que prometia no tocar nada intento escribir."
+            )
 
     # -- Historial ---------------------------------------------------------
 
@@ -182,11 +207,13 @@ class Store:
         Que se registren tambien los rechazos es lo que despues permite
         contestar "por que el bot no tomo esta senal".
         """
+        self._prohibido_en_solo_lectura("registrar eventos")
         event = {"ts": utc_now_iso(), "kind": kind, **payload}
         self._append_jsonl(self.events_path, event)
         return event
 
     def append_paper_trade(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._prohibido_en_solo_lectura("registrar paper trades")
         event = {"ts": utc_now_iso(), **payload}
         self._append_jsonl(self.paper_trades_path, event)
         return event
@@ -306,6 +333,7 @@ class Store:
 
     def save_state(self) -> None:
         """Escritura atomica: si el proceso muere a mitad, el estado previo sobrevive."""
+        self._prohibido_en_solo_lectura("guardar el estado")
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         handle, tmp_path = tempfile.mkstemp(
             dir=str(self.state_path.parent), prefix=".state-", suffix=".tmp"

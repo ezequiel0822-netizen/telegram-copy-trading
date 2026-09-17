@@ -362,9 +362,28 @@ class MT5NativeBroker(Broker):
         # cerrar la posicion; el profit se suma, porque el resultado de la
         # operacion es el total y no el del ultimo pedazo.
         ultimo = cierres[-1]
+
+        # Lo que la cuenta se movio de verdad no es solo `profit`. MT5 trae
+        # comision, swap y fee en campos APARTE, y la comision se cobra casi
+        # siempre en el deal de ENTRADA, que `cierres` deja afuera. Por eso los
+        # costos se suman sobre TODOS los deals de la posicion. Antes el informe
+        # decia "Resultado neto" sumando solo `profit`: a 0.01 lotes, con
+        # resultados de +-1 dolar, la comision y el swap son del tamano del
+        # resultado mismo y pueden darle vuelta el signo.
+        def _suma(campo: str, que_deals) -> float:
+            return sum(float(getattr(d, campo, 0.0) or 0.0) for d in que_deals)
+
+        bruto = _suma("profit", cierres)
+        comision = _suma("commission", deals)
+        swap = _suma("swap", deals)
+        fee = _suma("fee", deals)
         return {
             "precio": float(getattr(ultimo, "price", 0.0) or 0.0),
-            "profit": sum(float(getattr(d, "profit", 0.0) or 0.0) for d in cierres),
+            "profit": bruto,
+            "comision": comision,
+            "swap": swap,
+            "fee": fee,
+            "neto": bruto + comision + swap + fee,
             "motivo": _motivo_de_cierre(self._mt5, getattr(ultimo, "reason", None)),
             "cerrada_en": getattr(ultimo, "time", None),
         }

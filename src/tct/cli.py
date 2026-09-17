@@ -1257,11 +1257,15 @@ def cmd_informe(args: argparse.Namespace) -> int:
     rechazo se guarda con su motivo- pero vivia en un .jsonl que nadie podia
     leer sin abrirlo a mano.
     """
-    from tct.informe import APERTURAS, filtrar_por_horas, resumir
+    from tct.informe import APERTURAS, filtrar_por_horas, hora_local, precio, resumir
     from tct.store import Store
 
     settings = load_settings(args.env_file)
-    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    # Solo lectura: sin esto, abrir el Store cargaba el state.json y, si estaba
+    # corrupto, lo RENOMBRABA. Un informe corrido para diagnosticar un bot caido
+    # le movia el archivo con las posiciones abiertas.
+    store = Store(settings.events_path, settings.paper_trades_path,
+                  settings.state_path, solo_lectura=True)
 
     eventos = filtrar_por_horas(store.read_events(), args.horas)
     trades = filtrar_por_horas(store.read_paper_trades(), args.horas)
@@ -1272,6 +1276,7 @@ def cmd_informe(args: argparse.Namespace) -> int:
     print("=" * 66)
     print(f"  Instancia: {settings.instance_name.upper()}   "
           f"Registro: {settings.events_path}")
+    print("  Fechas y horas en el reloj de esta PC (dia/mes hora:minuto).")
 
     if not r["vistas"]:
         print("\n  No llego ninguna senal de apertura en ese rango.")
@@ -1303,13 +1308,17 @@ def cmd_informe(args: argparse.Namespace) -> int:
     print("  UNA POR UNA")
     print("  " + "-" * 62)
     for fila in r["detalle"]:
-        hora = str(fila["ts"] or "")[11:16]
+        hora = hora_local(fila["ts"])
         simbolo = fila["symbol"] or "?"
         lado = fila["side"] or ""
-        entrada = fila["entry"]
+        # Una fila por MENSAJE. Si el canal lo edito, se dice cuantas veces se
+        # proceso, en vez de repetir la fila: tres filas iguales en el mismo
+        # minuto parecian tres senales identicas.
+        ediciones = fila.get("ediciones") or 1
+        veces = f"  ({ediciones} ediciones)" if ediciones > 1 else ""
         print(f"      {hora}  {simbolo:<8} {lado:<5} "
-              f"entrada={entrada if entrada is not None else '-':<10} "
-              f"{APERTURAS.get(fila['kind'], fila['kind'])}")
+              f"entrada={precio(fila['entry']):<10} "
+              f"{APERTURAS.get(fila['kind'], fila['kind'])}{veces}")
         for motivo in fila["motivos"]:
             print(f"              {motivo}")
         # El texto solo en lo que NO se opero: es ahi donde uno necesita ver
@@ -1370,7 +1379,13 @@ async def _informar_desenlaces(settings: Settings, eventos: list) -> None:
     abierto.
     """
     from tct.brokers.base import build_broker
-    from tct.informe import clasificar_desenlace, resumir_desenlaces, tickets_operados
+    from tct.informe import (
+        clasificar_desenlace,
+        hora_local,
+        precio,
+        resumir_desenlaces,
+        tickets_operados,
+    )
 
     operadas = tickets_operados(eventos)
     if not operadas:
@@ -1396,18 +1411,24 @@ async def _informar_desenlaces(settings: Settings, eventos: list) -> None:
             if desenlace is None:
                 filas.append({**operada, "resultado": None})
                 continue
-            filas.append({
+            fila = {
                 **operada,
                 "resultado": clasificar_desenlace(operada, desenlace),
                 "precio_cierre": desenlace.get("precio"),
                 "profit": desenlace.get("profit"),
-            })
+            }
+            # Los costos solo si el broker los dio: una fila sin "neto" se
+            # informa como tal en el resumen, en vez de fingir costo cero.
+            for campo in ("comision", "swap", "fee", "neto"):
+                if campo in desenlace:
+                    fila[campo] = desenlace[campo]
+            filas.append(fila)
     finally:
         await broker.disconnect()
 
     print()
     for fila in filas:
-        hora = str(fila.get("ts", ""))[11:16]
+        hora = hora_local(fila.get("ts"))
         # Que TP perseguia cada posicion, y si un "mover TP" la toco. Con tres
         # posiciones por senal, sin esta columna las tres filas se ven iguales.
         persigue = f"TP{fila['tp_indice']}" if fila.get("tp_indice") else "-"
@@ -1417,20 +1438,28 @@ async def _informar_desenlaces(settings: Settings, eventos: list) -> None:
             print(f"      {hora}  {fila['symbol']:<8} {persigue:<4} "
                   f"sigue abierta o sin historial{movido}")
             continue
-        print(f"      {hora}  {fila['symbol']:<8} {fila['side']:<5} {persigue:<4} "
-              f"entrada={fila['entry']:<10} cerro={fila.get('precio_cierre')} "
-              f"{fila['resultado']:<14} {fila.get('profit'):+.2f}{movido}")
+        # La entrada puede no existir: una senal a mercado sin numero ("BUY
+        # NOW") se opera igual. Formatearla con `:<10` reventaba TODA la
+        # seccion con un traceback, no solo esa fila.
+        resultado_fila = fila.get("neto", fila.get("profit")) or 0.0
+        print(f"      {hora}  {fila['symbol'] or '?':<8} {fila['side'] or '':<5} {persigue:<4} "
+              f"entrada={precio(fila.get('entry')):<10} "
+              f"cerro={precio(fila.get('precio_cierre')):<10} "
+              f"{fila['resultado']:<14} {resultado_fila:+.2f}{movido}")
 
     r = resumir_desenlaces(filas)
     if not r["conocidos"]:
         print("\n  Ninguna operacion tiene desenlace todavia.")
         return
 
-    print(f"\n  De {r['conocidos']} operaciones terminadas:")
+    print(f"\n  De {r['conocidos']} posiciones terminadas:")
     for resultado, veces in r["por_resultado"]:
         print(f"      {veces:>3}  {resultado}")
-    print(f"\n  Resultado neto: {r['profit_total']:+.2f} "
-          f"(en la moneda de la cuenta)")
+    print(f"\n  Resultado bruto : {r['bruto_total']:+.2f}   (lo que movio el precio)")
+    print(f"  Comision y swap : {r['costos_total']:+.2f}")
+    print(f"  Resultado neto  : {r['neto_total']:+.2f}   (lo que se movio la cuenta)")
+    if r["costos_desconocidos"]:
+        print(f"  ({r['costos_desconocidos']} sin dato de costos: en esas el neto es el bruto)")
     if r["sin_datos"]:
         print(f"  {r['sin_datos']} sin datos: siguen abiertas, o MetaTrader no")
         print("  tiene ese tramo del historial cargado.")
@@ -1453,13 +1482,15 @@ def _informar_distancias(medidas: list, settings: Settings) -> None:
     print("  Medido en el instante exacto en que llego cada senal.")
     print()
 
+    from tct.informe import hora_local, precio
+
     peor = 0.0
     for m in medidas:
-        hora = str(m["ts"] or "")[11:16]
+        hora = hora_local(m["ts"])
         marca = "  <- rozo el limite" if limite and m["distancia_pct"] > limite * 0.8 else ""
         peor = max(peor, m["distancia_pct"])
-        print(f"      {hora}  {m['symbol']:<8} entrada={m['entry']:<10} "
-              f"mercado={m['mercado']:<10} {m['distancia_pct']:5.2f}%{marca}")
+        print(f"      {hora}  {m['symbol']:<8} entrada={precio(m['entry']):<10} "
+              f"mercado={precio(m['mercado']):<10} {m['distancia_pct']:5.2f}%{marca}")
 
     print(f"\n  La mas lejos quedo a {peor:.2f}%, con el limite en {limite}%.")
     if limite and peor > limite * 0.8:

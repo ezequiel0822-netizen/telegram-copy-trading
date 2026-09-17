@@ -12,18 +12,25 @@ Pero hasta ahora esa informacion estaba en un archivo `.jsonl` que nadie podia
 leer sin abrirlo a mano. Tener el dato y no poder mirarlo es casi lo mismo que
 no tenerlo.
 
-QUE NO HACE
------------
-No calcula ganancias ni perdidas. Para eso hace falta el precio de salida de
-cada operacion, que hoy no se guarda: es el punto pendiente de la seccion 8
-del CONTEXTO MAESTRO. Este modulo contesta "que hizo el bot y por que", no
-"cuanto gano".
+LA REGLA DE ORO: SE CUENTAN MENSAJES, NO EVENTOS
+------------------------------------------------
+Este canal EDITA lo que manda y cada edicion se vuelve a procesar, asi que un
+mensaje deja dos, tres o cuatro eventos. Todo lo que el informe cuenta -el
+desglose, los motivos, la lista una por una, las distancias- se cuenta por
+MENSAJE, porque es lo que uno ve en el grupo y contra lo que compara. Contar
+eventos ya mando una vez a buscar un bug que no existia ("hubo nueve senales y
+leyo cuatro"), y una revision posterior encontro que el titulo contaba mensajes
+pero el desglose de abajo seguia sumando eventos: con datos reales decia "20
+mensajes" arriba y sumaba 30 abajo.
+
+Las ganancias salen del historial de MetaTrader (`--con-resultados`), nunca de
+aca: este modulo solo lee lo que el bot registro.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
 
 # Eventos que representan una senal de APERTURA que el bot vio y decidio algo.
@@ -50,6 +57,57 @@ def _cuando(evento: dict[str, Any]) -> datetime | None:
     return momento if momento.tzinfo else momento.replace(tzinfo=timezone.utc)
 
 
+def hora_local(crudo: Any, zona: tzinfo | None = None) -> str:
+    """"16/09 11:39" en el reloj de ESTA PC, que es el que muestra Telegram.
+
+    Los eventos se guardan en UTC. Antes el informe cortaba el texto crudo y
+    mostraba la hora UTC sin decirlo, y sin fecha: en un informe de 300 horas
+    un "11:39" podia ser de cualquiera de doce dias, y en una maquina en UTC-6
+    no coincidia con la hora del mensaje en el grupo, que es justo contra lo que
+    uno cruza la lista.
+    """
+    if not crudo:
+        return "--/-- --:--"
+    try:
+        momento = datetime.fromisoformat(str(crudo))
+    except ValueError:
+        return str(crudo)[:16]
+    if momento.tzinfo is None:
+        momento = momento.replace(tzinfo=timezone.utc)
+    return momento.astimezone(zona).strftime("%d/%m %H:%M")
+
+
+def precio(valor: Any) -> str:
+    """Un precio legible: `4404.845`, no `4404.844999999999`.
+
+    Hasta cinco decimales, que es lo que usa el forex, sin ceros de relleno.
+    Sin dato devuelve "-": un None en un f-string con formato hacia reventar el
+    informe entero con un traceback.
+    """
+    if valor is None:
+        return "-"
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return str(valor)
+    texto = f"{numero:.5f}".rstrip("0").rstrip(".")
+    return texto if texto not in {"", "-0"} else "0"
+
+
+def _clave_de_mensaje(evento: dict[str, Any], orden: int) -> tuple:
+    """A que MENSAJE de Telegram pertenece un evento.
+
+    Sin id (eventos de antes de que se guardara) cada evento es su propio
+    mensaje: descartarlos esconderia senales, y agruparlos a ciegas juntaria
+    senales distintas.
+    """
+    senal = evento.get("signal") or {}
+    mid = senal.get("telegram_message_id")
+    if mid is None:
+        return ("sin-id", orden)
+    return ("mensaje", senal.get("telegram_chat_id"), mid)
+
+
 def filtrar_por_horas(
     eventos: list[dict[str, Any]], horas: int, ahora: datetime | None = None
 ) -> list[dict[str, Any]]:
@@ -69,20 +127,37 @@ def filtrar_por_horas(
 def resumir(
     eventos: list[dict[str, Any]], paper_trades: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
-    """Cuenta que paso con las senales de apertura y por que."""
+    """Cuenta que paso con las senales de apertura y por que. POR MENSAJE."""
     por_tipo: Counter[str] = Counter()
     motivos: Counter[str] = Counter()
     detalle: list[dict[str, Any]] = []
 
-    for evento in eventos:
-        kind = evento.get("kind", "")
-        if kind not in APERTURAS:
+    # Primero se juntan las ediciones de cada mensaje, en el orden en que
+    # llego el primero de cada uno.
+    grupos: dict[tuple, list[dict[str, Any]]] = {}
+    vistas = 0
+    for orden, evento in enumerate(eventos):
+        if evento.get("kind", "") not in APERTURAS:
             continue
+        vistas += 1
+        grupos.setdefault(_clave_de_mensaje(evento, orden), []).append(evento)
+
+    for ediciones in grupos.values():
+        # Que paso con ESTE mensaje. Si alguna edicion se opero, se opero: es
+        # lo que importa, aunque otra edicion haya sido rechazada antes (por
+        # ejemplo, porque el tope estaba lleno y despues se libero). Si ninguna
+        # se opero, vale la ULTIMA edicion, que es la version vigente del
+        # mensaje y el ultimo intento del bot.
+        evento = next((e for e in ediciones if e.get("kind") == "aceptada"), ediciones[-1])
+        kind = evento.get("kind", "")
         por_tipo[kind] += 1
 
         senal = evento.get("signal") or {}
         fila = {
-            "ts": evento.get("ts"),
+            # La hora en que llego el mensaje, no la de su ultima edicion: es
+            # la que se ve en el grupo.
+            "ts": ediciones[0].get("ts"),
+            "ediciones": len(ediciones),
             "kind": kind,
             "symbol": senal.get("symbol"),
             "side": senal.get("side"),
@@ -127,11 +202,6 @@ def resumir(
         for motivo in e.get("reasons", []) or ["sin motivo registrado"]:
             motivos_gestion[_familia_de_motivo_gestion(motivo)] += 1
 
-    # Cuantos MENSAJES distintos hubo, no cuantos eventos. Este canal edita lo
-    # que manda y las ediciones se reprocesan a proposito, asi que un solo
-    # mensaje puede aparecer tres veces. Contar eventos infla el numero hasta
-    # no coincidir con lo que uno ve en el grupo, que es contra lo que se
-    # compara.
     # Que paso con cada "mover TP": cuantas posiciones del TP1 se movieron, y
     # por que no se movieron las demas. Se pidio que quede a la vista para
     # poder revisar los datos despues.
@@ -144,12 +214,12 @@ def resumir(
         for no in e.get("no_movidas") or []:
             tp_no_movidos[_familia_de_no_movido(no.get("motivo", ""))] += 1
 
-    ids = [f["message_id"] for f in detalle if f["message_id"] is not None]
-    mensajes = len(set(ids)) + sum(1 for f in detalle if f["message_id"] is None)
-
     return {
-        "vistas": sum(por_tipo.values()),
-        "mensajes": mensajes,
+        # `vistas` son los eventos procesados, ediciones incluidas; `mensajes`
+        # son los mensajes distintos. Todo lo demas se cuenta por mensaje, asi
+        # que el desglose suma exactamente `mensajes`.
+        "vistas": vistas,
+        "mensajes": len(grupos),
         "por_tipo": dict(por_tipo),
         "motivos": motivos.most_common(),
         "detalle": detalle,
@@ -208,8 +278,13 @@ def _familia_de_motivo(motivo: str) -> str:
     distintas —cada una con su simbolo y su precio— y se pierde justamente lo
     que uno quiere ver: que fueron todos por lo mismo.
     """
-    if "Ya hay una posicion abierta" in motivo:
-        return "Ya habia una posicion abierta en ese simbolo"
+    # Por la variable y no por la frase: risk.py dice "una posicion abierta"
+    # con una y "2 posiciones abiertas" con dos, y con MAX_POSITIONS_PER_SYMBOL=2
+    # -la cuenta real- el rechazo recien salta con dos, asi que la frase en
+    # singular no aparecia nunca y el motivo salia crudo.
+    if "MAX_POSITIONS_PER_SYMBOL" in motivo or "Ya hay una posicion abierta" in motivo:
+        return ("Ya habia posiciones abiertas en ese simbolo "
+                "(MAX_POSITIONS_PER_SYMBOL)")
     if "precio real" in motivo:
         return "La entrada estaba lejos del precio real del mercado"
     if "Cupo diario agotado" in motivo:
@@ -231,13 +306,30 @@ def _distancias(paper_trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     Es el dato con el que se calibra MAX_SPREAD_FROM_ENTRY_PCT sin el problema
     de las senales viejas: aca el precio se guardo cuando el mensaje llego, no
     cuando uno corre el informe.
+
+    UNA POR SENAL, no una por posicion. Con POSITIONS_PER_SIGNAL=3 cada senal
+    deja tres paper trades con la misma entrada y el mismo precio de mercado
+    -una sola lectura-, y el informe los listaba tres veces bajo el titulo
+    "senales operadas". Con datos reales decia 23 donde habia 15.
     """
     medidas = []
+    vistas: set[tuple] = set()
     for trade in paper_trades:
         entrada = trade.get("entry")
         mercado = trade.get("precio_mercado")
         if not entrada or not mercado or mercado <= 0:
             continue
+        senal = trade.get("signal") or {}
+        if senal.get("telegram_message_id") is not None:
+            clave = ("mensaje", senal.get("telegram_chat_id"), senal.get("telegram_message_id"))
+        else:
+            # Sin id, las posiciones de una misma senal comparten entrada Y la
+            # misma lectura del mercado. Dos senales distintas con los dos
+            # numeros iguales hasta el ultimo decimal no pasan en la practica.
+            clave = ("precios", trade.get("symbol"), entrada, mercado)
+        if clave in vistas:
+            continue
+        vistas.add(clave)
         medidas.append({
             "ts": trade.get("ts"),
             "symbol": trade.get("symbol"),
@@ -356,6 +448,14 @@ def clasificar_desenlace(operada: dict[str, Any], desenlace: dict[str, Any]) -> 
         movido = operada.get("tp_movido_a")
         if movido and precio and _cerca(precio, movido, precio):
             return f"TP{operada.get('tp_indice') or 1} movido"
+        # Si se sabe que TP perseguia, no hay nada que adivinar: MT5 dice que
+        # cerro por take profit, y a esa posicion se le mando UN solo TP, el
+        # suyo. Adivinarlo por el precio de cierre fallaba con el deslizamiento:
+        # los TP de este canal estan a 2 puntos, y un llenado 1.2 puntos mejor
+        # hacia figurar como TP2 una posicion que solo perseguia el TP1 -justo
+        # en el conteo con el que se decide si los TP lejanos rinden-.
+        if operada.get("tp_indice"):
+            return f"TP{operada['tp_indice']}"
         return _que_tp(operada, precio)
 
     if motivo == "sl":
@@ -396,13 +496,34 @@ def _cerca(a: float, b: float, escala: float, tolerancia_pct: float = 0.05) -> b
 
 
 def resumir_desenlaces(desenlaces: list[dict[str, Any]]) -> dict[str, Any]:
-    """El resumen que contesta si el canal sirve."""
+    """El resumen que contesta si el canal sirve.
+
+    Separa el resultado BRUTO (lo que movio el precio) de los COSTOS (comision,
+    swap y fee) y da el NETO, que es lo que se movio la cuenta. Antes se llamaba
+    "neto" a la suma de `profit` a secas, que nunca iba a cerrar contra el
+    balance del broker. `profit_total` se mantiene y ahora es el neto.
+
+    Una fila sin `neto` (desenlaces leidos antes de que existiera el campo, o
+    de un broker que no lo da) cuenta su `profit` y cero de costos: es lo unico
+    que se sabe de ella, y se dice en `costos_desconocidos`.
+    """
     conocidos = [d for d in desenlaces if d.get("resultado")]
     conteo = Counter(d["resultado"] for d in conocidos)
-    total = sum(float(d.get("profit") or 0.0) for d in conocidos)
+
+    def _num(fila: dict[str, Any], campo: str) -> float:
+        return float(fila.get(campo) or 0.0)
+
+    bruto = sum(_num(d, "profit") for d in conocidos)
+    costos = sum(_num(d, "comision") + _num(d, "swap") + _num(d, "fee") for d in conocidos)
+    sin_costos = sum(1 for d in conocidos if "neto" not in d)
+    neto = sum(_num(d, "neto") if "neto" in d else _num(d, "profit") for d in conocidos)
     return {
         "conocidos": len(conocidos),
         "sin_datos": len(desenlaces) - len(conocidos),
         "por_resultado": conteo.most_common(),
-        "profit_total": total,
+        "bruto_total": bruto,
+        "costos_total": costos,
+        "neto_total": neto,
+        "profit_total": neto,
+        "costos_desconocidos": sin_costos,
     }
