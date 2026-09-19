@@ -29,6 +29,7 @@ from __future__ import annotations
 import getpass
 import hashlib
 import hmac
+import os
 import re
 import secrets
 import sys
@@ -121,17 +122,34 @@ def escribir_en_env(ruta: Path, huella: str) -> None:
     fin = "\r\n" if "\r\n" in crudo else "\n"
     nueva = f"{VARIABLE}={huella}"
 
-    lineas = crudo.splitlines(keepends=True)
-    patron = re.compile(rf"^\s*{VARIABLE}\s*=")
+    # Se corta SOLO en saltos de linea de verdad. `splitlines` corta tambien en
+    # caracteres raros (U+2028, \x0b, \x0c...) que python-dotenv no toma como fin
+    # de linea: la clave podia quedar escrita en el medio del valor de otra
+    # variable y el comando igual decia "Listo".
+    lineas = re.findall(r"[^\n]*\n|[^\n]+$", crudo)
+    # La primera linea puede traer la marca BOM que pone el Bloc de notas viejo:
+    # sin contemplarla, una clave en la primera linea no se encontraba y quedaba
+    # duplicada.
+    patron = re.compile(rf"^\ufeff?\s*{VARIABLE}\s*=")
     reemplazos = 0
     for i, linea in enumerate(lineas):
         if patron.match(linea):
+            bom = "\ufeff" if linea.startswith("\ufeff") else ""
             cierre = linea[len(linea.rstrip("\r\n")):] or fin
-            lineas[i] = nueva + cierre
+            lineas[i] = bom + nueva + cierre
             reemplazos += 1
     if not reemplazos:
         if lineas and not lineas[-1].endswith(("\n", "\r")):
             lineas[-1] += fin
         lineas.append(f"{fin}# Clave de arranque (la pone 'tct clave'; no es la clave, es su huella){fin}")
         lineas.append(nueva + fin)
-    ruta.write_bytes("".join(lineas).encode("utf-8"))
+
+    # Atomico: se escribe al lado y se reemplaza de una. El .env tiene las
+    # credenciales de MetaTrader y de Telegram; un corte a mitad de escritura
+    # lo dejaria truncado. Asi, o queda el nuevo entero o el viejo intacto.
+    temporal = ruta.with_name(ruta.name + ".tmp")
+    try:
+        temporal.write_bytes("".join(lineas).encode("utf-8"))
+        os.replace(temporal, ruta)
+    finally:
+        temporal.unlink(missing_ok=True)

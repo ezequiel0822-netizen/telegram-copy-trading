@@ -309,3 +309,116 @@ def test_una_clave_demasiado_corta_no_se_acepta(tmp_path, monkeypatch):
 
     assert correr_clave(monkeypatch, env, "123", "123") == 1
     assert VARIABLE not in env.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# Lo que encontro la revision del 19/09
+# --------------------------------------------------------------------------
+
+
+class ArgsSimular:
+    horas = 24
+    limite = None
+    ejecutar = True
+    con_precios = False
+    todos = False
+    verbose = False
+    env_file = ".env.segunda"
+
+
+def test_simular_ejecutar_en_la_demo_con_clave_la_pide(tmp_path, monkeypatch):
+    """El agujero: `run` y `probar --operar` pedian la clave y `simular
+    --ejecutar` no, y con la demo de FxPro protegida mandaba ordenes igual."""
+    settings = build_settings(tmp_path, trading_mode="PAPER_AND_MT5_DEMO",
+                              clave_de_arranque=hashear(CLAVE))
+    monkeypatch.setattr(cli, "load_settings", lambda _ruta: settings)
+    monkeypatch.setattr("getpass.getpass", respuestas("a", "b", "c"))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    def no_deberia_simular(*_a, **_k):
+        raise AssertionError("ejecuto la simulacion sin la clave")
+
+    monkeypatch.setattr(cli, "_simular_async", no_deberia_simular)
+
+    assert cli.cmd_simular(ArgsSimular()) == 1
+
+
+def test_simular_sin_ejecutar_no_pide_nada(tmp_path, monkeypatch):
+    """Sin --ejecutar solo mira: no manda ordenes, no hace falta la clave."""
+    settings = build_settings(tmp_path, trading_mode="PAPER_AND_MT5_DEMO",
+                              clave_de_arranque=hashear(CLAVE))
+    monkeypatch.setattr(cli, "load_settings", lambda _ruta: settings)
+    corridas = []
+
+    async def simular_falso(_s, _a):
+        corridas.append(True)
+        return 0
+
+    monkeypatch.setattr(cli, "_simular_async", simular_falso)
+    args = ArgsSimular()
+    args.ejecutar = False
+
+    assert cli.cmd_simular(args) == 0
+    assert corridas, "no llego a simular"
+
+
+def test_la_marca_del_bloc_de_notas_no_duplica_la_clave(tmp_path):
+    env = tmp_path / ".env"
+    env.write_bytes(("\ufeff" + f"{VARIABLE}={hashear('vieja1')}\nA=1\n").encode("utf-8"))
+
+    escribir_en_env(env, hashear("nueva1"))
+
+    texto = env.read_bytes().decode("utf-8")
+    assert texto.count(f"{VARIABLE}=") == 1, "quedo duplicada"
+    assert texto.startswith("\ufeff"), "se perdio la marca del archivo"
+
+
+def test_un_caracter_raro_en_otro_valor_no_mueve_la_clave(tmp_path):
+    """`splitlines` cortaba en U+2028; python-dotenv no. La clave terminaba
+    escrita dentro del valor de otra variable."""
+    env = tmp_path / ".env"
+    env.write_text("NOTA=hola\u2028CLAVE_DE_ARRANQUE=trampa\nA=1\n", encoding="utf-8")
+
+    escribir_en_env(env, hashear(CLAVE))
+
+    lineas = env.read_text(encoding="utf-8").split("\n")
+    assert any(l.startswith(f"{VARIABLE}=pbkdf2") for l in lineas), "la clave no quedo en su linea"
+    assert lineas[0] == "NOTA=hola\u2028CLAVE_DE_ARRANQUE=trampa", "toco otro valor"
+
+
+def test_no_deja_archivos_temporales(tmp_path):
+    env = tmp_path / ".env.real"
+    env.write_text("A=1\n", encoding="utf-8")
+
+    escribir_en_env(env, hashear(CLAVE))
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".env.real"]
+
+
+def test_un_env_que_no_es_utf8_avisa_antes_de_pedir_la_clave(tmp_path, monkeypatch, capsys):
+    """Antes se escribia la clave dos veces y recien ahi salia un error crudo."""
+    env = tmp_path / ".env.real"
+    original = "MT5_PASSWORD=contrase\xf1a\n".encode("cp1252")
+    env.write_bytes(original)
+
+    def no_deberia_preguntar(_p):
+        raise AssertionError("pidio la clave sin poder escribir el archivo")
+
+    monkeypatch.setattr("getpass.getpass", no_deberia_preguntar)
+
+    assert cli.cmd_clave(argparse.Namespace(env_file=str(env))) == 1
+    assert env.read_bytes() == original, "toco el archivo"
+    assert "UTF-8" in capsys.readouterr().out, "no dice que hacer"
+
+
+def test_si_no_se_puede_escribir_lo_dice_sin_error_crudo(tmp_path, monkeypatch, capsys):
+    env = tmp_path / ".env.real"
+    env.write_text("A=1\n", encoding="utf-8")
+
+    def bloqueado(*_a, **_k):
+        raise PermissionError("bloqueado")
+
+    monkeypatch.setattr("tct.clave.escribir_en_env", bloqueado)
+
+    assert correr_clave(monkeypatch, env, CLAVE, CLAVE) == 1
+    assert "solo lectura" in capsys.readouterr().out

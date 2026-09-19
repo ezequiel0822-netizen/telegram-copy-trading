@@ -367,6 +367,15 @@ def cmd_simular(args: argparse.Namespace) -> int:
     settings = load_settings(args.env_file)
     setup_logging(verbose=args.verbose)
 
+    # Con --ejecutar manda ordenes de verdad a la cuenta. En una demo con clave
+    # -la de FxPro- es lo mismo que arrancar el bot: se pide. Lo encontro una
+    # revision: `run` y `probar --operar` la pedian y este camino no. Con dinero
+    # real no se pide porque `_simular_async` se niega a ejecutar de todos
+    # modos: pedir una clave para despues decir que no seria peor que no pedirla.
+    if (getattr(args, "ejecutar", False) and not settings.is_live
+            and not _exigir_clave(settings, args.env_file, "ejecutar la simulacion")):
+        return 1
+
     if not settings.telegram_source_chats:
         print("No hay ningun chat configurado en TELEGRAM_SOURCE_CHATS.")
         print("Corre primero:  python -m tct chats")
@@ -1551,6 +1560,17 @@ def cmd_clave(args: argparse.Namespace) -> int:
         print(f"No existe {ruta}. Primero crea el archivo de configuracion.")
         return 1
 
+    # Se revisa que se pueda leer ANTES de pedir la clave: si no, la persona
+    # la escribia dos veces y recien ahi veia un error crudo de Python.
+    try:
+        ruta.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        print(f"{ruta} no esta guardado como UTF-8, y el bot no lo puede tocar")
+        print("sin arriesgar lo que tiene adentro. Abrilo con el Bloc de notas,")
+        print("Archivo -> Guardar como, y en 'Codificacion' elegi UTF-8.")
+        print("No se cambio nada.")
+        return 1
+
     print(f"Clave de arranque para {ruta}")
     print("Se te va a pedir cada vez que arranques el bot con este archivo.")
     print("No se muestra mientras la escribis.\n")
@@ -1568,7 +1588,14 @@ def cmd_clave(args: argparse.Namespace) -> int:
         print(f"\nTiene que tener al menos {LARGO_MINIMO} caracteres. No se cambio nada.")
         return 1
 
-    escribir_en_env(ruta, hashear(primera))
+    try:
+        escribir_en_env(ruta, hashear(primera))
+    except OSError:
+        print(f"\nNo se pudo escribir {ruta}. Casi siempre es una de dos:")
+        print("  1. Esta abierto en otro programa que lo tiene bloqueado.")
+        print("  2. Es de solo lectura (clic derecho -> Propiedades).")
+        print("No se cambio nada.")
+        return 1
     print(f"\nListo. {VARIABLE} quedo guardada en {ruta}.")
     print("Si te la olvidas, volve a correr este mismo comando y pone otra.")
     return 0
