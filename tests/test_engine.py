@@ -8,6 +8,7 @@ en la Mac antes de conectar nada.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -17,12 +18,60 @@ from tct.engine import Engine
 from tct.store import Store
 
 
+class AvisosDelLog(list):
+    """Lo que el motor deja dicho, para poder afirmar sobre ello.
+
+    Antes los tests le pasaban un notificador falso al motor y leian lo que
+    habria salido por Telegram. Los avisos ya no van por Telegram -el usuario
+    pidio que el bot no le escriba nunca- pero siguen existiendo: van al log.
+    Este ayudante los junta de ahi, asi que lo que los tests protegen es lo
+    mismo de antes: que el bot DIGA lo que hizo y lo que no pudo hacer.
+
+    Se engancha al crearse, asi que alcanza con tenerlo antes de la accion:
+
+        avisos = AvisosDelLog()
+        send(engine, SENAL)
+        assert any("NO se pudo" in a for a in avisos)
+
+    Tambien sirve como contexto, para acotar la captura a un tramo. El
+    desenganche lo hace la limpieza automatica de `conftest.py`: dejarlo puesto
+    envenenaria a los tests siguientes.
+    """
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self.__enter__()
+
+    @property
+    def mensajes(self) -> list[str]:
+        """Alias de si misma. Los tests venian leyendo `.mensajes` del
+        notificador falso y la afirmacion no cambia: cambio de donde sale."""
+        return self
+
+    def __enter__(self) -> AvisosDelLog:
+        self._handler = logging.Handler()
+        self._handler.emit = lambda record: self.append(record.getMessage())
+        self._logger = logging.getLogger("tct.engine")
+        self._nivel = self._logger.level
+        self._logger.setLevel(logging.INFO)
+        self._logger.addHandler(self._handler)
+        return self
+
+    def __exit__(self, *_excepcion) -> bool:
+        self._logger.removeHandler(self._handler)
+        self._logger.setLevel(self._nivel)
+        return False
+
+    @property
+    def texto(self) -> str:
+        return "\n".join(self)
+
+
 def build_settings(tmp_path, **overrides) -> Settings:
     defaults = dict(
         trading_mode=PAPER_ONLY,
         telegram_api_id=1, telegram_api_hash="hash",
         telegram_session_name="test", telegram_source_chats=["-100"],
-        telegram_bot_token="", telegram_notify_chat_id="",
         metaapi_token="", metaapi_account_id="", metaapi_region="new-york",
         mt5_login="", mt5_password="", mt5_server="", mt5_path="",
         mt5_broker_profile="default",

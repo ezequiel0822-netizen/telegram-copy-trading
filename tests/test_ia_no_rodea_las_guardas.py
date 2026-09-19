@@ -22,7 +22,7 @@ from tct.brokers.paper import PaperBroker
 from tct.engine import Engine
 from tct.signals.parser import es_descarte_deliberado, parse_signal
 from tct.store import Store
-from tests.test_engine import build_settings, send
+from tests.test_engine import AvisosDelLog, build_settings, send
 
 # Mensajes REALES del canal, del 2026-09-06.
 RECAP_1 = ("Así que, chicos, aquí están nuestros resultados de la primera "
@@ -167,35 +167,23 @@ def test_una_apertura_sin_simbolo_no_genera_aviso(tmp_path):
     """Es literal lo que se vio en el informe: '? entrada=-'. El riesgo la
     rechazaria con 'no se pudo identificar el simbolo', asi que avisarla es
     ruido que ademas parece importante."""
-    avisos = []
-
-    class Aviso:
-        def enabled(self):
-            return True
-
-        async def send(self, texto):
-            avisos.append(texto)
+    avisos = AvisosDelLog()
 
     settings = build_settings(tmp_path, enable_ollama=True)
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
-    engine = Engine(settings, store, PaperBroker(), Aviso(), ollama=IASinSimbolo())
+    engine = Engine(settings, store, PaperBroker(), ollama=IASinSimbolo())
 
     resultado = send(engine, RECAP_2, message_id=1)
 
     assert resultado["status"] == "ignorado"
-    assert avisos == [], f"aviso de una interpretacion inutilizable: {avisos}"
+    assert "MENSAJE QUE EL PARSER NO ENTENDIO" not in avisos.texto, (
+        f"aviso de una interpretacion inutilizable: {avisos.texto}"
+    )
 
 
 def test_una_interpretacion_completa_si_se_avisa(tmp_path):
     """Lo que NO hay que romper: para eso existe la capa de IA."""
-    avisos = []
-
-    class Aviso:
-        def enabled(self):
-            return True
-
-        async def send(self, texto):
-            avisos.append(texto)
+    avisos = AvisosDelLog()
 
     # `parse_signal` deja source="text"; la capa de IA lo marca como "ollama",
     # que es lo que hace que el motor avise en vez de operar.
@@ -210,9 +198,10 @@ def test_una_interpretacion_completa_si_se_avisa(tmp_path):
 
     settings = build_settings(tmp_path, enable_ollama=True)
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
-    engine = Engine(settings, store, PaperBroker(), Aviso(), ollama=IAUtil())
+    engine = Engine(settings, store, PaperBroker(), ollama=IAUtil())
 
     resultado = send(engine, "oro compren en 4386 pongan stop 4380", message_id=1)
 
     assert resultado["status"] == "sugerencia_ia"
-    assert any("XAUUSD" in a for a in avisos)
+    assert "MENSAJE QUE EL PARSER NO ENTENDIO" in avisos.texto
+    assert "XAUUSD" in avisos.texto

@@ -292,7 +292,7 @@ src/tct/
 │   └── symbol_map.py   traducción de símbolos por bróker
 └── telegram/
     ├── reader.py       lectura del grupo con Telethon
-    └── notifier.py     avisos por Bot API
+    └── control.py      /pausa, /estado, /cerrar desde el telefono
 ```
 
 ---

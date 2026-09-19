@@ -35,23 +35,11 @@ from tct.brokers.mt5_native import MT5NativeBroker
 from tct.engine import Engine
 from tct.store import Store
 from tests.fake_mt5 import FakeMT5
-from tests.test_engine import build_settings
+from tests.test_engine import AvisosDelLog, build_settings
 
 A = "DEAL | GOLD BUY XAUUSD 4432 TP1: 4436 TP2: 4438 TP3: 4440 SL: 4424"
 B = "DEAL | GOLD BUY XAUUSD 4460 TP1: 4464 TP2: 4466 TP3: 4468 SL: 4452"
 B_SELL = "DEAL | GOLD SELL XAUUSD 4460 TP1: 4456 TP2: 4454 TP3: 4452 SL: 4468"
-
-
-class Avisos:
-    def __init__(self):
-        self.out = []
-
-    def enabled(self):
-        return True
-
-    async def send(self, texto):
-        self.out.append(texto)
-        return True
 
 
 def armar(por_senal=1):
@@ -61,7 +49,7 @@ def armar(por_senal=1):
         mt5_login="555", mt5_password="x", mt5_server="FxPro-MT5",
         default_lot=0.01, max_lot=0.01, allowed_symbols={"XAUUSD"},
         max_open_trades=10, max_positions_per_symbol=10, max_signals_per_day=10,
-        positions_per_signal=por_senal, telegram_notify_level="problems",
+        positions_per_signal=por_senal,
     )
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
     fake = FakeMT5({"XAUUSD": {"bid": 4432.0, "ask": 4432.5}})
@@ -69,8 +57,7 @@ def armar(por_senal=1):
     broker._mt5 = fake
     broker._ready = True
     broker.cuenta = "FxPro-MT5 #555"
-    avisos = Avisos()
-    return Engine(settings, store, broker, avisos), store, fake, avisos
+    return Engine(settings, store, broker), store, fake, AvisosDelLog()
 
 
 def mandar(engine, texto, mid):
@@ -102,17 +89,17 @@ def test_con_dos_posiciones_no_se_mueve_ninguna():
     )
 
 
-def test_avisa_aunque_los_avisos_esten_en_problems():
+def test_queda_dicho_que_no_se_movio_y_por_que():
     """Es la unica forma de enterarse de que el canal pidio algo que el bot no
-    hizo. Con 'problems' los avisos de rutina no salen: este tiene que salir."""
+    hizo. Va al log como problema, no mezclado con la rutina."""
     engine, _, _, avisos = dos_de_oro()
 
-    mandar(engine, "MOVER TP A 4470", 3)
+    with avisos:
+        mandar(engine, "MOVER TP A 4470", 3)
 
-    texto = "\n".join(avisos.out)
-    assert "NO se movio el TP a 4470" in texto
-    assert "4432.5" in texto and "4460.5" in texto, "no dice cuales son"
-    assert "a mano" in texto, "no dice que hacer"
+    assert "NO se movio el TP a 4470" in avisos.texto
+    assert "4432.5" in avisos.texto and "4460.5" in avisos.texto, "no dice cuales son"
+    assert "a mano" in avisos.texto, "no dice que hacer"
 
 
 def test_queda_registrado_para_el_informe():

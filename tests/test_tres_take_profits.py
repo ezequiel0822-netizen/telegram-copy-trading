@@ -25,7 +25,7 @@ from tct.brokers.mt5_native import MT5NativeBroker
 from tct.engine import Engine
 from tct.store import Store
 from tests.fake_mt5 import FakeMT5, enchufar
-from tests.test_engine import build_settings, send
+from tests.test_engine import AvisosDelLog, build_settings, send
 
 ORO = 4438.0
 SENAL = "XAUUSD BUY\nEntry 4438\nSL 4420\nTP1 4442\nTP2 4444\nTP3 4446"
@@ -33,23 +33,12 @@ SENAL_UN_TP = "XAUUSD BUY\nEntry 4438\nSL 4420\nTP 4442"
 SENAL_2 = "XAUUSD BUY\nEntry 4439\nSL 4421\nTP1 4443\nTP2 4445\nTP3 4447"
 
 
-class Aviso:
-    def __init__(self):
-        self.mensajes = []
-
-    def enabled(self):
-        return True
-
-    async def send(self, texto):
-        self.mensajes.append(texto)
-
-
 def armar(tmp_path, **overrides):
     settings = build_settings(tmp_path, **overrides)
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
     fake = FakeMT5({"XAUUSD": {"bid": ORO - 0.5, "ask": ORO + 0.5}})
-    aviso = Aviso()
-    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake), aviso)
+    aviso = AvisosDelLog()
+    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake))
     return store, engine, fake, aviso
 
 
@@ -143,8 +132,8 @@ def test_el_aviso_dice_el_lote_total(tmp_path):
 
     send(engine, SENAL, message_id=1)
 
-    assert "3 posiciones" in aviso.mensajes[-1]
-    assert "0.03" in aviso.mensajes[-1]
+    assert "3 posiciones" in aviso.texto
+    assert "0.03" in aviso.texto
 
 
 # --------------------------------------------------------------------------

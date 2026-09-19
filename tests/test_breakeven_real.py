@@ -31,7 +31,7 @@ from tct.brokers.mt5_native import MT5NativeBroker
 from tct.engine import Engine
 from tct.store import Store
 from tests.fake_mt5 import FakeMT5, enchufar
-from tests.test_engine import build_settings, send
+from tests.test_engine import AvisosDelLog, build_settings, send
 
 # El fake cotiza con medio punto de spread a cada lado, asi que una compra a
 # mercado entra en 4438.5 aunque el mensaje diga 4438.
@@ -41,23 +41,12 @@ BID = ORO - 0.5
 SENAL = "XAUUSD BUY\nEntry 4438\nSL 4420\nTP 4460"
 
 
-class Aviso:
-    def __init__(self):
-        self.mensajes = []
-
-    def enabled(self):
-        return True
-
-    async def send(self, texto):
-        self.mensajes.append(texto)
-
-
 def armar(tmp_path, **overrides):
     settings = build_settings(tmp_path, **overrides)
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
     fake = FakeMT5({"XAUUSD": {"bid": BID, "ask": ASK}})
-    aviso = Aviso()
-    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake), aviso)
+    aviso = AvisosDelLog()
+    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake))
     return store, engine, fake, aviso
 
 

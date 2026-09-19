@@ -2,7 +2,6 @@
 
     python -m tct check     # diagnostico: python, dependencias, .env, plataforma
     python -m tct mt5       # lee tu cuenta MT5 y dice que poner en el .env
-    python -m tct chatid    # averigua el chat id para las notificaciones
     python -m tct simular   # reproduce los mensajes reales de hoy
     python -m tct probar    # verifica la cadena completa contra MT5
     python -m tct chats     # lista tus chats de Telegram con sus IDs
@@ -336,93 +335,6 @@ def cmd_mt5(args: argparse.Namespace) -> int:
         return 1 if problemas else 0
     finally:
         mt5.shutdown()
-
-
-# --------------------------------------------------------------------------
-# chatid
-# --------------------------------------------------------------------------
-
-
-def cmd_chatid(args: argparse.Namespace) -> int:
-    """Averigua el chat id para las notificaciones, preguntandoselo al bot.
-
-    Es el dato que menos se puede adivinar de toda la configuracion: no
-    aparece en ninguna pantalla de Telegram. El camino manual es abrir una URL
-    de la API en el navegador y buscar un numero dentro de un JSON. Aca se
-    hace solo.
-    """
-    import json
-    import urllib.error
-    import urllib.request
-
-    settings = load_settings(args.env_file)
-    token = settings.telegram_bot_token
-    if not token:
-        print("Falta TELEGRAM_BOT_TOKEN en el .env.")
-        print("Se saca hablandole a @BotFather en Telegram: /newbot")
-        return 1
-
-    try:
-        with urllib.request.urlopen(
-            f"https://api.telegram.org/bot{token}/getUpdates", timeout=15
-        ) as respuesta:
-            datos = json.loads(respuesta.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 401:
-            print("Telegram rechazo el token: TELEGRAM_BOT_TOKEN esta mal copiado.")
-            print("Volve a pedirselo a @BotFather con /mybots -> tu bot -> API Token")
-            return 1
-        print(f"Telegram respondio con un error HTTP {exc.code}.")
-        return 1
-    except Exception as exc:
-        print(f"No se pudo consultar a Telegram: {type(exc).__name__}")
-        return 1
-
-    if not datos.get("ok"):
-        print("Telegram no confirmo la consulta. Revisa el token.")
-        return 1
-
-    # Se recorren todos los updates: cada uno trae el chat donde ocurrio.
-    encontrados: dict[str, str] = {}
-    for update in datos.get("result", []):
-        mensaje = update.get("message") or update.get("edited_message") or {}
-        chat = mensaje.get("chat") or {}
-        if chat.get("id") is None:
-            continue
-        nombre = (
-            chat.get("title")
-            or " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")]))
-            or chat.get("username")
-            or "(sin nombre)"
-        )
-        encontrados[str(chat["id"])] = f"{nombre}  [{chat.get('type', '?')}]"
-
-    if not encontrados:
-        print("El bot todavia no recibio ningun mensaje, asi que no sabe con quien habla.\n")
-        print("Hace esto y volve a correr el comando:")
-        print("  1. Abri Telegram y busca tu bot por su nombre de usuario.")
-        print("  2. Apreta INICIAR (o /start).")
-        print("  3. Mandale cualquier cosa, por ejemplo: hola")
-        print("\nUn bot no puede escribirle primero a nadie: necesita que le hablen")
-        print("una vez para conocer el chat. Por eso este paso es obligatorio.")
-        return 1
-
-    print("=" * 58)
-    print("  CHATS QUE CONOCE TU BOT")
-    print("=" * 58)
-    for chat_id, descripcion in encontrados.items():
-        print(f"  {chat_id:<18} {descripcion}")
-
-    print("\n" + "=" * 58)
-    print("  QUE PONER EN EL .env")
-    print("=" * 58)
-    if len(encontrados) == 1:
-        unico = next(iter(encontrados))
-        print(f"\n      TELEGRAM_NOTIFY_CHAT_ID={unico}\n")
-    else:
-        print("\n  Elegi el tuyo de la lista de arriba:\n")
-        print("      TELEGRAM_NOTIFY_CHAT_ID=<el numero>\n")
-    return 0
 
 
 # --------------------------------------------------------------------------
@@ -1660,14 +1572,12 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
     from tct.brokers.base import build_broker
     from tct.engine import Engine
     from tct.store import Store
-    from tct.telegram.notifier import Notifier
     from tct.telegram.reader import TelegramReader
 
     logger = logging.getLogger("tct")
 
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
     broker = build_broker(settings)
-    notifier = Notifier(settings)
 
     if not await _conectar_broker(broker, esperar_segundos):
         if settings.executes_orders:
@@ -1693,7 +1603,7 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
         else:
             logger.warning("IA local desactivada. %s", detalle)
 
-    engine = Engine(settings, store, broker, notifier, ollama=ollama)
+    engine = Engine(settings, store, broker, ollama=ollama)
 
     # La referencia del freno diario se toma ACA, al arrancar, y no con la
     # primera senal del dia. Es la diferencia entre "el saldo con el que abrio
@@ -1738,12 +1648,11 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
             logger.warning(aviso)
 
     encabezado = "BOT REAL arrancado" if settings.is_live else "Bot arrancado"
-    await _avisar(
-        notifier, settings,
-        f"{encabezado} [{settings.instance_name.upper()}]\n"
-        f"Modo: {settings.trading_mode}\n"
-        f"Escuchando {len(settings.telegram_source_chats)} chat(s)."
-        + (f"\n\nPara frenarlo: /pausa {settings.instance_name}" if control else ""),
+    logger.info(
+        "%s [%s] | Modo: %s | Escuchando %d chat(s).%s",
+        encabezado, settings.instance_name.upper(), settings.trading_mode,
+        len(settings.telegram_source_chats),
+        f" Para frenarlo: /pausa {settings.instance_name}" if control else "",
     )
 
     if store.is_paused:
@@ -1772,18 +1681,6 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
             "        broker las respeta aunque el bot no este.\n"
             "        Volve a arrancarlo cuando tengas internet de nuevo."
         )
-        try:
-            await _avisar(
-                notifier, settings,
-                f"[{settings.instance_name.upper()}] SE DETUVO SOLO\n"
-                "Se corto la conexion con Telegram y no se pudo recuperar.\n"
-                "Dejo de leer el grupo. Lo que este abierto sigue en MetaTrader\n"
-                "con su SL y su TP.\n\n"
-                "Hay que volver a arrancarlo a mano.",
-                problema=True,
-            )
-        except Exception:
-            logger.warning("Tampoco se pudo avisar del corte", exc_info=True)
     finally:
         await reader.stop()
         await broker.disconnect()
@@ -1829,24 +1726,6 @@ def _opciones_comunes() -> argparse.ArgumentParser:
     return comunes
 
 
-async def _avisar(notifier, settings, texto: str, *, problema: bool = False) -> None:
-    """Los avisos que no pasan por el motor: el arranque y el corte.
-
-    `Engine._notify` filtra por TELEGRAM_NOTIFY_LEVEL, pero estos dos salen
-    directo del notifier y se saltearian el filtro: con nivel 'none' el usuario
-    seguiria recibiendo "Bot arrancado" cada vez que prende la PC, que es
-    justamente el aviso mas repetitivo de todos con el arranque automatico.
-    """
-    if notifier is None or not notifier.enabled():
-        return
-    nivel = getattr(settings, "telegram_notify_level", "all")
-    if nivel == "none":
-        return
-    if nivel == "problems" and not problema:
-        return
-    await notifier.send(texto)
-
-
 def build_parser() -> argparse.ArgumentParser:
     comunes = _opciones_comunes()
     parser = argparse.ArgumentParser(
@@ -1859,7 +1738,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("check", parents=[comunes], help="Diagnostico del entorno y la configuracion")
     sub.add_parser("mt5", parents=[comunes], help="Lee tu cuenta de MetaTrader 5 y dice que poner en el .env")
-    sub.add_parser("chatid", parents=[comunes], help="Averigua el chat id para las notificaciones de Telegram")
 
     simular = sub.add_parser(
         "simular", parents=[comunes],
@@ -1918,7 +1796,6 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "check": cmd_check,
         "mt5": cmd_mt5,
-        "chatid": cmd_chatid,
         "simular": cmd_simular,
         "probar": cmd_probar,
         "chats": cmd_chats,

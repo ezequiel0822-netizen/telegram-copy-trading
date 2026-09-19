@@ -16,7 +16,7 @@ from tct.brokers.mt5_native import MT5NativeBroker
 from tct.engine import Engine
 from tct.store import Store
 from tests.fake_mt5 import FakeMT5, enchufar
-from tests.test_engine import build_settings, send
+from tests.test_engine import AvisosDelLog, build_settings, send
 
 SENAL = "XAUUSD BUY\nEntry 4438\nSL 4420\nTP 4460"
 
@@ -262,19 +262,12 @@ def test_tras_un_parcial_fallido_se_puede_reintentar(tmp_path):
 
 
 def test_el_aviso_de_un_parcial_fallido_dice_que_sigue_abierto(tmp_path):
-    avisos = []
-
-    class Aviso:
-        def enabled(self):
-            return True
-
-        async def send(self, texto):
-            avisos.append(texto)
+    avisos = AvisosDelLog()
 
     settings = build_settings(tmp_path, default_lot=0.10, max_lot=0.10)
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
     fake = FakeMT5({"XAUUSD": {"bid": 4438.0, "ask": 4438.5}})
-    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake), Aviso())
+    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake))
 
     send(engine, SENAL, message_id=1)
     fake.rechazar_con = 10019
@@ -355,19 +348,12 @@ def test_un_move_sl_rechazado_no_se_informa_como_exito(tmp_path):
     aviso contaba los rechazos como movidas y decia 'SL movido en 1
     posicion(es)'. Creerte protegido en breakeven cuando el stop sigue donde
     estaba es peor que no recibir el aviso."""
-    avisos = []
-
-    class Aviso:
-        def enabled(self):
-            return True
-
-        async def send(self, texto):
-            avisos.append(texto)
+    avisos = AvisosDelLog()
 
     settings = build_settings(tmp_path)
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
     fake = FakeMT5({"XAUUSD": {"bid": 4438.0, "ask": 4438.5}})
-    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake), Aviso())
+    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake))
 
     send(engine, SENAL, message_id=1)
     fake.rechazar_con = 10016  # stop invalido
@@ -413,19 +399,12 @@ def test_una_posicion_cerrada_por_el_tp_no_bloquea_la_proxima_senal(tmp_path):
 def test_se_avisa_que_se_cerro_sola(tmp_path):
     """Sin este aviso, el usuario nunca se entera de que una operacion
     termino: el canal no lo dice y el bot tampoco lo decia."""
-    avisos = []
-
-    class Aviso:
-        def enabled(self):
-            return True
-
-        async def send(self, texto):
-            avisos.append(texto)
+    avisos = AvisosDelLog()
 
     settings = build_settings(tmp_path)
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
     fake = FakeMT5({"XAUUSD": {"bid": 4438.0, "ask": 4438.5}})
-    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake), Aviso())
+    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake))
 
     send(engine, SENAL, message_id=1)
     fake._posiciones.clear()

@@ -43,15 +43,19 @@ def test_un_corte_no_se_registra_como_cierre_limpio():
     )
 
 
-def test_el_corte_se_avisa_por_telegram():
-    """Es el unico canal que llega al telefono. La notificacion va por la Bot
-    API (HTTPS), que es un camino distinto del de Telethon: puede funcionar
-    aunque el otro se haya caido."""
+def test_el_corte_queda_registrado_como_error():
+    """Antes esto salia ademas por Telegram. El usuario pidio que el bot no le
+    escriba nunca, asi que el aviso se saco: el corte queda en el log, que es
+    donde se mira cuando faltan operaciones. Como ERROR y no como info, para
+    poder encontrarlo sin leer el archivo entero."""
     from tct import cli
 
     fuente = inspect.getsource(cli._run_async)
 
-    assert "SE DETUVO SOLO" in fuente
+    corte = fuente.index("SE CORTO LA CONEXION")
+    assert "logger.error(" in fuente[max(0, corte - 200):corte], (
+        "el corte no se registra como error"
+    )
 
 
 def test_el_aviso_dice_que_pasa_con_las_posiciones_abiertas():
@@ -65,18 +69,21 @@ def test_el_aviso_dice_que_pasa_con_las_posiciones_abiertas():
     assert "siguen en MetaTrader" in fuente or "sigue en MetaTrader" in fuente
 
 
-def test_avisar_del_corte_no_puede_tapar_el_cierre_ordenado():
-    """Si el aviso falla (que es probable: se acaba de cortar la conexion), el
-    bot igual tiene que guardar el estado y desconectar el broker."""
+def test_registrar_el_corte_no_puede_tapar_el_cierre_ordenado():
+    """Pase lo que pase con el mensaje del corte, el bot tiene que guardar el
+    estado y desconectar el broker. Antes el aviso iba por red y podia fallar
+    -se acababa de cortar la conexion-, por eso estaba en un try. Ahora va al
+    log, que no falla, pero el orden sigue importando: primero se avisa,
+    despues el finally hace el cierre ordenado."""
     from tct import cli
 
     fuente = inspect.getsource(cli._run_async)
 
-    aviso = fuente.index("SE DETUVO SOLO")
-    finally_ = fuente.index("finally:", aviso)
-    assert "except Exception" in fuente[aviso:finally_], (
-        "el aviso no esta protegido: si falla, se salta el guardado del estado"
-    )
+    corte = fuente.index("SE CORTO LA CONEXION")
+    finally_ = fuente.index("finally:", corte)
+    cierre = fuente[finally_:]
+    assert "store.save_state()" in cierre, "no guarda el estado al cerrar"
+    assert "await broker.disconnect()" in cierre, "no desconecta el broker"
 
 
 # --------------------------------------------------------------------------

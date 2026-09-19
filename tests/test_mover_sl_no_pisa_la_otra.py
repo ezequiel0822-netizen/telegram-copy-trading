@@ -22,7 +22,7 @@ Con 0.01 de oro son ~28 dolares en UNA operacion, y el tope diario del 5% sobre
 presupuesto del dia entero. El freno diario no lo ataja porque solo mira
 aperturas, y MT5 tampoco porque el stop sigue del lado correcto del mercado.
 
-Y no avisaba nada: con TELEGRAM_NOTIFY_LEVEL=problems no salia un solo mensaje.
+Y no quedaba constancia de ninguna clase: ni un mensaje, ni una linea de log.
 
 LA GUARDA ES ESTRECHA A PROPOSITO
 ---------------------------------
@@ -44,7 +44,7 @@ from tct.engine import Engine
 from tct.risk import stop_agranda_el_riesgo
 from tct.store import Store
 from tests.fake_mt5 import FakeMT5
-from tests.test_engine import build_settings
+from tests.test_engine import AvisosDelLog, build_settings
 
 A = "DEAL | GOLD BUY XAUUSD 4432 TP1: 4436 TP2: 4438 TP3: 4440 SL: 4424"
 B = "DEAL | GOLD BUY XAUUSD 4460 TP1: 4464 TP2: 4466 TP3: 4468 SL: 4452"
@@ -52,26 +52,14 @@ A_SELL = "DEAL | GOLD SELL XAUUSD 4460 TP1: 4456 TP2: 4454 TP3: 4452 SL: 4468"
 B_SELL = "DEAL | GOLD SELL XAUUSD 4432 TP1: 4428 TP2: 4426 TP3: 4424 SL: 4440"
 
 
-class Avisos:
-    def __init__(self):
-        self.out = []
-
-    def enabled(self):
-        return True
-
-    async def send(self, texto):
-        self.out.append(texto)
-        return True
-
-
-def armar(tope=2, nivel="problems"):
+def armar(tope=2):
     tmp = Path(tempfile.mkdtemp())
     settings = build_settings(
         tmp, trading_mode="LIVE", allow_live_trading=True,
         mt5_login="555", mt5_password="x", mt5_server="FxPro-MT5",
         default_lot=0.01, max_lot=0.01, allowed_symbols={"XAUUSD"},
         max_open_trades=2, max_positions_per_symbol=tope, max_signals_per_day=10,
-        positions_per_signal=1, telegram_notify_level=nivel,
+        positions_per_signal=1,
     )
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
     fake = FakeMT5({"XAUUSD": {"bid": 4432.0, "ask": 4432.5}})
@@ -79,8 +67,7 @@ def armar(tope=2, nivel="problems"):
     broker._mt5 = fake
     broker._ready = True
     broker.cuenta = "FxPro-MT5 #555"
-    avisos = Avisos()
-    return Engine(settings, store, broker, avisos), store, fake, avisos
+    return Engine(settings, store, broker), store, fake, AvisosDelLog()
 
 
 def mandar(engine, texto, mid):
@@ -125,20 +112,20 @@ def test_la_que_si_corresponde_igual_se_mueve():
     assert resultado["count"] == 1
 
 
-def test_lo_que_quedo_sin_mover_avisa():
-    """Antes no salia NADA con nivel 'problems': te ibas creyendo que las dos
-    quedaron protegidas mientras una arriesgaba el triple."""
+def test_lo_que_quedo_sin_mover_se_dice():
+    """Antes no quedaba constancia de ninguna clase: te ibas creyendo que las
+    dos quedaron protegidas mientras una arriesgaba el triple."""
     engine, store, fake, avisos = armar()
     mandar(engine, A, 1)
     fake.simbolos["XAUUSD"] = {"bid": 4460.0, "ask": 4460.5}
     mandar(engine, B, 2)
 
-    mandar(engine, "MOVER SL A 4432", 3)
+    with avisos:
+        mandar(engine, "MOVER SL A 4432", 3)
 
-    texto = "\n".join(avisos.out)
-    assert texto, "no salio ningun aviso"
-    assert "1 de 2" in texto, "no dice que una quedo sin mover"
-    assert "aleja el stop" in texto, "no dice por que"
+    assert avisos, "el motor no dijo nada"
+    assert "1 de 2" in avisos.texto, "no dice que una quedo sin mover"
+    assert "aleja el stop" in avisos.texto, "no dice por que"
 
 
 def test_tambien_en_SELL_pero_al_reves():

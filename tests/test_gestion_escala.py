@@ -23,30 +23,19 @@ from tct.engine import Engine
 from tct.risk import FACTOR_ESCALA_STOP, stop_fuera_de_escala
 from tct.store import Store
 from tests.fake_mt5 import FakeMT5, enchufar
-from tests.test_engine import build_settings, send
+from tests.test_engine import AvisosDelLog, build_settings, send
 
 ORO = 4438.0
 SENAL_ORO = "XAUUSD BUY\nEntry 4438\nSL 4420\nTP 4460"
 SENAL_EUR = "EURUSD BUY\nEntry 1.0855\nSL 1.0820\nTP 1.0900"
 
 
-class Aviso:
-    def __init__(self):
-        self.mensajes = []
-
-    def enabled(self):
-        return True
-
-    async def send(self, texto):
-        self.mensajes.append(texto)
-
-
 def armar(tmp_path, simbolos=None, **overrides):
     settings = build_settings(tmp_path, **overrides)
     store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
     fake = FakeMT5(simbolos or {"XAUUSD": {"bid": ORO - 0.5, "ask": ORO + 0.5}})
-    aviso = Aviso()
-    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake), aviso)
+    aviso = AvisosDelLog()
+    engine = Engine(settings, store, enchufar(MT5NativeBroker(settings), fake))
     return store, engine, fake, aviso
 
 

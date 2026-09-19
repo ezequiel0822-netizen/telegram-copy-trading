@@ -200,13 +200,11 @@ class Engine:
         settings: Settings,
         store: Store,
         broker: Broker,
-        notifier: Any | None = None,
         ollama: Any | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.broker = broker
-        self.notifier = notifier
         # Interprete de respaldo. None = apagado o no disponible; el sistema
         # funciona identico sin el.
         self.ollama = ollama
@@ -310,7 +308,7 @@ class Engine:
         if event.source == "ollama" and not self.settings.ollama_auto_execute:
             self.store.append_event("ia_sugerencia", {"signal": event.to_dict()})
             self.store.save_state()
-            await self._notify(self._format_sugerencia_ia(event), problema=True)
+            await self._avisar(self._format_sugerencia_ia(event), problema=True)
             logger.info(
                 "La IA interpreto un mensaje que el parser no entendio (%s %s). "
                 "Solo se aviso, no se opero.",
@@ -331,7 +329,7 @@ class Engine:
         if handler is None:  # UNKNOWN
             self.store.append_event("ambiguo", {"signal": event.to_dict()})
             self.store.save_state()
-            await self._notify(
+            await self._avisar(
                 f"Mensaje ambiguo, no se ejecuto nada:\n{text[:300]}", problema=True
             )
             return {"status": "ambiguo", "signal": event.to_dict()}
@@ -391,7 +389,7 @@ class Engine:
             # freno por perdida diaria, que rechaza todas las senales hasta el
             # dia siguiente. Callarlo hace que un dia frenado se vea igual que
             # un dia sin senales.
-            await self._notify(
+            await self._avisar(
                 f"Senal RECHAZADA {event.symbol or '?'}\nMotivo: {decision.reason_text}",
                 problema=True,
             )
@@ -521,7 +519,7 @@ class Engine:
                 "orders": ordenes_fallidas,
             })
             motivo = fallidas[0].split(": ", 1)[-1] if fallidas else "sin motivo"
-            await self._notify(
+            await self._avisar(
                 f"NO se pudo abrir {event.symbol}: {motivo}\n"
                 "La senal quedo registrada, pero no hay ninguna posicion.",
                 problema=True,
@@ -582,18 +580,17 @@ class Engine:
         # Una apertura que entro A MEDIAS avisa por su cuenta.
         #
         # Antes esto viajaba adentro del 'SENAL ACEPTADA' de mas abajo, que es
-        # un aviso de rutina: con TELEGRAM_NOTIFY_LEVEL=problems o none se iba
-        # con el, y una senal que abrio 2 de 3 posiciones quedaba invisible en
-        # las tres salidas del sistema -el aviso, el informe y la
-        # reconciliacion-. El informe tampoco lo muestra: `fallidas` se guarda
-        # en el evento pero nadie lo lee.
+        # rutina, y una senal que abrio 2 de 3 posiciones quedaba invisible en
+        # las tres salidas del sistema. El informe tampoco lo muestra:
+        # `fallidas` se guarda en el evento pero nadie lo lee. Por eso va
+        # aparte y marcado como problema, o sea WARNING en el log.
         #
         # No es un problema de plata -entra MENOS exposicion, no mas- sino de
         # dato: las tres posiciones existen para MEDIR cuantas veces el precio
         # llega al TP2 y al TP3. Un 2 de 3 invisible ensucia justo eso: el TP3
         # figura como 'no llego' cuando en realidad nunca se mando.
         if fallidas or event.warnings:
-            await self._notify(
+            await self._avisar(
                 f"{event.symbol}: entraron {len(aperturas)} de {len(objetivos)} "
                 "posicion(es).\n"
                 + "\n".join(f"  {f}" for f in fallidas)
@@ -601,7 +598,7 @@ class Engine:
                 problema=True,
             )
 
-        await self._notify(
+        await self._avisar(
             self._format_open(
                 event, aperturas[0]["lot"], take_profits,
                 aperturas[0]["order_obj"], precio_mercado,
@@ -723,7 +720,7 @@ class Engine:
         )
 
         if fallidas:
-            await self._notify(
+            await self._avisar(
                 f"Cerradas {cerradas} de {len(targets)}. NO se pudieron cerrar:\n"
                 + "\n".join(f"  {f}" for f in fallidas)
                 + "\nSiguen abiertas y el bot las sigue teniendo en cuenta."
@@ -734,11 +731,11 @@ class Engine:
                     "fallidas": fallidas, "ausentes": ausentes, "orders": results}
 
         if ausentes:
-            await self._notify(f"Cerradas {cerradas} de {len(targets)}." + ya_estaban)
+            await self._avisar(f"Cerradas {cerradas} de {len(targets)}." + ya_estaban)
             return {"status": "cerrada", "count": cerradas,
                     "ausentes": ausentes, "orders": results}
 
-        await self._notify(f"Cerradas {cerradas} posicion(es): "
+        await self._avisar(f"Cerradas {cerradas} posicion(es): "
                            f"{', '.join(p.symbol for p in targets)}")
         return {"status": "cerrada", "count": cerradas, "orders": results}
 
@@ -796,7 +793,7 @@ class Engine:
         })
 
         if fallidas:
-            await self._notify(
+            await self._avisar(
                 f"Cierre parcial {fraction:.0%}: salio en {aplicadas} de {len(targets)}.\n"
                 "NO se pudo en:\n" + "\n".join(f"  {f}" for f in fallidas)
                 + "\nEsas siguen abiertas enteras, y el bot las sigue contando asi.",
@@ -805,7 +802,7 @@ class Engine:
             return {"status": "cierre_parcial_fallido", "fraction": fraction,
                     "count": aplicadas, "fallidas": fallidas, "orders": results}
 
-        await self._notify(f"Cierre parcial {fraction:.0%} en {aplicadas} posicion(es)")
+        await self._avisar(f"Cierre parcial {fraction:.0%} en {aplicadas} posicion(es)")
         return {"status": "cierre_parcial", "fraction": fraction, "orders": results}
 
     async def _handle_move_sl(self, event: SignalEvent) -> dict[str, Any]:
@@ -924,7 +921,7 @@ class Engine:
         # que la persona ve desde el telefono. Creerte protegido en breakeven
         # cuando el stop sigue donde estaba es peor que no recibir el aviso.
         if problemas:
-            await self._notify(
+            await self._avisar(
                 f"SL a {destino}: salio en {movidas} de {len(problemas) + movidas}.\n"
                 "NO se pudo mover en:\n" + "\n".join(f"  {p}" for p in problemas)
                 + "\nEsas posiciones siguen con el stop anterior.",
@@ -934,7 +931,7 @@ class Engine:
                     "fallidas": fallidas, "descartadas": descartadas,
                     "orders": results}
 
-        await self._notify(f"SL movido a {destino} en {movidas} posicion(es)")
+        await self._avisar(f"SL movido a {destino} en {movidas} posicion(es)")
         return {"status": "sl_movido", "count": movidas, "orders": results}
 
     async def _handle_move_tp(self, event: SignalEvent) -> dict[str, Any]:
@@ -1047,7 +1044,7 @@ class Engine:
         })
 
         if fallidas:
-            await self._notify(
+            await self._avisar(
                 f"TP1 a {nuevo_tp}: NO se pudo mover en:\n"
                 + "\n".join(f"  {f}" for f in fallidas)
                 + "\nEsas posiciones siguen con el TP anterior.",
@@ -1056,7 +1053,7 @@ class Engine:
             return {"status": "tp_movido_parcial", "movidas": movidas,
                     "no_movidas": no_movidas, "fallidas": fallidas, "orders": results}
 
-        await self._notify(
+        await self._avisar(
             f"TP1 movido a {nuevo_tp} en {len(movidas)} posicion(es). "
             f"Sin mover: {len(no_movidas)}."
         )
@@ -1092,9 +1089,9 @@ class Engine:
         """No se mueve ninguna: el mensaje no dice de cual posicion habla.
 
         Se registra igual que un movimiento -con todas en `no_movidas`- para que
-        el informe lo vea, y se avisa como PROBLEMA: con TELEGRAM_NOTIFY_LEVEL
-        en 'problems' es la unica forma de enterarse de que el canal pidio algo
-        que el bot no hizo.
+        el informe lo vea, y se deja dicho como PROBLEMA -WARNING en el log-,
+        que es como se encuentra despues que el canal pidio algo que el bot no
+        hizo.
         """
         motivo_ambiguo = (
             f"hay {len(candidatas)} posiciones que podrian recibir ese TP y el "
@@ -1125,7 +1122,7 @@ class Engine:
         for p in candidatas:
             entrada = p.entry_real or p.entry
             lineas.append(f"  {p.symbol} {p.side} entrada {entrada}, TP {p.tp_objetivo}")
-        await self._notify(
+        await self._avisar(
             f"NO se movio el TP a {nuevo_tp}: hay {len(candidatas)} operaciones "
             "abiertas que podrian recibirlo y el mensaje no dice de cual habla.\n"
             + "\n".join(lineas)
@@ -1144,7 +1141,7 @@ class Engine:
         la persona decida.
         """
         self.store.append_event("actualizacion", {"signal": event.to_dict()})
-        await self._notify(
+        await self._avisar(
             "Llego una modificacion que no se pudo aplicar sola (sin simbolo o sin direccion):\n"
             f"{event.raw_message[:300]}",
             problema=True,
@@ -1281,7 +1278,7 @@ class Engine:
                 "Se saca del estado y el simbolo queda libre.", position.symbol,
             )
 
-        await self._notify(
+        await self._avisar(
             "Se cerraron solas en el broker (TP, SL o a mano):\n"
             + "\n".join(f"  {p.symbol} {p.side} entrada {p.entry}" for p in cerradas)
             + "\nEsos simbolos quedan libres para la proxima senal."
@@ -1348,28 +1345,29 @@ class Engine:
         lines.append(event.raw_message[:500])
         return "\n".join(lines)
 
-    async def _notify(self, text: str, *, problema: bool = False) -> None:
-        """Manda un aviso, si el nivel configurado lo deja pasar.
+    async def _avisar(self, text: str, *, problema: bool = False) -> None:
+        """Deja constancia de lo que el bot hizo o no pudo hacer. VA AL LOG.
 
-        `problema=True` marca los avisos que dicen que algo NO se hizo: una
-        senal rechazada, una orden que el broker no acepto, un stop que no se
-        pudo mover. Son los que sobreviven a TELEGRAM_NOTIFY_LEVEL=problems.
+        Antes esto mandaba un mensaje por Telegram. El usuario pidio que el bot
+        no le escriba nunca —"solo quiero que lea los mensajes del telegram y
+        lo haga"— asi que el sistema de avisos se saco del proyecto. Lo que NO
+        se saco es lo que esos avisos decian: son la unica constancia de varias
+        cosas que no quedan en ningun otro lado, y tirarlas habria sido cambiar
+        "no me escribas" por "no me entero".
 
-        La distincion no es cosmetica. Con el bot arrancando solo al prender
-        la PC, nadie mira la consola: un fallo que no avisa no se descubre a
-        los cinco minutos, se descubre cuando faltan operaciones. El caso mas
-        caro es el freno por perdida diaria, que rechaza TODAS las senales
-        hasta el dia siguiente y cuya unica voz es un aviso de rechazo: sin
-        el, un dia frenado se ve igual que un dia sin senales.
+        `problema=True` marca lo que NO se hizo: una senal rechazada, una orden
+        que el broker no acepto, un stop que no se pudo mover. Esos van como
+        WARNING, para poder encontrarlos en el log sin leerlo entero. El resto
+        es rutina y va como INFO.
+
+        Donde se leen: la ventana del bot mientras corre, y el archivo que
+        indica LOG_PATH en el .env. Lo que paso con cada senal, ademas, queda
+        en el registro y se mira con `tct informe`.
         """
-        if self.notifier is None or not self.notifier.enabled():
-            return
-        nivel = getattr(self.settings, "telegram_notify_level", "all")
-        if nivel == "none":
-            return
-        if nivel == "problems" and not problema:
-            return
-        await self.notifier.send(text)
+        if problema:
+            logger.warning(text)
+        else:
+            logger.info(text)
 
     def _format_open(
         self,
