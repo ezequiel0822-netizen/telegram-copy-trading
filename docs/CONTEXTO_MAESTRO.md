@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-19 · v2.0.1 · 659 tests · el último commit que describe
-es `6b305d5`, más este mismo cambio
+Actualizado: 2026-09-19 · v2.1.0 · 692 tests · el último commit que describe
+es `829292c`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-19"**, al
 principio de §2: es dónde quedó parado el usuario, qué tiene configurado en su
@@ -82,6 +82,25 @@ que lo motivaron: dos entradas tarde que arriesgaban ~11 para ganar ~1).
    motivo de un informe del 18/09 que mostraba 3 posiciones y lote 0.1 con el
    `.env` ya cambiado.
 
+**Lo último que se hizo, y que tiene que hacer él: la CLAVE DE ARRANQUE.**
+Pidió que el bot real y la demo de FxPro le pidan una contraseña antes de
+arrancar (commits `3f7c82a` y `829292c`). Está hecho y subido, pero **todavía
+no la puso**. En su PC, después de `git pull`, una vez por archivo:
+
+```
+tct clave --env-file .env.real
+tct clave --env-file .env.segunda
+```
+
+Desde ahí, `iniciar_real.bat` e `iniciar_segunda.bat` la piden: tres intentos,
+y con la clave mal el bot no toma el candado ni conecta nada. **El bot real no
+arranca sin clave puesta** —es obligatoria con dinero real—; MetaQuotes sigue
+sin pedirla, como quiso. `probar --operar` y `simular --ejecutar` (en demo)
+también la piden, porque mandan órdenes. En el `.env` queda una huella, no la
+clave. Se le explicó que no es una caja fuerte: protege de arrancar el bot
+equivocado o de alguien en la PC sin la clave, no de quien edita el `.env`.
+El detalle y la regla, en §9.
+
 **Decisiones que esperan su respuesta** (no volver a plantearlas desde cero):
 
 - **Verificar la cuenta antes de CADA orden, no solo al conectar.** Hoy la
@@ -121,8 +140,10 @@ demo + FxPro demo. Cuando fondee:
 2. **Con ese bot cerrado**, loguear MetaTrader de FxPro en la cuenta real y
    correr `tct mt5` para sacar login, servidor y apalancamiento.
 3. Completar `.env.real` (y corregir los números de arriba).
-4. `tct check --env-file .env.real` y `tct probar --operar --env-file .env.real`.
-5. Arrancar con `iniciar_real.bat`. `iniciar_segunda.bat` no se abre más.
+4. Poner la clave, si todavía no la puso: `tct clave --env-file .env.real`.
+5. `tct check --env-file .env.real` y `tct probar --operar --env-file .env.real`
+   (este último pide la clave: abre y cierra 0.01 de verdad).
+6. Arrancar con `iniciar_real.bat`. `iniciar_segunda.bat` no se abre más.
 
 La regla que se le dejó, porque con una sola terminal es LA forma de perder
 plata: **primero se cierra el bot, después se toca la cuenta.** Si quisiera
@@ -133,8 +154,9 @@ MetaTrader de FxPro en otra carpeta, con su `MT5_PATH` en cada `.env`.
 credenciales obligatorias con dinero real y la cuenta verificada contra el
 `.env`; el breakeven que le alejaba el stop a la otra posición de oro; "mover
 TP" con varias candidatas no mueve ninguna; `tct informe` arreglado de punta a
-punta; `tct status` no toca un estado corrupto; y **el sistema de avisos por
-Telegram se sacó del proyecto** a pedido suyo — lo que decía va al log.
+punta; `tct status` no toca un estado corrupto; **el sistema de avisos por
+Telegram se sacó del proyecto** a pedido suyo —lo que decía va al log—; y la
+**clave de arranque** para el bot real y la demo de FxPro.
 
 ---
 
@@ -530,6 +552,7 @@ La CLI (`cli.py`) expone:
 |---|---|
 | `check` | Diagnóstico. Lo primero en una máquina nueva. |
 | `mt5` | Lee la cuenta MT5 abierta y dice qué poner en el `.env`. |
+| `clave` | Pone o cambia la clave de arranque de un `.env`. La pide dos veces sin mostrarla y guarda su huella. |
 | `simular` | **Reproduce los mensajes reales del grupo.** Sin `--ejecutar` no toca nada. Con `--con-precios` compara cada entrada contra el precio real de MT5 y sugiere el límite, sin operar. |
 | `probar` | Verifica la cadena contra MT5. Con `--operar` abre y cierra una posición mínima. |
 | `informe` | **Qué pasó con lo que llegó.** Agrupa por mensaje (no por evento, ver §2), separa operadas de descartadas y dice el motivo de cada descarte. Con `--con-resultados` va al historial de MT5 y agrega cómo terminó cada una: TP, SL, breakeven o cierre a mano. Es de solo lectura. |
@@ -1277,6 +1300,29 @@ encontró un agente de revisión en su primera corrida. → Usar `$PWD`, o
 `sys.path.insert` dentro del script, y **verificar con `tct.__file__`** qué
 copia corre.
 
+**La herramienta de edición escribe el CARÁCTER REAL de una secuencia unicode.**
+Si el texto a insertar dice `"\ufeff"` o `"\u2028"`, en el archivo no queda esa
+secuencia: queda el carácter mismo, que es invisible. Pasó el 19/09 escribiendo
+la clave de arranque: tres BOM en `clave.py` y cuatro caracteres invisibles en
+un test. El código andaba igual —los dos significan lo mismo adentro de un
+string—, así que ningún test lo iba a detectar; se descubrió porque una
+mutación no encontraba su ancla. Es la misma familia que el tabulador escondido
+en `MT5_PATH` (§5) y el `\x08` dentro de un regex. → Después de insertar texto
+con escapes unicode, escanear:
+
+```
+python -c "import pathlib; r={0xFEFF,0x2028,0x2029,0x200B,0x0B,0x0C,0x08}; [print(p,n) for p in pathlib.Path('src').rglob('*.py') for n,l in enumerate(p.read_text(encoding='utf-8').splitlines(),1) if any(ord(c) in r for c in l)]"
+```
+
+y reemplazar lo que aparezca por la secuencia escrita, armándola con `chr(92)`
+para que ningún shell la vuelva a convertir.
+
+**Y volvió a pasar escribiendo ESTE párrafo**: las dos secuencias de ejemplo de
+arriba se convirtieron en los caracteres reales adentro del documento, y una de
+ellas partía la línea en dos al leerla. Igual que con el tabulador de §5, que se
+metió en el documento mientras se documentaba. La regla no alcanza escrita:
+**el escaneo va después de cada edición con escapes, también en los `.md`.**
+
 **El `$?` después de un pipe es del último comando del pipe.** `... | tail -3;
 echo "exit: $?"` informa el código de `tail`, que es siempre 0. Da la misma
 clase de mentira tranquilizadora que el `-rs` de §7: parece que pasó y no se
@@ -1526,6 +1572,16 @@ dos secciones que nadie contrastó contra el código.**
 - Un mensaje ambiguo se registra y **no** ejecuta nada.
 - Se registran los rechazos **con su motivo**: es lo que permite contestar
   después "¿por qué no tomó esta señal?".
+- **Con dinero real hace falta la clave de arranque, y se pide antes de todo.**
+  `_exigir_clave` corre en `tct run` ANTES del candado de la carpeta y de
+  conectar MetaTrader o Telegram: con la clave mal, el bot no llega a tocar
+  nada. También en `probar --operar` y en `simular --ejecutar` (en demo; en real
+  simular ya se niega entero). Sin consola donde escribirla, no arranca. En el
+  `.env` se guarda una huella PBKDF2 con `:` como separador —python-dotenv
+  expande `$`—, y una clave escrita a mano falla al cargar mandando a
+  `tct clave`. Lo que queda sin cubrir, a propósito: quien edita el `.env` o el
+  entorno puede sacarla (`CLAVE_DE_ARRANQUE=` vacía en el entorno le gana al
+  `.env` en una demo; en real no, porque ahí sin clave no arranca).
 - Dinero real requiere **dos** llaves: `TRADING_MODE=LIVE` **y**
   `ALLOW_LIVE_TRADING=true`. La barrera de "solo demo" vive en el ejecutor, no
   en la configuración. **Y tienen que ser dos en las DOS direcciones:** hasta
