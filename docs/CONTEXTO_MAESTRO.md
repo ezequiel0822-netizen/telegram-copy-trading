@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-17 · v1.5.0 · 664 tests · el último commit que describe
-es `b99967e`, más este mismo cambio
+Actualizado: 2026-09-18 · v1.5.1 · 664 tests · el último commit que describe
+es `4899f95`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé §2 primero (dónde está parado el usuario
 hoy, incluido el paso a la cuenta real que está a medio hacer), después §5 y
@@ -69,7 +69,7 @@ canal y con configuraciones distintas a propósito.
 |---|---|---|
 | Cuenta | MetaQuotes-Demo (~98.600) | FxPro-MT5 Demo (~109.600) |
 | Lote | **0.1** | **0.01** |
-| `POSITIONS_PER_SIGNAL` | **3** (0.3 por señal) | **1** (solo el TP1) |
+| `POSITIONS_PER_SIGNAL` | **1** desde el 2026-09-18 (antes 3) | **1** (solo el TP1) |
 | `MAX_POSITIONS_PER_SYMBOL` | 30 | 10 |
 | `MAX_OPEN_TRADES` / señales día | 100 / 100 | 20 / 35 |
 | `MAX_DAILY_LOSS_PCT` | sin tope | sin tope |
@@ -77,9 +77,14 @@ canal y con configuraciones distintas a propósito.
 | Avisos | apagados (falta el chat id) | apagados (falta el token) |
 | Datos | `data/` | `data/fxpro/` |
 
-**El experimento que corren es doble:** MetaQuotes persigue los tres TP y
-FxPro solo el TP1, así que comparar los dos informes contesta a la vez *"¿los
-tres objetivos rinden más?"* y *"¿cuánto cambia el bróker?"*.
+**El experimento cambió el 2026-09-18.** Era doble —MetaQuotes con los tres TP
+contra FxPro con el TP1— para contestar a la vez *"¿los tres objetivos rinden
+más?"* y *"¿cuánto cambia el bróker?"*. Con los datos de §2 el usuario dio por
+contestada la primera y puso **las dos en un solo TP**, así que ahora las dos
+instancias son la misma estrategia y lo único que queda a prueba es el bróker
+—y, de paso, MetaQuotes pasa a ser un ensayo fiel de lo que va a hacer la
+cuenta real—. La diferencia de lote (0.1 contra 0.01) sigue, así que los
+números en plata no se comparan; las proporciones sí.
 
 Cuatro cosas de esa tabla que hay que tener presentes:
 
@@ -151,12 +156,21 @@ nueva: los datos de esta configuración son de pocos días, y un stop de 8 punto
 en 0.01 cuesta unos 8, el 1,6% de 500. **La decisión está tomada y es suya**;
 el trabajo de acá en más es que salga bien, no volver a discutirla.
 
-### La decisión de los tres TP, ya tomada
+### La decisión de los tres TP: se probó y se dio de baja
 
-**Se decidió abrir las tres.** El 2026-09-11, con una semana de datos reales
-sobre la mesa, el usuario eligió perseguir los tres objetivos. El motivo es
-recolectar datos: la cuenta es demo, así que triplicar el tamaño no cuesta
-nada, y es la única forma de saber cuántas veces el precio llega al TP2 y al
+**El 2026-09-18 el usuario volvió a UNA posición por señal en las dos
+instancias.** El experimento corrió una semana, dejó 4 señales con tres
+objetivos y los números están abajo: solo 1 de esas 4 llegó al TP2 y al TP3, y
+las posiciones de más restaron ~100 contra abrir solo la del TP1. No es una
+muestra para cerrar el tema, pero alcanzó para que dejara de tener sentido
+pagar exposición triple por el dato, justo cuando la cuenta real va a operar un
+solo objetivo igual. **Si algún día se quiere retomar, es una línea**
+(`POSITIONS_PER_SIGNAL=3`), y lo que hay que volver a leer es esto de acá abajo.
+
+**Lo que se había decidido el 2026-09-11.** Con una semana de datos reales
+sobre la mesa, el usuario eligió perseguir los tres objetivos. El motivo era
+recolectar datos: la cuenta es demo, así que triplicar el tamaño no costaba
+nada, y era la única forma de saber cuántas veces el precio llega al TP2 y al
 TP3 en vez de suponerlo.
 
 Lo que decían los datos que había:
