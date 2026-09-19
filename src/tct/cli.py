@@ -1365,6 +1365,29 @@ def cmd_informe(args: argparse.Namespace) -> int:
     return 0
 
 
+def _aviso_sin_freno_remoto(settings: Settings) -> str | None:
+    """Que decir al arrancar una instancia REAL sin control por Telegram.
+
+    El usuario lo apago a proposito: no quiere que ningun bot le escriba. Se
+    respeta y se arranca igual. Pero el bot no puede quedarse callado sobre
+    esto: hasta ahora, con `ENABLE_TELEGRAM_CONTROL=false` el bloque del control
+    se salteaba entero y no se imprimia una sola linea, asi que una instancia
+    con dinero real y sin freno remoto se veia igual que una con freno.
+
+    Va al log del arranque -la ventana que la persona abre a mano-, no por
+    Telegram. Devuelve None cuando no aplica, para poder probarlo sin levantar
+    medio sistema.
+    """
+    if not settings.is_live or settings.enable_telegram_control:
+        return None
+    return (
+        "Control por Telegram APAGADO en una instancia con DINERO REAL.\n"
+        "        No hay /pausa ni /cerrar desde el telefono: la unica forma de\n"
+        "        frenar este bot es cerrar esta ventana.\n"
+        "        Si alguna vez lo queres: ENABLE_TELEGRAM_CONTROL=true en el .env."
+    )
+
+
 async def _informar_desenlaces(settings: Settings, eventos: list) -> None:
     """Como termino cada operacion, leido del historial de MetaTrader.
 
@@ -1709,6 +1732,10 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
                 return
             control = None
             logger.warning("Sin control por Telegram. Solo se puede frenar desde la PC.")
+    else:
+        aviso = _aviso_sin_freno_remoto(settings)
+        if aviso:
+            logger.warning(aviso)
 
     encabezado = "BOT REAL arrancado" if settings.is_live else "Bot arrancado"
     await _avisar(

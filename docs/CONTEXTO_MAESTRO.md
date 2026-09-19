@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-18 · v1.5.1 · 664 tests · el último commit que describe
-es `4899f95`, más este mismo cambio
+Actualizado: 2026-09-18 · v1.6.0 · 670 tests · el último commit que describe
+es `27d3fe6`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé §2 primero (dónde está parado el usuario
 hoy, incluido el paso a la cuenta real que está a medio hacer), después §5 y
@@ -105,8 +105,17 @@ Cuatro cosas de esa tabla que hay que tener presentes:
 - **BTCUSD se queda en `ALLOWED_SYMBOLS`.** MetaQuotes no lo tiene y esas
   señales quedan como paper trade; FxPro **sí** lo opera (lo llama `BITCOIN`).
 - **La IA local se queda como está.** Ver §4: subirle el nivel no ayudaría.
-- **Los avisos, apagados en demo.** Se construyó `TELEGRAM_NOTIFY_LEVEL` para
-  poder elegir; el usuario eligió silencio.
+- **El bot NO escribe nada, y eso incluye la cuenta real.** Se construyó
+  `TELEGRAM_NOTIFY_LEVEL` para poder elegir y el usuario eligió silencio, en
+  demo y en real. Lo pidió tres veces, la última así: *"no quiero que ningún bot
+  me avise si abrió o no, solo quiero que lea los mensajes del telegram y lo
+  haga"*. **No volver a proponerle avisos.** El 2026-09-18 se le ofreció
+  `problems` para la real, eligió eso, y al ver los pasos del token lo corrigió:
+  la respuesta es no.
+  Va con el control apagado también (`ENABLE_TELEGRAM_CONTROL=false`), así que
+  **no hay freno desde el teléfono**: se para cerrando la ventana. Y la única
+  fuente de qué pasó es `tct informe`. Las dos cosas se le dijeron una vez y
+  están escritas en `.env.real.example`; no hace falta repetírselas.
 
 ### El paso a dinero real: decidido, a medio hacer
 
@@ -132,7 +141,7 @@ es **reemplazar la demo de FxPro**, no agregar una tercera instancia.
 |---|---|---|
 | Freno diario | **5%** (25 sobre 500) | Él lo pidió como *"que a partir del 4to-5to stop loss ya tenga freno"*. Con 0.01 de oro, 1 punto = 1 dólar y cada stop cuesta 4 a 8: 5% frena en el 4º stop grande o el 6º chico. Había marcado 10%, que frena recién en el 6º al 12º —o sea casi nunca con un bot que abre 7 por día—; se le mostró la cuenta y eligió el número que hace lo que había descrito. |
 | Señales/día | **10** | Medido son ~3. Con los 5 de la plantilla vieja, la 6ª se rechazaba sin haber perdido nada: el día lo tiene que cortar el freno de plata, no un contador. |
-| Avisos | **prendidos, en `problems`** | Con plata real es la única forma de enterarse sin preguntar. Falta `tct chatid` para el chat id; el token se copia del `.env` de siempre. |
+| Avisos | **apagados**, y el control también | Lo pidió así. El 18/09 había elegido `problems`, y al ver que eso implicaba token y chat id lo corrigió: no quiere que ningún bot le escriba. Sin control no hay `/pausa` desde el teléfono. |
 | Símbolos | **solo XAUUSD** | BTCUSD espera a ver su margen en la cuenta real. |
 | Autoarranque | **no** | Arranca a mano, como las demos. |
 
@@ -1239,11 +1248,14 @@ de cuánto importan con la cuenta real andando:
     que no se puedan cancelar, es que el bot cree que ya no existen. El arreglo
     es chico: preguntar también por `orders_get(ticket=...)` antes de concluir
     que no está.
-11. **`ENABLE_TELEGRAM_CONTROL=false` con dinero real arranca igual.** La guarda
-    de §9 cubre *"estaba prendido y falló"*, no *"está apagado"*. Verificado: con
-    `is_live=True` y el control desactivado, el bot arranca y se pone a escuchar
-    sin ninguna forma de frenarlo desde el teléfono. La plantilla lo trae en
-    `true`, así que hoy no aplica; es un pie de apoyo que no debería existir.
+11. **`ENABLE_TELEGRAM_CONTROL=false` con dinero real arranca igual, y ahora
+    es lo que el usuario quiere.** La guarda de §9 vive DENTRO de
+    `if enable_telegram_control:`, así que con el control apagado el bloque
+    entero se salteaba y no se imprimía una línea: una instancia real sin freno
+    remoto arrancaba igual que una con freno. Arrancar es lo pedido (§2), así
+    que **no se bloquea**; lo que se agregó es que lo diga al arrancar
+    (`_aviso_sin_freno_remoto`). Queda a propósito: con `false` no hay `/pausa`
+    desde el teléfono y se para cerrando la ventana.
 12. **Cruzando la medianoche con el bróker caído, la referencia de ayer queda
     pegada.** La primera señal del día nuevo no puede leer el equity, así que
     `day_start_balance` se queda con el de ayer; cuando el bróker vuelve, un día

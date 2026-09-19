@@ -187,13 +187,20 @@ def test_run_se_niega_a_arrancar_si_la_carpeta_esta_ocupada(tmp_path, capsys):
     def no_deberia_correr(_settings):
         llamadas.append("arranco")
 
+    # Los dos se restauran. `_run_async` no se restauraba, y el modulo quedaba
+    # con el doble puesto para todo el resto de la corrida: cualquier test
+    # posterior que mire `inspect.getsource(cli._run_async)` -hay varios- leia
+    # el codigo de esta funcion de tres lineas en vez del arranque de verdad.
+    # No se notaba porque los que habia corren ANTES por orden alfabetico.
     original_load = cli.load_settings
+    original_run = cli._run_async
     cli.load_settings = lambda _ruta: settings
     cli._run_async = no_deberia_correr
     try:
         codigo = cli.cmd_run(argparse.Namespace(env_file=None, verbose=False))
     finally:
         cli.load_settings = original_load
+        cli._run_async = original_run
         ocupado.soltar()
 
     assert codigo == 1, "arranco igual con la carpeta ocupada"
