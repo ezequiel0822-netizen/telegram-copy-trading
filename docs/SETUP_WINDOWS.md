@@ -734,8 +734,9 @@ Probado contra un modelo real, ese mensaje se convierte correctamente en
 
 ### La IA no opera
 
-Cuando entiende algo que el parser no pudo, **te lo avisa por Telegram y ahí
-termina**. Vos decidís.
+Cuando entiende algo que el parser no pudo, **lo deja escrito en el log y ahí
+termina**: lo ves en la ventana del bot o en el archivo de `LOG_PATH`. Vos
+decidís. (El bot no te manda mensajes: los avisos por Telegram se sacaron.)
 
 La razón es concreta. Las validaciones de riesgo verifican que un precio sea
 **coherente**, no que sea el **correcto**. Si el modelo lee 2345 donde decía

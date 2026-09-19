@@ -201,8 +201,8 @@ Probado contra un modelo real (`llama3.2:3b`), ese mensaje se convierte en
 Usá un modelo de 3B salvo que la PC tenga placa de video: medido sobre un
 procesador de 8 núcleos sin GPU, un 7B tarda **varios minutos** por mensaje.
 
-**La IA no opera.** Cuando entiende algo que el parser no pudo, avisa por
-Telegram y ahí termina. El motivo es concreto: las validaciones de riesgo
+**La IA no opera.** Cuando entiende algo que el parser no pudo, lo deja escrito
+en el log como advertencia y ahí termina. El motivo es concreto: las validaciones de riesgo
 verifican que un precio sea *coherente*, no que sea el *correcto*. Si el modelo
 lee 2345 donde decía 2355, esa señal pasa todos los controles y opera con un
 número inventado. Perderse una señal es barato; operar una equivocada, no.
