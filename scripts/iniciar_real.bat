@@ -36,6 +36,9 @@ echo.
 echo   Para detenerlo: cerra esta ventana o apreta Ctrl+C.
 echo   Para pausarlo desde el telefono, en Telegram: /pausa real
 echo.
+echo   Te va a pedir la CLAVE DE ARRANQUE. No se ve mientras la escribis.
+echo   Si todavia no pusiste una:  tct clave --env-file .env.real
+echo.
 pause
 
 ".venv\Scripts\python.exe" --version >nul 2>nul

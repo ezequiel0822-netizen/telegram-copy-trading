@@ -118,6 +118,18 @@ def cmd_check(args: argparse.Namespace) -> int:
     for line in settings.describe().splitlines():
         print(f"    {line}")
 
+    # --- La clave de arranque ---
+    print("\nClave de arranque:")
+    if settings.clave_de_arranque:
+        print("  [OK]      Puesta. El bot la va a pedir cada vez que arranque.")
+    elif settings.is_live:
+        print("  [FALTA]   Con dinero real es obligatoria: sin ella el bot no arranca.")
+        print(f"            Ponela con:  tct clave --env-file {args.env_file or '.env'}")
+        ok = False
+    else:
+        print("  [--]      Sin clave: arranca sin preguntar. Para que la pida:")
+        print(f"            tct clave --env-file {args.env_file or '.env'}")
+
     # --- Donde van a parar las ordenes ---
     print("\nEjecucion:")
     if settings.trading_mode == PAPER_AND_METAAPI_DEMO:
@@ -855,6 +867,13 @@ def cmd_probar(args: argparse.Namespace) -> int:
 
     settings = load_settings(args.env_file)
     setup_logging(verbose=args.verbose)
+
+    # Con --operar abre una orden de verdad: en una cuenta protegida, pide la
+    # clave igual que para arrancar. Sin --operar solo lee, y no hace falta.
+    if getattr(args, "operar", False) and not _exigir_clave(
+        settings, args.env_file, "abrir una orden de prueba"
+    ):
+        return 1
     return asyncio.run(_probar_async(settings, args))
 
 
@@ -1489,6 +1508,72 @@ def cmd_status(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
+def _exigir_clave(settings: Settings, env_file: str | None, accion: str) -> bool:
+    """Pide la clave de arranque si esta instancia la tiene. True = seguir.
+
+    Con dinero real es OBLIGATORIA: si `.env.real` no tiene clave, no se
+    arranca y se dice como ponerla. En demo solo se pide si esta puesta (el
+    usuario la quiso tambien en la demo de FxPro, no en la de MetaQuotes).
+
+    Se pide ANTES de tomar el candado y de conectar nada: con la clave mal, el
+    bot no llega a tocar MetaTrader ni Telegram.
+    """
+    from tct.clave import pedir_y_verificar
+
+    ruta = env_file or ".env"
+    if not settings.clave_de_arranque:
+        if not settings.is_live:
+            return True
+        print("\n" + "=" * 62)
+        print("  ESTE BOT OPERA DINERO REAL Y NO TIENE CLAVE DE ARRANQUE")
+        print("=" * 62)
+        print(f"  Para {accion} hace falta una. Ponela con:\n")
+        print(f"      tct clave --env-file {ruta}\n")
+        print("  Te la pide dos veces y la guarda en ese archivo (guarda una")
+        print("  huella, no la clave: no se puede leer abriendo el .env).")
+        return False
+    return pedir_y_verificar(settings.clave_de_arranque, settings.instance_name.upper())
+
+
+def cmd_clave(args: argparse.Namespace) -> int:
+    """Pone o cambia la clave de arranque de una instancia.
+
+    La pide dos veces sin mostrarla y guarda en el .env solo su huella. Es la
+    forma de ponerla: escrita a mano en el .env no sirve, porque el .env guarda
+    la huella y no el texto.
+    """
+    import getpass
+
+    from tct.clave import LARGO_MINIMO, VARIABLE, escribir_en_env, hashear
+
+    ruta = Path(args.env_file or ".env")
+    if not ruta.exists():
+        print(f"No existe {ruta}. Primero crea el archivo de configuracion.")
+        return 1
+
+    print(f"Clave de arranque para {ruta}")
+    print("Se te va a pedir cada vez que arranques el bot con este archivo.")
+    print("No se muestra mientras la escribis.\n")
+    try:
+        primera = getpass.getpass("Clave nueva: ")
+        segunda = getpass.getpass("Repetila:    ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nNo se cambio nada.")
+        return 1
+
+    if primera != segunda:
+        print("\nNo coinciden. No se cambio nada.")
+        return 1
+    if len(primera) < LARGO_MINIMO:
+        print(f"\nTiene que tener al menos {LARGO_MINIMO} caracteres. No se cambio nada.")
+        return 1
+
+    escribir_en_env(ruta, hashear(primera))
+    print(f"\nListo. {VARIABLE} quedo guardada en {ruta}.")
+    print("Si te la olvidas, volve a correr este mismo comando y pone otra.")
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     settings = load_settings(args.env_file)
     setup_logging(settings, verbose=args.verbose)
@@ -1501,6 +1586,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     _avisar_rosters_desparejos(settings, args.env_file)
     if settings.dry_run:
         logger.warning("DRY_RUN=true: se va a observar y registrar, sin operar ni siquiera en papel.")
+
+    # La clave, antes que el candado y antes de conectar nada.
+    if not _exigir_clave(settings, args.env_file, "arrancarlo"):
+        return 1
 
     # Un solo proceso por carpeta de datos. Se toma ANTES de conectar nada:
     # dos bots sobre el mismo state.json se pisan las posiciones, y la que
@@ -1740,6 +1829,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("check", parents=[comunes], help="Diagnostico del entorno y la configuracion")
     sub.add_parser("mt5", parents=[comunes], help="Lee tu cuenta de MetaTrader 5 y dice que poner en el .env")
+    sub.add_parser("clave", parents=[comunes], help="Pone o cambia la clave que se pide para arrancar el bot")
 
     simular = sub.add_parser(
         "simular", parents=[comunes],
@@ -1798,6 +1888,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "check": cmd_check,
         "mt5": cmd_mt5,
+        "clave": cmd_clave,
         "simular": cmd_simular,
         "probar": cmd_probar,
         "chats": cmd_chats,

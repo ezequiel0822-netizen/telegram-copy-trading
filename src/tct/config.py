@@ -211,6 +211,10 @@ class Settings:
     # Donde escuchar los comandos. "me" son tus Mensajes Guardados: privado,
     # siempre disponible y sin configurar nada.
     telegram_control_chat: str = "me"
+    # La HUELLA de la clave de arranque, no la clave. La pone `tct clave`. Si
+    # esta, `tct run` la pide antes de conectar nada; con dinero real es
+    # obligatoria. Ver `tct.clave`.
+    clave_de_arranque: str = ""
 
     # Freno por perdida diaria, en % del balance del arranque del dia.
     # 0 = apagado. Para dinero real conviene ponerlo.
@@ -411,6 +415,22 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
             "Telegram. Lo que decia va al log. Podes borrar esa linea del .env."
         )
 
+    # La clave de arranque se guarda como huella. Si la linea esta pero no
+    # tiene esa forma -alguien escribio la clave a mano en vez de usar
+    # `tct clave`, o se corto al copiar- se falla ACA: un bot que "tiene
+    # clave" pero no la puede verificar no arrancaria nunca, y el motivo
+    # quedaria escondido detras de "clave incorrecta".
+    from tct.clave import VARIABLE as _VARIABLE_CLAVE, es_valida as _clave_valida
+
+    clave_de_arranque = env.str(_VARIABLE_CLAVE)
+    if clave_de_arranque and not _clave_valida(clave_de_arranque):
+        raise ConfigError(
+            f"{_VARIABLE_CLAVE} no tiene la forma de una clave guardada por el bot.\n"
+            "    No se escribe a mano: el .env guarda una huella, nunca la clave.\n"
+            "    Para ponerla o cambiarla, corre:\n"
+            f"        tct clave --env-file {path}"
+        )
+
     configured_mode = env.str("TRADING_MODE", AUTO).upper()
     if configured_mode not in VALID_MODES:
         raise ConfigError(
@@ -522,6 +542,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         instance_name=instance_name,
         instance_names=instance_names,
         enable_telegram_control=env.bool("ENABLE_TELEGRAM_CONTROL", True),
+        clave_de_arranque=clave_de_arranque,
         telegram_control_chat=env.str("TELEGRAM_CONTROL_CHAT", "me"),
         max_daily_loss_pct=env.float("MAX_DAILY_LOSS_PCT", 0.0),
         enable_ollama=env.bool("ENABLE_OLLAMA", False),

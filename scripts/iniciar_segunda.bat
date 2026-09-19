@@ -61,6 +61,9 @@ echo   Mira la linea "MT5 listo ^| servidor=..." de abajo: esa dice contra
 echo   que cuenta esta por operar. Si no es la que esperabas, pará con
 echo   Ctrl+C y revisa MT5_PATH en .env.segunda.
 echo.
+echo   Si le pusiste clave de arranque, te la va a pedir. No se ve mientras
+echo   la escribis. Para ponerla o cambiarla:  tct clave --env-file .env.segunda
+echo.
 
 ".venv\Scripts\python.exe" -m tct --env-file .env.segunda run
 
