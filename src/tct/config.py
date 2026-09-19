@@ -282,7 +282,7 @@ class Settings:
     def _describe_ollama(self) -> str:
         if not self.enable_ollama:
             return "apagada"
-        rol = "puede OPERAR" if self.ollama_auto_execute else "solo avisa"
+        rol = "puede OPERAR" if self.ollama_auto_execute else "no opera, deja constancia en el log"
         # El timeout se muestra porque es lo unico configurable de esta capa que
         # tiene consecuencias visibles: mientras la IA piensa, el procesamiento
         # de los mensajes siguientes hace cola. Sin verlo al arrancar, cambiarlo
@@ -395,7 +395,22 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     ruta_de_mt5 = env.str("MT5_PATH")
     _revisar_ruta_de_mt5(ruta_de_mt5)
 
-    # Un nivel mal escrito no puede caer en silencio: 'ninguno' en vez de
+    # Variables de un sistema que ya no existe. El bot mandaba avisos por
+    # Telegram y el usuario pidio que no le escriba nunca, asi que eso se saco
+    # del proyecto. Si el .env todavia las tiene con un valor, se ignoran; pero
+    # ignorarlas callado deja a la persona creyendo que configuro algo -un
+    # token puesto "por las dudas", un nivel en 'problems'- que no hace nada.
+    obsoletas = [
+        clave for clave in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_NOTIFY_CHAT_ID",
+                            "TELEGRAM_NOTIFY_LEVEL")
+        if env.str(clave)
+    ]
+    if obsoletas:
+        warnings.append(
+            f"{', '.join(obsoletas)} ya no se usa: el bot no manda avisos por "
+            "Telegram. Lo que decia va al log. Podes borrar esa linea del .env."
+        )
+
     configured_mode = env.str("TRADING_MODE", AUTO).upper()
     if configured_mode not in VALID_MODES:
         raise ConfigError(

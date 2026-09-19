@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-18 · v1.6.0 · 670 tests · el último commit que describe
-es `27d3fe6`, más este mismo cambio
+Actualizado: 2026-09-19 · v2.0.0 · 659 tests · el último commit que describe
+es `72556c4`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé §2 primero (dónde está parado el usuario
 hoy, incluido el paso a la cuenta real que está a medio hacer), después §5 y
@@ -90,10 +90,9 @@ Cuatro cosas de esa tabla que hay que tener presentes:
 
 - **Ninguna de las dos tiene freno diario.** En demo es deliberado. Antes de
   real, no.
-- **Los avisos están apagados en las dos**, por motivos distintos: a `.env` le
-  falta `TELEGRAM_NOTIFY_CHAT_ID` y a `.env.segunda` el token. Lo pidió el
-  usuario, pero significa que ni el freno diario ni una apertura a medias
-  avisan de nada: hay que ir a `tct informe`.
+- **Ninguna manda avisos**: el sistema se sacó del proyecto (ver abajo). Lo
+  que el bot tenga que decir —el freno diario, una apertura a medias— queda en
+  el log de cada instancia; y lo que pasó con cada señal, en `tct informe`.
 - **El lote de MetaQuotes es 0.1, diez veces el de los datos viejos.** Los
   números en plata no son comparables con las 12 operaciones de la primera
   semana; las proporciones (TP1/TP2/TP3) sí.
@@ -105,17 +104,22 @@ Cuatro cosas de esa tabla que hay que tener presentes:
 - **BTCUSD se queda en `ALLOWED_SYMBOLS`.** MetaQuotes no lo tiene y esas
   señales quedan como paper trade; FxPro **sí** lo opera (lo llama `BITCOIN`).
 - **La IA local se queda como está.** Ver §4: subirle el nivel no ayudaría.
-- **El bot NO escribe nada, y eso incluye la cuenta real.** Se construyó
-  `TELEGRAM_NOTIFY_LEVEL` para poder elegir y el usuario eligió silencio, en
-  demo y en real. Lo pidió tres veces, la última así: *"no quiero que ningún bot
-  me avise si abrió o no, solo quiero que lea los mensajes del telegram y lo
-  haga"*. **No volver a proponerle avisos.** El 2026-09-18 se le ofreció
-  `problems` para la real, eligió eso, y al ver los pasos del token lo corrigió:
-  la respuesta es no.
-  Va con el control apagado también (`ENABLE_TELEGRAM_CONTROL=false`), así que
-  **no hay freno desde el teléfono**: se para cerrando la ventana. Y la única
-  fuente de qué pasó es `tct informe`. Las dos cosas se le dijeron una vez y
-  están escritas en `.env.real.example`; no hace falta repetírselas.
+- **El bot NO escribe nada, y el sistema de avisos YA NO EXISTE.** Lo pidió
+  tres veces, la última así: *"no quiero que ningún bot me avise si abrió o no,
+  solo quiero que lea los mensajes del telegram y lo haga"*. **No volver a
+  proponerle avisos.** El 2026-09-18 se le ofreció `problems` para la real,
+  eligió eso, y al ver los pasos del token lo corrigió: la respuesta es no.
+  El 2026-09-19 pidió además sacar el código, y se sacó (commit `72556c4`):
+  `notifier.py`, `tct chatid` y las tres variables `TELEGRAM_BOT_TOKEN`,
+  `TELEGRAM_NOTIFY_CHAT_ID` y `TELEGRAM_NOTIFY_LEVEL`. Lo que esos avisos
+  DECÍAN no se perdió: va al log (§5). Si un `.env` todavía tiene esas
+  variables con valor, el arranque avisa que se pueden borrar.
+  **El control por Telegram (`/pausa`, `/estado`, `/cerrar`) se quedó**: se le
+  ofreció sacarlo también y eligió conservarlo, porque nunca escribe salvo que
+  él escriba primero. En su `.env.real` lo tiene apagado
+  (`ENABLE_TELEGRAM_CONTROL=false`), así que ahí **no hay freno desde el
+  teléfono**: se para cerrando la ventana, y el arranque lo dice. Eso ya se le
+  dijo una vez y está en `.env.real.example`; no hace falta repetírselo.
 
 ### El paso a dinero real: decidido, a medio hacer
 
@@ -422,7 +426,6 @@ La CLI (`cli.py`) expone:
 |---|---|
 | `check` | Diagnóstico. Lo primero en una máquina nueva. |
 | `mt5` | Lee la cuenta MT5 abierta y dice qué poner en el `.env`. |
-| `chatid` | Averigua el chat id para las notificaciones. |
 | `simular` | **Reproduce los mensajes reales del grupo.** Sin `--ejecutar` no toca nada. Con `--con-precios` compara cada entrada contra el precio real de MT5 y sugiere el límite, sin operar. |
 | `probar` | Verifica la cadena contra MT5. Con `--operar` abre y cierra una posición mínima. |
 | `informe` | **Qué pasó con lo que llegó.** Agrupa por mensaje (no por evento, ver §2), separa operadas de descartadas y dice el motivo de cada descarte. Con `--con-resultados` va al historial de MT5 y agrega cómo terminó cada una: TP, SL, breakeven o cierre a mano. Es de solo lectura. |
@@ -618,14 +621,18 @@ saber dónde está la posición. `entry_real` queda en `None` en paper trading y
 en las posiciones abiertas antes de que el campo existiera, así que **todo el
 que lo use tiene que poder caer en `entry`**.
 
-**`engine.py` — hay avisos que NO se pueden callar sin perder información que
-no está en ningún otro lado.** `_notify(..., problema=True)` marca cuáles. Los
-dos que importan:
+**`engine.py` — lo que el bot "avisaba" va al LOG, y no se puede borrar.** El
+sistema de avisos por Telegram se sacó (§2), pero las 18 llamadas siguen: ahora
+`Engine._avisar(texto, problema=...)` las escribe en el log, **WARNING** si
+`problema=True` y **INFO** si es rutina. Se ven en la ventana del bot y quedan
+en el archivo de `LOG_PATH`. **No las borres "porque ya no avisan"**: varias
+son la única constancia que existe de algo, y sacarlas convierte *"no me
+escribas"* en *"no me entero"*. Las dos que más importan:
 
-- **El aviso de señal RECHAZADA es la única voz del freno por pérdida diaria.**
+- **El de señal RECHAZADA es la única voz del freno por pérdida diaria.**
   Cuando ese freno salta, rechaza **todas** las señales hasta el día siguiente.
-  Sin el aviso, un día entero frenado se ve desde el teléfono exactamente igual
-  que un día sin señales. `/estado` tampoco lo muestra.
+  Sin esa línea, un día entero frenado se ve exactamente igual que un día sin
+  señales. `/estado` tampoco lo muestra.
 - **Una apertura que entró a medias avisa aparte, y tiene que seguir así.**
   Antes esa información viajaba adentro del `SENAL ACEPTADA`, que es un aviso
   de rutina: al callar la rutina se iba con él. Con `POSITIONS_PER_SIGNAL=3`,
@@ -636,11 +643,13 @@ dos que importan:
   existen para medir cuántas veces el precio llega al TP2 y al TP3, y un 2 de 3
   invisible hace figurar el TP3 como "no llegó" cuando nunca se mandó.
 
-**Y ningún test protegía la entrega de un aviso.** Los de `test_desconexion.py`
-afirman sobre el TEXTO FUENTE (`inspect.getsource`), no sobre comportamiento:
-se comprobó que parchear `Notifier.enabled()` para devolver `False` dejaba la
-suite entera en verde. `test_nivel_de_avisos.py` son los primeros que se ponen
-en rojo si los avisos dejan de salir.
+**Y ningún test protegía la entrega de un aviso**, hasta que se escribieron.
+Cuando se sacó el notificador, esos tests **no se borraron**: pasaron a leer
+el log con `AvisosDelLog` (en `tests/test_engine.py`), así que siguen
+protegiendo lo mismo — que el bot DIGA lo que hizo y lo que no pudo hacer. Ese
+ayudante se engancha al logger del motor; `tests/conftest.py` lo desengancha
+entre tests, porque si no se acumulan (es la familia del test que dejaba
+`cli._run_async` reemplazado para toda la corrida, §7).
 
 **`engine.py` — "mover TP" mueve SOLO la posición del TP1, y la reconoce por
 índice, no por precio.** Así lo pidió el usuario el 2026-09-14: si el canal
@@ -1441,12 +1450,11 @@ dos secciones que nadie contrastó contra el código.**
   abrir tres, el techo se cruzaría igual. `_objetivos_de_apertura` lo recorta.
 - **No se abren más posiciones que objetivos tenga la señal.** Una posición sin
   TP propio no persigue nada: solo duplica exposición.
-- **Callar los avisos nunca puede cambiar lo que el bot HACE.**
-  `TELEGRAM_NOTIFY_LEVEL` filtra la salida y nada más: con `none` el bot abre,
-  cierra y mueve stops exactamente igual. Y **no deja sin freno**: los comandos
-  entran por la sesión de Telethon (`control.py:390`), que es otro canal — el
-  notificador usa la Bot API con `TELEGRAM_BOT_TOKEN`. Son dos mecanismos que
-  no comparten una sola línea de código.
+- **Lo que el bot deja dicho nunca puede cambiar lo que el bot HACE.**
+  `_avisar` escribe en el log y nada más. Y el control (`/pausa`, `/cerrar`)
+  entra por la sesión de Telethon (`control.py`), un camino aparte: cuando se
+  sacó el sistema de avisos, el control quedó intacto porque no compartían una
+  sola línea de código.
 - **El cupo del día se descuenta cuando el bróker CONFIRMA, no cuando la señal
   se acepta.** Si no, una señal que el bróker no puede operar —un símbolo que
   no cotiza, la cuenta desconectada— igual se come un lugar de

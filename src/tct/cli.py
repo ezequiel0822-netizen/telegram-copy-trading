@@ -162,7 +162,9 @@ def cmd_check(args: argparse.Namespace) -> int:
             if settings.ollama_auto_execute:
                 print("  [AVISO]   OLLAMA_AUTO_EXECUTE=true: la IA puede abrir operaciones.")
             else:
-                print("            Solo avisa por Telegram, no opera. Es lo recomendado.")
+                print("            No opera: lo que interpreta queda en el log (WARNING).")
+                print("            Es lo recomendado. Para verlo, mira la ventana del bot")
+                print("            o el archivo de LOG_PATH.")
         else:
             # No se marca como error: el bot corre perfecto sin IA.
             print(f"  [ausente] {detalle}")
