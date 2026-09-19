@@ -5,11 +5,12 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-19 · v2.0.0 · 659 tests · el último commit que describe
-es `72556c4`, más este mismo cambio
+Actualizado: 2026-09-19 · v2.0.1 · 659 tests · el último commit que describe
+es `6b305d5`, más este mismo cambio
 
-**Si retomás en un chat nuevo:** leé §2 primero (dónde está parado el usuario
-hoy, incluido el paso a la cuenta real que está a medio hacer), después §5 y
+**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-19"**, al
+principio de §2: es dónde quedó parado el usuario, qué tiene configurado en su
+PC, qué decisiones esperan su respuesta y cuál es el próximo paso. Después §5 y
 §9, que son las que evitan romper algo que costó caro.
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
@@ -36,6 +37,107 @@ Eso viene del pedido original y sigue vigente.
 
 ## 2. Dónde está el usuario ahora mismo
 
+### Estado al 2026-09-19 — leer esto primero
+
+**Dos bots en demo, operando el canal. La cuenta real de FxPro todavía NO está
+fondeada.** El chat anterior se cerró por falta de contexto; esto es lo que
+hay que saber para seguir.
+
+**Lo que tiene en su PC** (leído el 19/09 de sus `.env` con `findstr`, que
+muestra las opciones sin contraseñas):
+
+| | `.env` — MetaQuotes demo | `.env.segunda` — FxPro demo |
+|---|---|---|
+| Cuenta | ~98.600 | **500**, nueva desde el 19/09 — confirmar (abajo) |
+| `DEFAULT_LOT` / `MAX_LOT` | 0.01 / 0.01 | 0.01 / 0.01 |
+| `POSITIONS_PER_SIGNAL` | 1 | 1 |
+| `MAX_SPREAD_FROM_ENTRY_PCT` | **0.5** — el control | **0.05** — el filtro a prueba |
+| Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 **(ver abajo)** | 10 / 20 / 35 |
+| `MAX_DAILY_LOSS_PCT` | 0 | 0 |
+| `INSTANCE_NAMES` | `demo,fxpro` | `demo,fxpro` |
+
+**Qué están midiendo:** si el filtro de entrada tarde (`0.05`) le conviene. Los
+dos bots operan la misma estrategia y la única diferencia que importa es ese
+número: cada señal que FxPro saltee por *"La entrada estaba lejos del precio
+real"* se busca en el informe de MetaQuotes y se ve cómo terminó. Por eso
+**MetaQuotes NO lleva el filtro, a propósito** (§2, más abajo, tiene los datos
+que lo motivaron: dos entradas tarde que arriesgaban ~11 para ganar ~1).
+
+**Pendiente de confirmar, pedido y sin respuesta:**
+
+1. **Que el bot de FxPro esté en la cuenta de 500.** Al arrancar imprime
+   `MT5 listo | servidor=... balance=...`. Si dice ~109.600, `.env.segunda`
+   todavía tiene el login de la demo vieja y el bot re-loguea la terminal en
+   ESA cuenta cada vez que arranca: hay que poner el login, la password y el
+   servidor de la de 500.
+2. **Los topes del `.env` de MetaQuotes.** Se le pidió igualarlos a FxPro
+   (10/20/35) para que el único motivo de un salteo sea el filtro; dijo "ya",
+   pero el `findstr` fue anterior y no se volvió a leer. Después se le sugirió
+   algo mejor: poner en **los dos** los números de la real
+   (`MAX_POSITIONS_PER_SYMBOL=2`, `MAX_OPEN_TRADES=2`, `MAX_SIGNALS_PER_DAY=10`,
+   `MAX_DAILY_LOSS_PCT=5`), así FxPro de 500 es una copia exacta de la real y
+   MetaQuotes sigue de control. Sin respuesta.
+3. **Que reinició los dos bots después del `git pull`** (quedó en `6b305d5`).
+   Un bot que no se reinicia sigue con el código viejo en memoria: ese fue el
+   motivo de un informe del 18/09 que mostraba 3 posiciones y lote 0.1 con el
+   `.env` ya cambiado.
+
+**Decisiones que esperan su respuesta** (no volver a plantearlas desde cero):
+
+- **Verificar la cuenta antes de CADA orden, no solo al conectar.** Hoy la
+  verificación de que la cuenta sea la del `.env` corre una vez, en
+  `connect()`. Si con el bot andando alguien cambia la cuenta de la terminal a
+  mano, el bot opera la otra. Se le ofreció tres veces; el 19/09 pidió un
+  ejemplo y se le mostró corriendo el código: el bot demo verificó la cuenta
+  111 al arrancar, la terminal pasó a la 222 (real), llegó una señal y **la
+  orden entró en la REAL** con la configuración de la demo, sin freno diario.
+  Para rehacerlo: una subclase de `tests/fake_mt5.FakeMT5` con `initialize`,
+  `login` (que cambia la cuenta activa), `account_info` (que devuelve la
+  activa) y un `order_send` que anota en qué cuenta entró cada orden; se la
+  pone en `sys.modules["MetaTrader5"]`, se llama a `connect()`, se cambia la
+  cuenta activa y se manda una señal. **No está implementada** hasta que diga
+  que sí; el lugar natural es `mt5_native` antes de cada `order_send`.
+  Importa porque su plan pasa las dos cuentas de FxPro por la misma terminal.
+- **Filtro que mire el lado.** El filtro de entrada mide la distancia sin
+  mirar si el precio se movió a favor o en contra, así que un número apretado
+  también saltea entradas MEJORES. Se le ofreció hacer que solo rechace cuando
+  se movió en contra. Sin respuesta.
+- **`MAX_SPREAD_FROM_ENTRY_PCT` en la real.** Su `.env.real` tiene 0.3. Se
+  decide con lo que salga de la comparación de arriba, en unas dos semanas.
+
+**`.env.real` existe, y NO se puede arrancar todavía** (tampoco hay que): tiene
+`TRADING_MODE=LIVE` y `ALLOW_LIVE_TRADING=true` pero **ninguna credencial de
+MT5**, y `tct check` lo rechaza con el error nuevo de §6 — que es lo correcto:
+con el código anterior ese mismo archivo habría arrancado y operado la cuenta
+que encontrara. **Se copió de la plantilla VIEJA**, así que tiene números que
+ya no son los decididos: `MAX_DAILY_LOSS_PCT=3` (lo decidido es **5**),
+`MAX_SIGNALS_PER_DAY=5` (lo decidido es **10**) e `INSTANCE_NAMES=demo,real`.
+Hay que corregirlos antes de ir a real.
+
+**El plan para pasar a real, tal como lo entendió el usuario:** hoy MetaQuotes
+demo + FxPro demo. Cuando fondee:
+
+1. Cerrar el bot de FxPro demo (`iniciar_segunda.bat`).
+2. **Con ese bot cerrado**, loguear MetaTrader de FxPro en la cuenta real y
+   correr `tct mt5` para sacar login, servidor y apalancamiento.
+3. Completar `.env.real` (y corregir los números de arriba).
+4. `tct check --env-file .env.real` y `tct probar --operar --env-file .env.real`.
+5. Arrancar con `iniciar_real.bat`. `iniciar_segunda.bat` no se abre más.
+
+La regla que se le dejó, porque con una sola terminal es LA forma de perder
+plata: **primero se cierra el bot, después se toca la cuenta.** Si quisiera
+FxPro demo y FxPro real al mismo tiempo, hace falta una segunda instalación de
+MetaTrader de FxPro en otra carpeta, con su `MT5_PATH` en cada `.env`.
+
+**Lo que se hizo en esta tanda** (del 15 al 19/09), en §6 y §5 el detalle:
+credenciales obligatorias con dinero real y la cuenta verificada contra el
+`.env`; el breakeven que le alejaba el stop a la otra posición de oro; "mover
+TP" con varias candidatas no mueve ninguna; `tct informe` arreglado de punta a
+punta; `tct status` no toca un estado corrupto; y **el sistema de avisos por
+Telegram se sacó del proyecto** a pedido suyo — lo que decía va al log.
+
+---
+
 **El bot está operando señales reales del canal, en demo, y funciona.** Ya no
 es un sistema que se está montando: es uno que corre y del que hay datos.
 
@@ -60,10 +162,12 @@ es un sistema que se está montando: es uno que corre y del que hay datos.
     el breakeven (§5): menos spread es menos distancia entre la entrada del
     mensaje y el precio real de llenado.
 
-### La configuración de hoy: DOS bots corriendo
+### Cómo estaban hasta el 18/09 (historia: lo vigente está arriba)
 
 Desde el 2026-09-13 corren **dos instancias en paralelo**, sobre el mismo
-canal y con configuraciones distintas a propósito.
+canal y con configuraciones distintas a propósito. **Esta tabla ya no es la
+configuración actual** —la de hoy está en "Estado al 2026-09-19"—; se deja
+porque explica de dónde salen los datos de la primera semana.
 
 | | `.env` — instancia DEMO | `.env.segunda` — instancia FXPRO |
 |---|---|---|
@@ -1188,28 +1292,30 @@ Ordenado por lo que más importa antes de dinero real.
    bloquea una decisión de verdad, y ya no falta código:
 
    ```
-   tct informe --horas 48 --con-resultados
-   tct informe --horas 48 --con-resultados --env-file .env.segunda
+   tct informe --horas 336 --con-resultados
+   tct informe --horas 336 --con-resultados --env-file .env.segunda
    ```
 
-   Clasifica cada operación en TP1/TP2/TP3, stop, breakeven o cierre a mano.
-   Lo que falta es **tiempo corriendo**. Con las dos salidas se contestan las
-   dos preguntas abiertas: si el TP2 y el TP3 se alcanzan lo suficiente como
-   para justificar tres posiciones, y cuánto cambia el bróker con la misma
-   señal. **Correr el informe una vez no alcanza: son unas 3 señales por día.**
+   **La pregunta cambió el 18/09**: ya no es "¿rinden los tres TP?" —se dio de
+   baja, ver §2— sino **"¿le conviene el filtro de entrada tarde de 0.05?"**.
+   En el informe de FxPro, las salteadas por el filtro salen en *"POR QUE NO SE
+   OPERARON"* como *"La entrada estaba lejos del precio real del mercado"*;
+   cada una se busca en el de MetaQuotes, que no tiene filtro, y se ve cómo
+   terminó. Con eso se decide el número de la real. **Correr el informe una
+   vez no alcanza: son unas 3 señales por día**, y en los 15 medidos el filtro
+   saltea 2 (13%, pero con esa muestra puede ser de 4% a 38%).
 2. **Repetir contra FxPro lo que ya funcionó contra MetaQuotes-Demo.** ✅
    **Hecho el 2026-09-11.** `tct probar --operar --env-file .env.segunda` abrió
    `GOLD` en 4345.74 (ticket 330645574), movió el stop, lo volvió a mover al
    mismo precio —el `10025`, que cada bróker puede contestar distinto— y cerró.
    El *filling mode* de FxPro es compatible.
-3. **Terminar el paso a la cuenta real de FxPro.** Está decidido y a medio
-   hacer: el detalle, lo que ya está listo y las cinco decisiones que faltan
-   están en **§2, "El paso a dinero real"**. El código está; lo que falta son
-   números que elige el usuario.
+3. **Terminar el paso a la cuenta real de FxPro.** El código está; falta que
+   el usuario fondee. Los pasos y lo que hay que corregir en su `.env.real`
+   (que salió de la plantilla vieja) están en **§2, "Estado al 2026-09-19"**.
 
    Y lo de siempre, que es fácil de olvidar justo cuando más importa: las
-   protecciones de la demo (100/100, sin freno diario, 30 por instrumento)
-   **no** se heredan a la real. `.env.real.example` ya trae valores propios.
+   protecciones de la demo **no** se heredan a la real. `.env.real.example`
+   trae los valores decididos (5%, 10 señales), pero su `.env.real` es anterior.
 4. **Punto como separador de miles.** `"DAX SELL 18.500"` → 18.5. Los tres
    números escalan juntos, así que la geometría no lo nota. El contraste con
    el mercado ahora lo ataja *si el bróker cotiza ese símbolo*, pero eso es una
@@ -1512,11 +1618,28 @@ dos secciones que nadie contrastó contra el código.**
 - Cuando le tengas que dictar un comando, acordate de
   `scripts\consola.bat`: la ruta larga del `.venv` no se le queda pegada y ya
   le costó seis veces el mismo error.
-- **El bot arranca solo al prender la PC, así que ya nadie mira la consola.**
-  Eso cambia el estándar de los mensajes: algo que falla en silencio no se
-  descubre a los cinco minutos, se descubre cuando el usuario nota que faltan
-  operaciones. Por eso el corte de conexión ahora se avisa (§6) y por eso el
-  arranque imprime la configuración que va a usar.
+- **Nadie mira la consola todo el tiempo, y el bot no le escribe** (los avisos
+  por Telegram se sacaron a pedido suyo). Eso cambia el estándar de los
+  mensajes: algo que falla en silencio no se descubre a los cinco minutos, se
+  descubre cuando nota que faltan operaciones. Por eso lo que el bot tiene que
+  decir va al log como WARNING, por eso el corte de conexión queda como ERROR,
+  y por eso el arranque imprime la configuración que va a usar.
+- **Para saber qué tiene configurado, no preguntes: pedile que lo muestre.** En
+  la ventana de `consola.bat`, `dir /b .env*` lista qué archivos existen, y
+  esto muestra las opciones que importan **sin ninguna contraseña**:
+
+  ```
+  findstr /b "TRADING_MODE ALLOW_LIVE INSTANCE_NAME INSTANCE_NAMES DEFAULT_LOT MAX_LOT POSITIONS_PER_SIGNAL MAX_POSITIONS MAX_OPEN MAX_SIGNALS MAX_DAILY MAX_SPREAD ALLOWED_SYMBOLS DATA_DIR" .env .env.segunda .env.real
+  ```
+
+  El 19/09 eso deshizo una confusión que llevaba varios mensajes: él decía que
+  `.env.segunda` "no lo puse" y existía; y existía un `.env.real` que nadie
+  sabía que había creado. Confunde los nombres de los archivos entre sí.
+- **"Ya" significa "lo hice", no "verificado".** Dos veces dijo "ya" y el bot
+  seguía con la configuración vieja: había editado el `.env` pero no había
+  reiniciado. El `.env` se lee UNA vez, al arrancar. Después de cualquier
+  cambio, pedile que mire las líneas que imprime el bot al arrancar.
+- Contesta corto, a veces con una palabra. Respondele al punto.
 - Hay una guía web publicada como Artifact que espeja `docs/SETUP_WINDOWS.md`.
   Si cambia algo de la instalación, hay que actualizar las dos.
 
