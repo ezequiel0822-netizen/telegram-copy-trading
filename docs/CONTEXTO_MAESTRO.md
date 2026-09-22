@@ -5,10 +5,10 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-22 · v2.4.0 · 864 tests · el último commit que describe
+Actualizado: 2026-09-22 · v2.5.0 · 864 tests · el último commit que describe
 es `f4983e6`, más este mismo cambio
 
-**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-20"**, al
+**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-22"**, al
 principio de §2: es dónde quedó parado el usuario, qué tiene configurado en su
 PC, qué decisiones esperan su respuesta y cuál es el próximo paso. Después §5 y
 §9, que son las que evitan romper algo que costó caro.
@@ -37,16 +37,23 @@ Eso viene del pedido original y sigue vigente.
 
 ## 2. Dónde está el usuario ahora mismo
 
-### Estado al 2026-09-20 — leer esto primero
+### Estado al 2026-09-22 — leer esto primero
 
-**Dos bots en demo, operando el canal. La cuenta real de FxPro todavía NO está
-fondeada.** El chat anterior se cerró por falta de contexto; esto es lo que
-hay que saber para seguir.
+**El experimento ARRANCÓ.** El 22/09 a las 02:16 quedó corriendo la instancia de
+FxPro con la configuración nueva, después de resolver el problema de margen que
+había tenido trabado todo (abajo). Las dos instancias operan el mismo canal y
+**la única diferencia que importa es el filtro de entrada tarde**: 0.05 en FxPro
+contra 0.5 en MetaQuotes. La cuenta real de FxPro **todavía NO está fondeada**.
 
-**Lo que tiene en su PC**, ya con los dos `tct cambiar` corridos el 20/09 a la
-noche (su salida los mostró uno por uno). **Los bots venían corriendo con los
-números VIEJOS todo el 20/09**: el `.env` se lee solo al arrancar, así que estos
-valores empiezan a valer en el próximo arranque.
+Lo que confirmó ese arranque, línea por línea: la clave de arranque se pide y
+funciona, la cuenta es la de 500 (`balance=500.0`), los topes quedaron en
+100/100/30 sin freno diario, el filtro sigue en 0.05, ya no aparece el aviso de
+roster desparejo, y el bróker resuelve los nombres solo (`XAUUSD -> GOLD`,
+`BTCUSD -> BITCOIN`, `XAGUSD -> SILVER`, `ETHUSD -> ETHEREUM`).
+
+**Lo que tiene en su PC** (los `tct cambiar` del 20 y del 22 ya corridos; su
+salida los mostró uno por uno). Recordar siempre: **el `.env` se lee solo al
+arrancar**, así que cualquier cambio empieza a valer en el próximo arranque.
 
 | | `.env` — MetaQuotes demo | `.env.segunda` — FxPro demo | `.env.real` — FxPro real |
 |---|---|---|---|
@@ -56,8 +63,12 @@ valores empiezan a valer en el próximo arranque.
 | Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | **30 / 100 / 100** desde el 22/09 (antes 2 / 2 / 10) | **2 / 2 / 10** |
 | `MAX_DAILY_LOSS_PCT` | 0 | **0** desde el 22/09 (antes 5) | **5** |
 | `INSTANCE_NAMES` | `demo,fxpro,real` | `demo,fxpro,real` | `demo,fxpro,real` |
-| `ALLOWED_SYMBOLS` | 11, con BTCUSD | 12, con BTCUSD y ETHUSD | solo XAUUSD — **pregunta abierta** |
-| Clave de arranque | no (así la quiso) | **puesta y probada** el 20/09 | puesta, sin probar |
+| `ALLOWED_SYMBOLS` | 11, con BTCUSD | 12, con BTCUSD y ETHUSD | solo XAUUSD |
+| Clave de arranque | no (así la quiso) | **puesta y probada** | puesta, sin probar |
+
+La pregunta de "¿solo oro en la demo?" quedó contestada por el camino: con la
+demo corriendo **sin límites para experimentar**, se dejan todos los símbolos.
+La real sigue con solo XAUUSD, como se decidió.
 
 Un detalle menor que quedó: el `.env` de MetaQuotes todavía tiene
 `TELEGRAM_BOT_TOKEN` y `TELEGRAM_NOTIFY_LEVEL`, del sistema de avisos que se
@@ -168,18 +179,26 @@ MetaQuotes y se ve cómo terminó. Antes se le habían ofrecido dos opciones
 las dos quedaron descartadas: con topes en MetaQuotes, esa instancia también
 saltearía señales y se perdería justo el dato que se quiere mirar.
 
-**Pendiente, pedido y sin respuesta:**
+**El próximo paso es esperar. Lo pendiente:**
 
-1. **Una demo de FxPro de 500 con apalancamiento usable** (ver arriba: la actual
-   es 1:2 y no puede abrir nada). Hasta que eso pase, el ensayo de la cuenta
-   real no existe y el experimento del filtro no junta datos. El bot de FxPro
-   quedó **apagado** a propósito: prendido solo llena el log de `No money`.
-2. **`ALLOWED_SYMBOLS`: solo oro en las dos, o BTC en las dos.** La demo opera
-   oro, BTC y otros; la real, solo oro. Se le recomendó solo oro: con
-   `MAX_OPEN_TRADES=2`, un BTC en la demo ocupa un lugar que en la real estaría
-   libre, y la demo deja de mostrar lo que haría la real. Sin respuesta. (La
-   decisión vieja de "BTCUSD se queda en ALLOWED_SYMBOLS", más abajo, era de
-   cuando la demo de FxPro era solo un experimento.)
+1. **Dejar correr los dos bots y juntar datos.** Son ~3 señales por día, así que
+   antes de una semana no hay nada que mirar. Cuando haya, los dos informes:
+
+   ```
+   tct informe --horas 336 --con-resultados
+   tct informe --horas 336 --con-resultados --env-file .env.segunda
+   ```
+
+   La pregunta: cada señal que FxPro saltee por *"La entrada estaba lejos del
+   precio real"* se busca en el informe de MetaQuotes y se ve cómo terminó. Con
+   eso se decide el filtro de la cuenta real. **Ojo al leer**: en el informe de
+   FxPro ahora hay también señales de BTC, plata y divisas que MetaQuotes no
+   opera; para la comparación del filtro solo cuentan las de oro.
+2. **Confirmarle a FxPro el apalancamiento de la cuenta REAL con saldo** (arriba,
+   "La cuenta REAL ya existe"). Es lo único que puede volver a trabar todo, y se
+   pregunta en el chat de soporte sin fondear nada.
+3. **Que confirme que el bot de MetaQuotes también quedó corriendo.** Sin el
+   control no hay comparación: se le preguntó el 22/09 y no contestó todavía.
 
 **La CLAVE DE ARRANQUE: puesta y PROBADA.** Pidió que el bot real y la demo de
 FxPro le pidan una contraseña antes de arrancar (commits `3f7c82a` y `829292c`).
@@ -307,7 +326,7 @@ es un sistema que se está montando: es uno que corre y del que hay datos.
 
 Desde el 2026-09-13 corren **dos instancias en paralelo**, sobre el mismo
 canal y con configuraciones distintas a propósito. **Esta tabla ya no es la
-configuración actual** —la de hoy está en "Estado al 2026-09-20"—; se deja
+configuración actual** —la de hoy está en "Estado al 2026-09-22"—; se deja
 porque explica de dónde salen los datos de la primera semana.
 
 | | `.env` — instancia DEMO | `.env.segunda` — instancia FXPRO |
@@ -478,7 +497,7 @@ sí dice:
   a 8 puntos de la entrada del mensaje, arriesgaban ~11 para ganar ~1. El límite
   que tenía `.env.real.example` (0.3%, ~13 puntos en oro) es más de tres veces
   el TP1. **El 19/09 el usuario lo bajó a 0.05 en la real**, igual que en la
-  demo de FxPro (§2, "Estado al 2026-09-20"), y la plantilla ya lo trae.
+  demo de FxPro (§2, "Estado al 2026-09-22"), y la plantilla ya lo trae.
 - **El arreglo del breakeven funciona en producción:** las de antes cerraban en
   −0.42 y −1.08; la de 11:25, después, cerró en **+0.00 exacto** en las tres.
 
@@ -1621,7 +1640,7 @@ Ordenado por lo que más importa antes de dinero real.
    El *filling mode* de FxPro es compatible.
 3. **Terminar el paso a la cuenta real de FxPro.** El código está; falta que
    el usuario fondee. Los pasos y lo que hay que corregir en su `.env.real`
-   (que salió de la plantilla vieja) están en **§2, "Estado al 2026-09-20"**.
+   (que salió de la plantilla vieja) están en **§2, "Estado al 2026-09-22"**.
 
    Y lo de siempre, que es fácil de olvidar justo cuando más importa: las
    protecciones de la demo **no** se heredan a la real. `.env.real.example`
