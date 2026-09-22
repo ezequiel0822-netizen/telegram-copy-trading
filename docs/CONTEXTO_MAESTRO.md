@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-22 · v2.4.0 · 863 tests · el último commit que describe
+Actualizado: 2026-09-22 · v2.4.0 · 864 tests · el último commit que describe
 es `f4983e6`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-20"**, al
@@ -50,11 +50,11 @@ valores empiezan a valer en el próximo arranque.
 
 | | `.env` — MetaQuotes demo | `.env.segunda` — FxPro demo | `.env.real` — FxPro real |
 |---|---|---|---|
-| Cuenta | ~98.300 | **500**, confirmada en el arranque del 20/09 | sin fondear, **sin credenciales** |
+| Cuenta | ~98.300 | **500**, apalancamiento **ilimitado** desde el 22/09 | #516648640, sin fondear, **sin credenciales** |
 | Lote / posiciones por señal | 0.01 / 1 | 0.01 / 1 | 0.01 / 1 |
 | `MAX_SPREAD_FROM_ENTRY_PCT` | **0.5** — el control | 0.05 | 0.05 |
-| Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | **2 / 2 / 10** | **2 / 2 / 10** |
-| `MAX_DAILY_LOSS_PCT` | 0 | **5** | **5** |
+| Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | **30 / 100 / 100** desde el 22/09 (antes 2 / 2 / 10) | **2 / 2 / 10** |
+| `MAX_DAILY_LOSS_PCT` | 0 | **0** desde el 22/09 (antes 5) | **5** |
 | `INSTANCE_NAMES` | `demo,fxpro,real` | `demo,fxpro,real` | `demo,fxpro,real` |
 | `ALLOWED_SYMBOLS` | 11, con BTCUSD | 12, con BTCUSD y ETHUSD | solo XAUUSD — **pregunta abierta** |
 | Clave de arranque | no (así la quiso) | **puesta y probada** el 20/09 | puesta, sin probar |
@@ -65,7 +65,12 @@ sacó, y el bot lo avisa al arrancar. **Esas líneas se borran a mano**
 (`notepad .env`): `tct cambiar` cambia valores, no borra líneas, y esas dos las
 rechaza por obsoletas.
 
-### Lo que frena todo hoy: la demo de FxPro no puede abrir NINGUNA posición
+### El día que la demo de FxPro no pudo abrir nada, y cómo se resolvió
+
+**Resuelto el 22/09**: era el apalancamiento de la cuenta (1:2), y él lo cambió
+a **ilimitado** en esa misma cuenta desde el portal de FxPro. Queda escrito
+entero porque es el mejor ejemplo de un bot que funciona perfecto y no opera
+nada, y porque el mismo cheque hay que hacerlo en la real.
 
 **El 20/09 el bot de FxPro corrió el día entero y no abrió ni una.** Todos los
 intentos murieron igual, y lo dice el bróker, no el bot:
@@ -97,11 +102,25 @@ abierta. Con 1:20, una sola posición ocupa el 43% de una cuenta de 500; con
 1:100, el 9%. Para esta estrategia, un apalancamiento bajo no protege: impide
 operar.
 
-**Lo que se le pidió el 21/09**: crear una demo nueva de FxPro de 500 **con el
-apalancamiento más alto que ofrezcan**, apuntar `.env.segunda` a esa cuenta
-(`tct cambiar --env-file .env.segunda MT5_LOGIN=... "MT5_SERVER=..."
-MT5_PASSWORD`) y volver a correr `tct mt5` para confirmar que el oro entra.
-Sin respuesta todavía.
+**Cómo terminó (22/09).** No hizo falta crear otra cuenta: el apalancamiento se
+cambia desde el portal de FxPro en la cuenta que ya estaba (hace falta no tener
+posiciones abiertas, y volver a loguear la terminal para que lo informe). Quedó
+en **ilimitado**, que MetaTrader reporta como `1:2000000000`, y con eso el
+bróker no pide margen: `tct mt5` ahora muestra *"no pide margen (apalancamiento
+ilimitado)"* en todos los símbolos. La cuenta sigue siendo la misma
+(#592098515), así que `.env.segunda` no se tocó.
+
+**La cuenta REAL ya existe** (#516648640, FxPro Markets Ltd., MT5 Estándar,
+Hedging), **sin fondear**, y también dice `1:Ilimitado`. **Ojo con eso**: el
+ilimitado suele estar condicionado al saldo —lo dan mientras la cuenta tiene
+poco dinero y vuelve a la escala normal arriba de cierto monto—, así que el
+apalancamiento que va a tener con 500 adentro **no está confirmado**. Se le
+pidió preguntárselo a FxPro (incluyendo el apalancamiento específico de XAUUSD,
+que en muchos brókers es más bajo que el de divisas). La regla que quedó: al
+fondear, **antes de arrancar el bot**, correr `tct mt5 --env-file .env.real` y
+mirar el bloque del margen; si el oro dice `NO ENTRA NINGUNA`, no se arranca
+nada. El margen se puede consultar incluso con la cuenta en cero: el cálculo no
+necesita saldo.
 
 **Y el experimento del filtro quedó en pausa**: la comparación necesita que
 FxPro opere, y no operó nada. Los dos "rechazada por el filtro" de ese día
@@ -113,13 +132,25 @@ Para que no vuelva a pasar sin avisar, `tct mt5` ahora **le pregunta al bróker
 el margen de una posición y dice cuántas entran** (§3). Es el número que decide
 `MAX_OPEN_TRADES`, y hasta ahora se elegía a ciegas.
 
-**Qué están midiendo, y cómo cambió el 19/09.** La demo de FxPro con 500 es
-**el ensayo de la real**. Lo dijo así: *"quiero que la real esté igual que la
-segunda para ver qué pasaría si dejara la real así como está la segunda, por
-eso le puse 500 dólares"*. O sea: `.env.segunda` y `.env.real` llevan **los
-mismos números**, los decididos para la real (2 / 2 / 10 / 5%), y el filtro de
-entrada tarde en **0.05 en las dos** —la real tenía 0.3—. Si la comparación
-dice que 0.05 saltea de más, se cambia en los dos archivos a la vez.
+**Qué están midiendo. Cambió dos veces, y lo último manda (22/09).**
+
+El 19/09 la demo de FxPro era **el ensayo de la real**: los mismos números que
+`.env.real` (2 / 2 / 10 / 5%), para ver qué haría la cuenta real antes de
+fondearla. El 22/09, apenas se destrabó el margen, lo cambió: *"quiero que tome
+todas las posiciones, casi casi que no tenga límite, así para experimentar a ver
+si funciona o no"*. Así que **la demo de FxPro pasa a correr sin topes, igual que
+MetaQuotes** (30 / 100 / 100 y sin freno diario).
+
+Eso deja el experimento más limpio de lo que estaba: las dos instancias operan
+TODO, y **la única diferencia que queda es el filtro de entrada tarde** —0.05 en
+FxPro contra 0.5 en MetaQuotes—, que es justo la pregunta que se quería
+contestar. Lo que se pierde es el ensayo fiel de la cuenta real; **no se pierden
+los números decididos para ella**, que siguen guardados en `.env.real`
+(2 / 2 / 10 / 5%) y son los que va a usar el día que se fondee.
+
+Y de paso mide algo que antes no se podía: **cuánto habría costado o ahorrado el
+freno diario del 5%**, porque ahora hay un día completo sin freno para
+comparar.
 
 **MetaQuotes queda como está, a propósito**: sin topes que muerdan y sin
 filtro, opera TODAS las señales. Cualquier señal que FxPro saltee —por el
@@ -1091,6 +1122,13 @@ contrario de lo que pasaba. Por eso el diagnóstico:
 También avisa si el **lote mínimo** del símbolo es mayor que el `DEFAULT_LOT`
 configurado: el ejecutor no manda un volumen por arriba de `MAX_LOT`, así que ese
 instrumento no se puede operar y conviene saberlo antes de verlo fallar.
+
+**Y el apalancamiento ilimitado no es un cero sospechoso.** MetaTrader no tiene
+cómo decir "ilimitado" en un campo entero, así que lo informa como un número
+enorme: FxPro manda `1:2000000000`. Ahí el margen **es** cero y el cero del
+bróker está bien, así que se muestra *"no pide margen (apalancamiento
+ilimitado)"* en vez de estimar y marcarlo como dudoso —hacer dudar de un dato
+correcto gasta la misma confianza que un dato falso—.
 
 **`tct cambiar` — un número que apaga una protección se rechaza.**
 `MAX_DAILY_LOSS_PCT=-5` o `=nan` **apagan el freno diario** (`risk.py` lo mira

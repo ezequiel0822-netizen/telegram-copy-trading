@@ -248,6 +248,12 @@ def _lo_que_dice_el_env(env_file: str | None) -> tuple[str, list[str], float]:
     return (crudo.get("MT5_PATH") or ""), simbolos, lote
 
 
+# A partir de aca, el apalancamiento es "ilimitado": MetaTrader lo informa como
+# un numero enorme (FxPro: 1:2000000000) porque el campo es un entero. Con eso
+# el margen de cualquier posicion es cero, y ese cero es CORRECTO.
+_ILIMITADO = 1_000_000
+
+
 @dataclass(frozen=True)
 class _Margen:
     """Lo que hace falta para abrir una posicion, y de donde salio el numero."""
@@ -258,6 +264,7 @@ class _Margen:
     # El broker contesto MUCHO menos de lo que sale del contrato y el
     # apalancamiento: se muestra su numero, pero con la duda al lado.
     segun_contrato: float | None = None
+    sin_margen: bool = False    # apalancamiento ilimitado: no pide nada, y esta bien
 
 
 def _margen_de_una_posicion(mt5, simbolo: str, lote: float,
@@ -312,6 +319,12 @@ def _margen_de_una_posicion(mt5, simbolo: str, lote: float,
         # que no entra ninguna es peor que no decir nada.
         dudoso = por_contrato if por_contrato and float(margen) < por_contrato / 3 else None
         return _Margen(pide=float(margen), lote_minimo=lote_minimo, segun_contrato=dudoso)
+
+    # Con apalancamiento ilimitado, el cero del broker es la respuesta correcta
+    # y no una falta de respuesta: marcarlo "(estimado)" hace dudar de un dato
+    # que esta bien.
+    if apalancamiento and apalancamiento >= _ILIMITADO:
+        return _Margen(pide=0.0, sin_margen=True, lote_minimo=lote_minimo)
 
     if por_contrato:
         return _Margen(pide=por_contrato, estimado=True, lote_minimo=lote_minimo)
@@ -372,6 +385,9 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float) ->
         hubo_estimados = hubo_estimados or margen.estimado
         if margen.segun_contrato:
             dudosos.append((canonico, margen.pide, margen.segun_contrato))
+        if margen.sin_margen:
+            print(f"  {como:<22} no pide margen (apalancamiento ilimitado)")
+            continue
         entran = int(libre // margen.pide)
         if entran:
             cuantas = "+99" if entran > 99 else str(entran)
@@ -485,7 +501,11 @@ def cmd_mt5(args: argparse.Namespace) -> int:
         # chica: con 1:20 una posicion de oro de 0.01 pide unos 214 de margen,
         # con 1:500 unos 9. Sin verlo, MAX_OPEN_TRADES se elige a ciegas.
         apalancamiento = getattr(cuenta, "leverage", None)
-        if apalancamiento:
+        if apalancamiento and apalancamiento >= _ILIMITADO:
+            # MetaTrader lo informa como un entero enorme (FxPro: 2000000000)
+            # porque el campo no tiene forma de decir "ilimitado".
+            print(f"  Apalanc.   : 1:ilimitado (informado como 1:{apalancamiento})")
+        elif apalancamiento:
             print(f"  Apalanc.   : 1:{apalancamiento}")
         tipo = "DEMO" if es_demo else "REAL" if es_demo is False else "desconocido"
         print(f"  Tipo       : {tipo}")

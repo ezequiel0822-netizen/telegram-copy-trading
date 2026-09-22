@@ -287,6 +287,22 @@ def test_no_dice_que_entran_miles(tmp_path, monkeypatch, capsys, en_windows):
     assert "entran +99" in capsys.readouterr().out
 
 
+def test_con_apalancamiento_ilimitado_el_cero_del_broker_esta_bien(tmp_path, monkeypatch, capsys,
+                                                                   en_windows):
+    """FxPro informa el ilimitado como 1:2000000000, y ahi el margen ES cero.
+    Marcarlo "(estimado)" hace dudar de un dato que esta bien."""
+    falso = MT5Falso(margenes={"GOLD": 0.0, "BITCOIN": 0.0, "EURUSD": 0.0},
+                     cuenta=CuentaFalsa(leverage=2_000_000_000))
+
+    assert correr(monkeypatch, falso, str(env(tmp_path))) == 0
+
+    salida = capsys.readouterr().out
+    assert "1:ilimitado (informado como 1:2000000000)" in salida
+    assert "no pide margen (apalancamiento ilimitado)" in salida
+    assert "(estimado)" not in salida
+    assert "NO ENTRA NINGUNA" not in salida
+
+
 def test_un_lote_minimo_mas_grande_que_el_configurado_se_avisa(tmp_path, monkeypatch, capsys,
                                                                en_windows):
     """Con volume_min 0.1 y MAX_LOT 0.01 el bot no puede operar ese simbolo:
