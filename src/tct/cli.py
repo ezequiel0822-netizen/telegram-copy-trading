@@ -22,6 +22,7 @@ import logging
 import math
 import platform
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -247,31 +248,74 @@ def _lo_que_dice_el_env(env_file: str | None) -> tuple[str, list[str], float]:
     return (crudo.get("MT5_PATH") or ""), simbolos, lote
 
 
-def _margen_de_una_posicion(mt5, simbolo: str, lote: float) -> tuple[float | None, str]:
+@dataclass(frozen=True)
+class _Margen:
+    """Lo que hace falta para abrir una posicion, y de donde salio el numero."""
+    pide: float | None = None
+    estimado: bool = False      # el broker no contesto: se calculo con el apalancamiento
+    problema: str = ""
+    lote_minimo: float = 0.0    # del simbolo, si es MAYOR que el lote pedido
+    # El broker contesto MUCHO menos de lo que sale del contrato y el
+    # apalancamiento: se muestra su numero, pero con la duda al lado.
+    segun_contrato: float | None = None
+
+
+def _margen_de_una_posicion(mt5, simbolo: str, lote: float,
+                            apalancamiento: int | None) -> _Margen:
     """Lo que el broker pide de margen para abrir `lote` de `simbolo`.
 
     Se le PREGUNTA (`order_calc_margin`) en vez de estimarlo con el
     apalancamiento de la cuenta: cada broker puede pedir mas por instrumento
     -los metales suelen tener su propia tabla-, y el numero que importa es el
     que va a usar cuando decida si acepta la orden.
+
+    Pero puede no contestar. En la demo de FxPro de 1:2 devolvio 0.0 para GOLD y
+    BITCOIN -justo los dos que importaban- mientras el bot recibia "No money" en
+    cada apertura: un 0.00 en pantalla se lee como "no pide margen", que es lo
+    contrario de lo que pasaba. Asi que si el broker no da un numero mayor que
+    cero, se ESTIMA con el tamano del contrato y el apalancamiento, y se dice
+    que es estimado. Un numero con su duda sirve; un cero que miente, no.
     """
     try:
         info = mt5.symbol_info(simbolo)
         if info is not None and not bool(getattr(info, "visible", True)):
             mt5.symbol_select(simbolo, True)
+            info = mt5.symbol_info(simbolo)
         tick = mt5.symbol_info_tick(simbolo)
     except Exception:
-        return None, "el broker no contesto"
+        return _Margen(problema="el broker no contesto")
+
+    # Si el lote minimo del simbolo es mayor que el lote configurado, el bot no
+    # puede operarlo: el ejecutor no manda un volumen por arriba de MAX_LOT.
+    minimo = float(getattr(info, "volume_min", 0.0) or 0.0) if info is not None else 0.0
+    lote_minimo = minimo if minimo > lote else 0.0
+
     precio = (getattr(tick, "ask", 0.0) or getattr(tick, "bid", 0.0)) if tick else 0.0
     if not precio:
-        return None, "no cotiza ahora (mercado cerrado?)"
+        return _Margen(problema="no cotiza ahora (mercado cerrado?)", lote_minimo=lote_minimo)
+
+    margen = None
     try:
         margen = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, simbolo, lote, precio)
     except Exception:
-        return None, "el broker no contesto el margen"
-    if margen is None:
-        return None, "el broker no contesto el margen"
-    return float(margen), ""
+        margen = None
+
+    contrato = float(getattr(info, "trade_contract_size", 0.0) or 0.0) if info is not None else 0.0
+    por_contrato = (contrato * precio * lote / float(apalancamiento)
+                    if contrato and apalancamiento else None)
+
+    if margen is not None and float(margen) > 0:
+        # La misma cuenta de FxPro contesto 3.69 para la plata con 1:2, donde
+        # por contrato y apalancamiento salen mas de mil. Cuando el numero del
+        # broker es una fraccion del calculado, se muestra igual -es el que el
+        # broker va a usar- pero con la duda al lado: decir "entran 135" de algo
+        # que no entra ninguna es peor que no decir nada.
+        dudoso = por_contrato if por_contrato and float(margen) < por_contrato / 3 else None
+        return _Margen(pide=float(margen), lote_minimo=lote_minimo, segun_contrato=dudoso)
+
+    if por_contrato:
+        return _Margen(pide=por_contrato, estimado=True, lote_minimo=lote_minimo)
+    return _Margen(problema="el broker no contesto el margen", lote_minimo=lote_minimo)
 
 
 def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float) -> None:
@@ -309,28 +353,52 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float) ->
 
     no_estan: list[str] = []
     no_entran: list[tuple[str, float]] = []
+    hubo_estimados = False
+    dudosos: list[tuple[str, float, float]] = []
+    lotes_grandes: list[tuple[str, float]] = []
     for canonico in simbolos:
         real = elegir_nombre_de_simbolo(canonico, nombres)
         if real is None:
             no_estan.append(canonico)
             continue
         como = canonico if real.upper() == canonico else f"{canonico} -> {real}"
-        margen, problema = _margen_de_una_posicion(mt5, real, lote)
-        if margen is None:
-            print(f"  {como:<22} {problema}")
+        margen = _margen_de_una_posicion(mt5, real, lote, apalancamiento)
+        if margen.lote_minimo:
+            lotes_grandes.append((canonico, margen.lote_minimo))
+        if margen.pide is None:
+            print(f"  {como:<22} {margen.problema}")
             continue
-        if margen <= 0:
-            print(f"  {como:<22} margen {margen:>10.2f}")
-            continue
-        entran = int(libre // margen)
+        marca = " (estimado)" if margen.estimado else " (?)" if margen.segun_contrato else ""
+        hubo_estimados = hubo_estimados or margen.estimado
+        if margen.segun_contrato:
+            dudosos.append((canonico, margen.pide, margen.segun_contrato))
+        entran = int(libre // margen.pide)
         if entran:
-            print(f"  {como:<22} margen {margen:>10.2f}   entran {entran}")
+            cuantas = "+99" if entran > 99 else str(entran)
+            print(f"  {como:<22} margen {margen.pide:>10.2f}{marca}   entran {cuantas}")
         else:
-            print(f"  {como:<22} margen {margen:>10.2f}   NO ENTRA NINGUNA")
-            no_entran.append((canonico, margen))
+            print(f"  {como:<22} margen {margen.pide:>10.2f}{marca}   NO ENTRA NINGUNA")
+            no_entran.append((canonico, margen.pide))
 
     if no_estan:
         print(f"\n  Este broker no opera: {', '.join(no_estan)}")
+
+    if hubo_estimados:
+        print("\n  Los 'estimado' son cuenta mia, no del broker: el broker no contesto")
+        print("  ese margen, y sale de multiplicar el tamano del contrato por el precio")
+        print(f"  y dividir por el apalancamiento (1:{apalancamiento}). Puede pedir mas.")
+
+    for canonico, dice, deberia in dudosos:
+        print(f"\n  [AVISO] Con {canonico} no me fio del numero: el broker contesta")
+        print(f"          {dice:.2f} y por contrato y apalancamiento (1:{apalancamiento})")
+        print(f"          darian {deberia:.2f}. Antes de operarlo, abri una posicion")
+        print("          de prueba a mano en MetaTrader y mira el margen que ocupa.")
+
+    for canonico, minimo in lotes_grandes:
+        print(f"\n  [AVISO] El lote minimo de {canonico} en este broker es {minimo:g}, mas")
+        print(f"          grande que el lote configurado ({lote:g}): el bot NO lo va a")
+        print("          operar. Sacalo de ALLOWED_SYMBOLS o subi DEFAULT_LOT y MAX_LOT")
+        print("          -que multiplica lo que arriesga cada operacion-.")
 
     if no_entran:
         print("\n  [AVISO] Con este lote no entra ninguna posicion de "

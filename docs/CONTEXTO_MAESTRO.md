@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-21 · v2.3.0 · 857 tests · el último commit que describe
+Actualizado: 2026-09-22 · v2.4.0 · 863 tests · el último commit que describe
 es `f4983e6`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-20"**, al
@@ -75,14 +75,33 @@ El broker rechazo la apertura de XAUUSD (TP1): retcode=10019 No money
 ```
 
 Son 7 rechazos en el log de ese día (05:30 ×3, 06:53 ×2, 08:34 ×3, 09:05 ×2).
-**El margen de UNA posición de 0.01 de oro no entra en la cuenta de 500.** Con
-1:20 pediría ~217 y entrarían 2; el "No money" dice que el apalancamiento de
-esa demo es mucho más bajo. El apalancamiento exacto **está pendiente de que él
-lo mande** (`tct mt5 --env-file .env.segunda`).
+
+**El motivo, medido el 21/09 con `tct mt5 --env-file .env.segunda`: esa demo
+tiene apalancamiento 1:2.** A 1:2 el bróker congela la mitad del valor de la
+posición, así que 0.01 de oro (≈4.350 de exposición) pide **~2.175 de margen en
+una cuenta de 500**. Y no es solo el oro: EURUSD pide 573 y GBPUSD 669. **Con
+1:2 no entra nada de lo que opera este canal.** MetaQuotes sí opera porque tiene
+98.000 de balance: el mismo margen le entra sin problema.
 
 **Por qué importa más allá de la demo: es el mismo cálculo que va a hacer la
-cuenta REAL de 500.** Si la abre con ese apalancamiento, el bot real no va a
-poder abrir nada. Esto hay que resolverlo **antes** de fondear.
+cuenta REAL de 500.** Con 1:2 una real de 500 no podría abrir ni una operación.
+El apalancamiento hay que elegirlo al abrir la cuenta y **verificarlo antes de
+fondear**.
+
+Y una cosa que conviene tener clarísima, porque es contraintuitiva: **con el
+lote fijo en el mínimo, subir el apalancamiento NO aumenta lo que se arriesga.**
+Lo que se arriesga por operación lo fijan el lote (0.01) y la distancia del stop
+(4 a 8 puntos del canal): entre 4 y 8 dólares, con cualquier apalancamiento. El
+apalancamiento solo decide cuánto margen se congela mientras la operación está
+abierta. Con 1:20, una sola posición ocupa el 43% de una cuenta de 500; con
+1:100, el 9%. Para esta estrategia, un apalancamiento bajo no protege: impide
+operar.
+
+**Lo que se le pidió el 21/09**: crear una demo nueva de FxPro de 500 **con el
+apalancamiento más alto que ofrezcan**, apuntar `.env.segunda` a esa cuenta
+(`tct cambiar --env-file .env.segunda MT5_LOGIN=... "MT5_SERVER=..."
+MT5_PASSWORD`) y volver a correr `tct mt5` para confirmar que el oro entra.
+Sin respuesta todavía.
 
 **Y el experimento del filtro quedó en pausa**: la comparación necesita que
 FxPro opere, y no operó nada. Los dos "rechazada por el filtro" de ese día
@@ -112,18 +131,10 @@ saltearía señales y se perdería justo el dato que se quiere mirar.
 
 **Pendiente, pedido y sin respuesta:**
 
-1. **El apalancamiento de la demo de FxPro de 500**, que es lo que explica el
-   `No money` de arriba y lo único que bloquea todo lo demás. Con el MetaTrader
-   de FxPro abierto en esa cuenta:
-
-   ```
-   tct mt5 --env-file .env.segunda
-   ```
-
-   Eso ahora imprime el apalancamiento **y** el margen que pide una posición de
-   0.01 de cada símbolo, con cuántas entran. Con ese número se decide si la
-   cuenta real de 500 sirve como está, si hace falta otro apalancamiento, o si
-   hay que pensar de nuevo el tamaño.
+1. **Una demo de FxPro de 500 con apalancamiento usable** (ver arriba: la actual
+   es 1:2 y no puede abrir nada). Hasta que eso pase, el ensayo de la cuenta
+   real no existe y el experimento del filtro no junta datos. El bot de FxPro
+   quedó **apagado** a propósito: prendido solo llena el log de `No money`.
 2. **`ALLOWED_SYMBOLS`: solo oro en las dos, o BTC en las dos.** La demo opera
    oro, BTC y otros; la real, solo oro. Se le recomendó solo oro: con
    `MAX_OPEN_TRADES=2`, un BTC en la demo ocupa un lugar que en la real estaría
@@ -192,7 +203,9 @@ demo + FxPro demo. Cuando fondee:
 
 1. Cerrar el bot de FxPro demo (`iniciar_segunda.bat`).
 2. **Con ese bot cerrado**, loguear MetaTrader de FxPro en la cuenta real y
-   correr `tct mt5` para sacar login, servidor y apalancamiento.
+   correr `tct mt5` para sacar login, servidor y apalancamiento. **Ahí mismo se
+   mira el bloque "CUANTO ENTRA EN ESTA CUENTA": si el oro dice NO ENTRA
+   NINGUNA, no se fondea nada hasta arreglar el apalancamiento** (§2).
 3. Completar `.env.real`, en una sola línea, con la password al final y **sin
    `=`** (el comando la pide sin mostrarla; escrita en la línea, la consola le
    cambia caracteres sin avisar — §5):
@@ -344,8 +357,10 @@ es **reemplazar la demo de FxPro**, no agregar una tercera instancia.
 
 **La única que sigue abierta es `MAX_OPEN_TRADES`**, porque depende del
 apalancamiento y ese dato está en la máquina de él: con 1:20 una posición de
-oro de 0.01 pide ~214 de margen y en 500 entran 2; con 1:100, ~43; con 1:500,
-~9. Sale de `tct mt5` con la terminal de FxPro abierta en la cuenta real.
+oro de 0.01 pide ~217 de margen y en 500 entran 2; con 1:100, ~43; con 1:500,
+~9; **con 1:2 pide ~2.175 y no entra ninguna, que es lo que pasó en la demo**
+(arriba). `tct mt5 --env-file <el archivo>` lo dice con los números del bróker,
+y hay que correrlo **antes de fondear**, no después.
 
 **Y ojo con `autoarranque.ps1`:** solo conoce `.env` y `.env.segunda`. **No
 agregar la real sin que lo pida explícitamente:** es plata real corriendo sin
@@ -619,7 +634,7 @@ La CLI (`cli.py`) expone:
 | Comando | Para qué |
 |---|---|
 | `check` | Diagnóstico. Lo primero en una máquina nueva. |
-| `mt5` | Lee la cuenta MT5 abierta y dice qué poner en el `.env`. Con `--env-file` usa **la terminal de ese archivo** (con dos MetaTrader instalados, "la que encuentre" no tiene respuesta correcta) y agrega **cuánto margen pide una posición del lote configurado y cuántas entran en la cuenta**, preguntándoselo al bróker (`order_calc_margin`), no estimándolo. Si no entra ninguna, lo dice y nombra el `No money` que va a devolver el bróker. Anda incluso con un `.env.real` a medio llenar, que es justo cuando se necesita. |
+| `mt5` | Lee la cuenta MT5 abierta y dice qué poner en el `.env`. Con `--env-file` usa **la terminal de ese archivo** (con dos MetaTrader instalados, "la que encuentre" no tiene respuesta correcta) y agrega **cuánto margen pide una posición del lote configurado y cuántas entran en la cuenta**, preguntándoselo al bróker (`order_calc_margin`), no estimándolo. Si no entra ninguna, lo dice y nombra el `No money` que va a devolver el bróker. Anda incluso con un `.env.real` a medio llenar, que es justo cuando se necesita. **Y no le cree ciegamente al bróker**: ver §5. |
 | `clave` | Pone o cambia la clave de arranque de un `.env`. La pide dos veces sin mostrarla y guarda su huella. |
 | `cambiar` | **Cambia valores de un `.env` sin abrirlo**: `tct cambiar --env-file .env.segunda MAX_OPEN_TRADES=2 MAX_DAILY_LOSS_PCT=5`. Muestra antes → después, no toca otra línea, y se niega —sin guardar nada— ante un nombre mal escrito, un valor que no es del tipo o un cambio con el que el bot no arrancaría. No toca la clave ni las dos llaves del dinero real. El detalle, en §5. |
 | `simular` | **Reproduce los mensajes reales del grupo.** Sin `--ejecutar` no toca nada. Con `--con-precios` compara cada entrada contra el precio real de MT5 y sugiere el límite, sin operar. |
@@ -1055,6 +1070,27 @@ qué archivo se puede tocar (`.env`, `.env.segunda`, `.env.real`…, y **no** lo
 misma función filtra los avisos de roster: mandar a "arreglar" un respaldo
 confunde. **Si algún día hace falta un `.env` con otro nombre, se edita a mano**
 —eso es a propósito: el riesgo de la copia es peor que la incomodidad—.
+
+**`tct mt5` — el margen que contesta el bróker puede ser 0, o absurdo, y un
+número que miente es peor que ninguno.** Medido en la demo de FxPro a 1:2 el
+21/09: `order_calc_margin` devolvió **0.0 para GOLD y para BITCOIN** —los dos que
+importaban— mientras el bot recibía `No money` en cada apertura; y para la plata
+devolvió **3.69**, donde por contrato y apalancamiento salen más de 1.300. Un
+`0.00` en pantalla se lee como *"no pide margen"*, que es exactamente lo
+contrario de lo que pasaba. Por eso el diagnóstico:
+
+- si el bróker no da un número mayor que cero, **estima** con
+  `contrato × precio × lote / apalancamiento` y lo marca `(estimado)`;
+- si el número del bróker es menos de un tercio del calculado, lo muestra igual
+  —es el que el bróker va a usar— pero con `(?)` y un aviso aparte, porque decir
+  *"entran 135"* de algo que no entra ninguna es peor que no decir nada;
+- si no hay con qué estimar (sin apalancamiento o sin tamaño de contrato), dice
+  que no sabe. **Inventar un número acá es peor que no darlo**: con ese número se
+  decide si la cuenta real sirve.
+
+También avisa si el **lote mínimo** del símbolo es mayor que el `DEFAULT_LOT`
+configurado: el ejecutor no manda un volumen por arriba de `MAX_LOT`, así que ese
+instrumento no se puede operar y conviene saberlo antes de verlo fallar.
 
 **`tct cambiar` — un número que apaga una protección se rechaza.**
 `MAX_DAILY_LOSS_PCT=-5` o `=nan` **apagan el freno diario** (`risk.py` lo mira

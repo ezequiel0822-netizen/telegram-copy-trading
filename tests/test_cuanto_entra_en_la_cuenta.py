@@ -32,17 +32,20 @@ class CuentaFalsa:
     balance = 500.0
     equity = 500.0
     currency = "USD"
-    leverage = 5
     trade_mode = 0  # DEMO
 
-    def __init__(self, margin_free: float = 500.0) -> None:
+    def __init__(self, margin_free: float = 500.0, leverage: int = 5) -> None:
         self.margin_free = margin_free
+        self.leverage = leverage
 
 
 class SimboloFalso:
-    def __init__(self, name: str, visible: bool = True) -> None:
+    def __init__(self, name: str, visible: bool = True, volume_min: float = 0.01,
+                 trade_contract_size: float = 100.0) -> None:
         self.name = name
         self.visible = visible
+        self.volume_min = volume_min
+        self.trade_contract_size = trade_contract_size
 
 
 class TickFalso:
@@ -54,6 +57,14 @@ class TickFalso:
 class TerminalFalsa:
     def __init__(self, path: str = "") -> None:
         self.path = path
+
+
+# El precio con el que contesta el MT5 falso, y el tamano de contrato de cada
+# instrumento, para que el margen que "pide el broker" y el que sale de la
+# cuenta (contrato x precio x lote / apalancamiento) sean coherentes: si no, el
+# aviso de "no me fio de este numero" salta en todos los tests.
+PRECIO = 4350.0
+CONTRATOS = {"GOLD": 100.0, "BITCOIN": 5.0, "EURUSD": 2.4}
 
 
 class MT5Falso:
@@ -92,7 +103,9 @@ class MT5Falso:
         return [SimboloFalso(n) for n in self.simbolos]
 
     def symbol_info(self, name):
-        return SimboloFalso(name) if name in self.simbolos else None
+        if name not in self.simbolos:
+            return None
+        return SimboloFalso(name, trade_contract_size=CONTRATOS.get(name, 100.0))
 
     def symbol_select(self, name, activar=True):
         self.activados.append(name)
@@ -101,7 +114,7 @@ class MT5Falso:
     def symbol_info_tick(self, name):
         if name not in self.simbolos:
             return None
-        return TickFalso(4349.5, 4350.0)
+        return TickFalso(PRECIO - 0.5, PRECIO)
 
     def order_calc_margin(self, tipo, simbolo, lote, precio):
         self.margenes_pedidos.append((simbolo, lote))
@@ -151,7 +164,9 @@ def test_avisa_que_no_entra_ninguna_posicion(tmp_path, monkeypatch, capsys, en_w
 
 
 def test_dice_cuantas_entran_cuando_entran(tmp_path, monkeypatch, capsys, en_windows):
-    falso = MT5Falso(margenes={"GOLD": 217.0, "BITCOIN": 43.5, "EURUSD": 21.0})
+    # 1:20, que es donde el oro pide ~217 y entran 2 en 500.
+    falso = MT5Falso(margenes={"GOLD": 217.0, "BITCOIN": 43.5, "EURUSD": 21.0},
+                     cuenta=CuentaFalsa(leverage=20))
 
     correr(monkeypatch, falso, str(env(tmp_path)))
 
@@ -185,7 +200,7 @@ def test_el_margen_libre_manda_sobre_el_balance(tmp_path, monkeypatch, capsys, e
     """Con una posicion abierta perdiendo, el balance sigue en 500 y lo que
     decide es el margen libre."""
     falso = MT5Falso(margenes={"GOLD": 217.0, "BITCOIN": 43.5, "EURUSD": 21.0},
-                     margin_free=180.0)
+                     cuenta=CuentaFalsa(margin_free=180.0, leverage=20))
 
     correr(monkeypatch, falso, str(env(tmp_path)))
 
@@ -206,14 +221,87 @@ def test_un_simbolo_que_el_broker_no_tiene_se_lista_aparte(tmp_path, monkeypatch
     assert "Este broker no opera: NAS100" in capsys.readouterr().out
 
 
-def test_si_el_broker_no_da_el_margen_lo_dice_y_sigue(tmp_path, monkeypatch, capsys, en_windows):
-    falso = MT5Falso(margenes={"GOLD": None, "BITCOIN": 43.5, "EURUSD": 21.0})
+def test_si_el_broker_no_da_el_margen_se_estima_y_se_avisa(tmp_path, monkeypatch, capsys,
+                                                           en_windows):
+    """El caso real de la demo de FxPro a 1:2: para GOLD devolvio 0.0 mientras
+    el bot recibia "No money" en cada apertura. Un 0.00 en pantalla se lee como
+    "no pide margen", que es lo contrario de lo que pasaba."""
+    falso = MT5Falso(margenes={"GOLD": 0.0, "BITCOIN": 43.5, "EURUSD": 21.0})
+
+    assert correr(monkeypatch, falso, str(env(tmp_path))) == 0
+
+    salida = capsys.readouterr().out
+    # contrato 100 x precio 4350 x lote 0.01 / apalancamiento 5 = 870
+    assert "870.00 (estimado)" in salida
+    assert "NO ENTRA NINGUNA" in salida
+    assert "cuenta mia, no del broker" in salida
+    assert "entran 11" in salida, "una consulta que falla no puede tapar las demas"
+
+
+def test_sin_apalancamiento_no_se_inventa_el_margen(tmp_path, monkeypatch, capsys, en_windows):
+    """Sin con que estimar, se dice que no se sabe. Inventar un numero aca es
+    peor que no darlo: con el se decide si la cuenta real sirve."""
+    cuenta = CuentaFalsa()
+    cuenta.leverage = 0
+    falso = MT5Falso(margenes={"GOLD": None, "BITCOIN": None, "EURUSD": None}, cuenta=cuenta)
 
     assert correr(monkeypatch, falso, str(env(tmp_path))) == 0
 
     salida = capsys.readouterr().out
     assert "no contesto el margen" in salida
-    assert "entran 11" in salida, "una consulta que falla no puede tapar las demas"
+    assert "estimado" not in salida
+
+
+def test_un_margen_mucho_mas_chico_que_el_del_contrato_no_se_cree(tmp_path, monkeypatch, capsys,
+                                                                  en_windows):
+    """La misma cuenta de FxPro a 1:2 contesto 3.69 para la plata, donde por
+    contrato y apalancamiento salen mas de mil. Decir "entran 135" de algo que
+    no entra ninguna es peor que no decir nada."""
+    falso = MT5Falso(margenes={"GOLD": 3.69, "BITCOIN": 43.5, "EURUSD": 21.0})
+
+    assert correr(monkeypatch, falso, str(env(tmp_path))) == 0
+
+    salida = capsys.readouterr().out
+    assert "3.69 (?)" in salida
+    assert "no me fio del numero" in salida
+    assert "870.00" in salida, "tiene que decir cuanto daria por contrato"
+
+
+def test_un_margen_normal_no_se_pone_en_duda(tmp_path, monkeypatch, capsys, en_windows):
+    """La duda es para un numero que es una FRACCION del calculado; uno parecido
+    -o mayor, que es lo normal con las tablas del broker- no se toca."""
+    falso = MT5Falso(margenes={"GOLD": 700.0, "BITCOIN": 43.5, "EURUSD": 21.0})
+
+    correr(monkeypatch, falso, str(env(tmp_path)))
+
+    salida = capsys.readouterr().out
+    assert "700.00" in salida
+    assert "(?)" not in salida and "no me fio" not in salida
+
+
+def test_no_dice_que_entran_miles(tmp_path, monkeypatch, capsys, en_windows):
+    falso = MT5Falso(margenes={"GOLD": 870.0, "BITCOIN": 0.05, "EURUSD": 21.0})
+
+    correr(monkeypatch, falso, str(env(tmp_path)))
+
+    assert "entran +99" in capsys.readouterr().out
+
+
+def test_un_lote_minimo_mas_grande_que_el_configurado_se_avisa(tmp_path, monkeypatch, capsys,
+                                                               en_windows):
+    """Con volume_min 0.1 y MAX_LOT 0.01 el bot no puede operar ese simbolo:
+    el ejecutor no manda un volumen por arriba de MAX_LOT."""
+    class LoteGrande(MT5Falso):
+        def symbol_info(self, name):
+            if name not in self.simbolos:
+                return None
+            return SimboloFalso(name, volume_min=0.1 if name == "BITCOIN" else 0.01)
+
+    assert correr(monkeypatch, LoteGrande(), str(env(tmp_path))) == 0
+
+    salida = capsys.readouterr().out
+    assert "El lote minimo de BTCUSD en este broker es 0.1" in salida
+    assert "NO lo va a" in salida
 
 
 def test_sin_cotizacion_no_inventa_un_margen(tmp_path, monkeypatch, capsys, en_windows):
