@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,35 @@ _ALIAS_DE_BROKER: dict[str, tuple[str, ...]] = {
     "BTCUSD": ("BITCOIN", "BTCUSDT"),
     "ETHUSD": ("ETHEREUM", "ETHUSDT"),
 }
+
+
+def elegir_nombre_de_simbolo(canonico: str, nombres: Iterable[str]) -> str | None:
+    """Como se llama `canonico` entre los nombres que expone un broker, o None.
+
+    El orden es lo que importa:
+    1) Nombre exacto.
+    2) Alias conocidos del instrumento (GOLD para XAUUSD, BITCOIN para BTCUSD).
+    3) Los dos, con el sufijo del broker (XAUUSDm, XAUUSD.r, XAUUSD.s...).
+
+    Solo se acepta un sufijo CORTO: si no, "EURUSD" se comeria "EURUSDT", que
+    es otro instrumento (la cripto). Es puro a proposito: lo usa el bot para
+    operar y `tct mt5` para calcular el margen, y asi los dos resuelven igual.
+    """
+    canonico = canonico.strip().upper()
+    nombres = list(nombres)
+    candidatos = [canonico, *_ALIAS_DE_BROKER.get(canonico, ())]
+    for candidato in candidatos:
+        for nombre in nombres:
+            if nombre.upper() == candidato:
+                return nombre
+    for candidato in candidatos:
+        for nombre in nombres:
+            arriba = nombre.upper()
+            if arriba.startswith(candidato) and len(arriba) - len(candidato) <= 4:
+                resto = arriba[len(candidato):]
+                if resto == "" or not resto[0].isalnum() or len(resto) <= 2:
+                    return nombre
+    return None
 
 
 def _volumen_confirmado(result: Any, pedido: float) -> float:
@@ -847,6 +877,10 @@ class MT5NativeBroker(Broker):
         cubre al broker que termine usando el usuario. Con la terminal
         conectada, la lista autoritativa esta a una llamada de distancia.
 
+        Elegir el nombre es `elegir_nombre_de_simbolo`, que es puro y lo usa
+        tambien el diagnostico de `tct mt5`. Aca queda lo que necesita la
+        terminal: preguntarle la lista, cachear y contar lo que paso.
+
         El resultado se cachea: `symbols_get()` devuelve miles de simbolos y
         recorrerlos en cada senal seria un desperdicio.
         """
@@ -854,49 +888,28 @@ class MT5NativeBroker(Broker):
         if canonico in self._symbol_cache:
             return self._symbol_cache[canonico]
 
-        mt5 = self._mt5
         try:
-            todos = mt5.symbols_get() or ()
+            todos = self._mt5.symbols_get() or ()
         except Exception:
             logger.warning("No se pudo listar los simbolos del broker", exc_info=True)
             return None
 
-        nombres = [getattr(s, "name", "") for s in todos]
-
-        # 1) Nombre exacto.
-        # 2) Nombre + sufijo del broker (XAUUSDm, XAUUSD.r, XAUUSD.s...).
-        # 3) Alias conocidos del instrumento (GOLD para XAUUSD, US100 para
-        #    NAS100), tambien con sufijo.
-        candidatos = [canonico, *_ALIAS_DE_BROKER.get(canonico, ())]
-        for candidato in candidatos:
-            for nombre in nombres:
-                if nombre.upper() == candidato:
-                    self._symbol_cache[canonico] = nombre
-                    return nombre
-        for candidato in candidatos:
-            for nombre in nombres:
-                arriba = nombre.upper()
-                # Solo se acepta sufijo corto: evita que "EURUSD" matchee con
-                # un simbolo distinto tipo "EURUSDT" de cripto.
-                if arriba.startswith(candidato) and len(arriba) - len(candidato) <= 4:
-                    resto = arriba[len(candidato):]
-                    if resto == "" or not resto[0].isalnum() or len(resto) <= 2:
-                        self._symbol_cache[canonico] = nombre
-                        logger.info("Simbolo %s resuelto como '%s' en este broker", canonico, nombre)
-                        return nombre
-
-        # INFO y no ERROR: que un broker no tenga un instrumento es un hecho
-        # sobre ese broker, no una falla. Quien SI tiene que gritar es el que
-        # necesitaba el simbolo: al abrir, `_open_sync` devuelve un OrderResult
-        # con el motivo y el motor lo loguea como error; al arrancar,
-        # `tct run` avisa la lista completa de una sola vez.
-        #
-        # Estaba en ERROR y salia una linea roja alarmante justo antes del
-        # aviso bueno, diciendo lo mismo peor. Un ERROR que no es un error
-        # entrena a la persona a ignorar los que si lo son.
-        logger.info("El broker no expone ningun simbolo para %s", canonico)
-        self._symbol_cache[canonico] = None
-        return None
+        elegido = elegir_nombre_de_simbolo(canonico, [getattr(s, "name", "") for s in todos])
+        if elegido is None:
+            # INFO y no ERROR: que un broker no tenga un instrumento es un
+            # hecho sobre ese broker, no una falla. Quien SI tiene que gritar
+            # es el que necesitaba el simbolo: al abrir, `_open_sync` devuelve
+            # un OrderResult con el motivo y el motor lo loguea como error; al
+            # arrancar, `tct run` avisa la lista completa de una sola vez.
+            #
+            # Estaba en ERROR y salia una linea roja alarmante justo antes del
+            # aviso bueno, diciendo lo mismo peor. Un ERROR que no es un error
+            # entrena a la persona a ignorar los que si lo son.
+            logger.info("El broker no expone ningun simbolo para %s", canonico)
+        elif elegido.upper() != canonico:
+            logger.info("Simbolo %s resuelto como '%s' en este broker", canonico, elegido)
+        self._symbol_cache[canonico] = elegido
+        return elegido
 
     @staticmethod
     def _normalize_volume(info: Any, lot: float) -> float | None:

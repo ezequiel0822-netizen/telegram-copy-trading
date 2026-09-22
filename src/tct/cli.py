@@ -219,6 +219,135 @@ def _ruta_del_terminal(terminal) -> str | None:
     return str(exe) if exe.exists() else None
 
 
+def _lo_que_dice_el_env(env_file: str | None) -> tuple[str, list[str], float]:
+    """(ruta de la terminal, simbolos, lote) del .env, ande o no ande el archivo.
+
+    Con un `.env.real` a medio llenar `load_settings` se niega -bien: es dinero
+    real-, y es JUSTO ahi donde hace falta este diagnostico. Asi que si no
+    carga, se leen a mano las tres lineas que importan.
+    """
+    try:
+        ajustes = load_settings(env_file)
+        return ajustes.mt5_path, sorted(ajustes.allowed_symbols), ajustes.default_lot
+    except Exception:  # noqa: BLE001 - un .env roto no puede romper el diagnostico
+        pass
+
+    ruta = Path(env_file or ".env")
+    if not ruta.is_file():
+        return "", ["XAUUSD"], 0.01
+    from tct.archivo_env import leer_archivo
+
+    crudo = leer_archivo(ruta)
+    simbolos = [s.strip().upper()
+                for s in (crudo.get("ALLOWED_SYMBOLS") or "XAUUSD").split(",") if s.strip()]
+    try:
+        lote = float((crudo.get("DEFAULT_LOT") or "0.01").replace(",", "."))
+    except ValueError:
+        lote = 0.01
+    return (crudo.get("MT5_PATH") or ""), simbolos, lote
+
+
+def _margen_de_una_posicion(mt5, simbolo: str, lote: float) -> tuple[float | None, str]:
+    """Lo que el broker pide de margen para abrir `lote` de `simbolo`.
+
+    Se le PREGUNTA (`order_calc_margin`) en vez de estimarlo con el
+    apalancamiento de la cuenta: cada broker puede pedir mas por instrumento
+    -los metales suelen tener su propia tabla-, y el numero que importa es el
+    que va a usar cuando decida si acepta la orden.
+    """
+    try:
+        info = mt5.symbol_info(simbolo)
+        if info is not None and not bool(getattr(info, "visible", True)):
+            mt5.symbol_select(simbolo, True)
+        tick = mt5.symbol_info_tick(simbolo)
+    except Exception:
+        return None, "el broker no contesto"
+    precio = (getattr(tick, "ask", 0.0) or getattr(tick, "bid", 0.0)) if tick else 0.0
+    if not precio:
+        return None, "no cotiza ahora (mercado cerrado?)"
+    try:
+        margen = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, simbolo, lote, precio)
+    except Exception:
+        return None, "el broker no contesto el margen"
+    if margen is None:
+        return None, "el broker no contesto el margen"
+    return float(margen), ""
+
+
+def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float) -> None:
+    """Cuantas posiciones de `lote` entran, segun el margen que pide el broker.
+
+    POR QUE EXISTE
+    --------------
+    Es el numero que decide `MAX_OPEN_TRADES`, y se elegia a ciegas. El 20/09
+    la demo de FxPro de 500 rechazo TODAS las aperturas del dia con
+    "retcode=10019 No money": el margen de UNA posicion de 0.01 de oro no
+    entraba en la cuenta. El bot registro las senales y no opero ninguna, y
+    eso no se vio hasta leer el log entero al dia siguiente.
+
+    Preguntarselo al broker antes es un comando. Enterarse despues es un dia
+    sin operar -o una cuenta REAL recien fondeada que no puede abrir nada-.
+    """
+    libre = getattr(cuenta, "margin_free", None)
+    if libre is None:
+        libre = getattr(cuenta, "equity", None) or getattr(cuenta, "balance", 0.0)
+    libre = float(libre)
+    moneda = getattr(cuenta, "currency", "")
+    apalancamiento = getattr(cuenta, "leverage", None)
+
+    print("\n" + "=" * 58)
+    print("  CUANTO ENTRA EN ESTA CUENTA")
+    print("=" * 58)
+    print(f"  Lote {lote:g} por posicion. Margen libre: {libre:.2f} {moneda}.\n")
+
+    try:
+        nombres = [getattr(s, "name", "") for s in (mt5.symbols_get() or ())]
+    except Exception:
+        nombres = []
+
+    from tct.brokers.mt5_native import elegir_nombre_de_simbolo
+
+    no_estan: list[str] = []
+    no_entran: list[tuple[str, float]] = []
+    for canonico in simbolos:
+        real = elegir_nombre_de_simbolo(canonico, nombres)
+        if real is None:
+            no_estan.append(canonico)
+            continue
+        como = canonico if real.upper() == canonico else f"{canonico} -> {real}"
+        margen, problema = _margen_de_una_posicion(mt5, real, lote)
+        if margen is None:
+            print(f"  {como:<22} {problema}")
+            continue
+        if margen <= 0:
+            print(f"  {como:<22} margen {margen:>10.2f}")
+            continue
+        entran = int(libre // margen)
+        if entran:
+            print(f"  {como:<22} margen {margen:>10.2f}   entran {entran}")
+        else:
+            print(f"  {como:<22} margen {margen:>10.2f}   NO ENTRA NINGUNA")
+            no_entran.append((canonico, margen))
+
+    if no_estan:
+        print(f"\n  Este broker no opera: {', '.join(no_estan)}")
+
+    if no_entran:
+        print("\n  [AVISO] Con este lote no entra ninguna posicion de "
+              f"{', '.join(n for n, _ in no_entran)}.")
+        print("          El broker va a rechazar cada apertura con 'No money'")
+        print("          (retcode 10019): el bot registra la senal y no opera.")
+        peor = max(m for _, m in no_entran)
+        if apalancamiento:
+            print(f"          Con 1:{apalancamiento} pide {peor:.2f} y libre hay {libre:.2f}.")
+            for otro in (100, 200, 500):
+                if otro > apalancamiento:
+                    print(f"          Con 1:{otro} pediria {peor * apalancamiento / otro:.2f}.")
+                    break
+        print("          Hace falta mas apalancamiento, mas saldo, o un lote mas")
+        print("          chico si el broker lo permite.")
+
+
 def cmd_mt5(args: argparse.Namespace) -> int:
     """Lee la cuenta de la terminal MT5 abierta y dice que poner en el .env.
 
@@ -227,6 +356,9 @@ def cmd_mt5(args: argparse.Namespace) -> int:
     broker tiene varios, y cambian), y escribirlo mal da un error de login que
     no explica nada. Si la terminal ya esta abierta y logueada, el dato esta
     ahi: se lee y listo.
+
+    Y dice cuantas posiciones entran en la cuenta, preguntandole el margen al
+    broker: ver `_cuanto_entra_en_la_cuenta`.
     """
     if sys.platform != "win32":
         print("Este comando solo sirve en Windows: el paquete MetaTrader5 no")
@@ -240,8 +372,18 @@ def cmd_mt5(args: argparse.Namespace) -> int:
         print("    pip install -r requirements.txt")
         return 1
 
-    print("Conectando con la terminal MetaTrader 5 abierta...\n")
-    if not mt5.initialize():
+    # Con DOS MetaTrader instalados, "la terminal que encuentre" no tiene
+    # respuesta correcta: se usa la del .env que se pidio, asi el margen y el
+    # login que salgan son de la cuenta de ESE bot y no de la del otro.
+    ruta_terminal, simbolos, lote = _lo_que_dice_el_env(args.env_file)
+    if ruta_terminal:
+        print(f"Conectando con la terminal de {args.env_file or '.env'}:")
+        print(f"  {ruta_terminal}\n")
+        conectado = mt5.initialize(path=ruta_terminal)
+    else:
+        print("Conectando con la terminal MetaTrader 5 abierta...\n")
+        conectado = mt5.initialize()
+    if not conectado:
         codigo, mensaje = mt5.last_error()
         print(f"[ERROR] No se pudo conectar: {mensaje} (codigo {codigo})\n")
         print("Casi siempre es una de estas tres:")
@@ -279,6 +421,8 @@ def cmd_mt5(args: argparse.Namespace) -> int:
             print(f"  Apalanc.   : 1:{apalancamiento}")
         tipo = "DEMO" if es_demo else "REAL" if es_demo is False else "desconocido"
         print(f"  Tipo       : {tipo}")
+
+        _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos, lote)
 
         print("\n" + "=" * 58)
         print("  QUE PONER EN EL .env")

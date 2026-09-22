@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-21 · v2.2.0 · 836 tests · el último commit que describe
+Actualizado: 2026-09-21 · v2.3.0 · 857 tests · el último commit que describe
 es `f4983e6`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-20"**, al
@@ -43,19 +43,56 @@ Eso viene del pedido original y sigue vigente.
 fondeada.** El chat anterior se cerró por falta de contexto; esto es lo que
 hay que saber para seguir.
 
-**Lo que tiene en su PC** (leído el 19/09 a la tarde con el `findstr` de §10,
-que muestra las opciones sin contraseñas). Las flechas son los cambios que se
-le dieron para correr con `tct cambiar` (abajo) y que **todavía no confirmó**:
+**Lo que tiene en su PC**, ya con los dos `tct cambiar` corridos el 20/09 a la
+noche (su salida los mostró uno por uno). **Los bots venían corriendo con los
+números VIEJOS todo el 20/09**: el `.env` se lee solo al arrancar, así que estos
+valores empiezan a valer en el próximo arranque.
 
 | | `.env` — MetaQuotes demo | `.env.segunda` — FxPro demo | `.env.real` — FxPro real |
 |---|---|---|---|
-| Cuenta | ~98.600 | **500**, nueva desde el 19/09 — confirmar | sin fondear, **sin credenciales** |
+| Cuenta | ~98.300 | **500**, confirmada en el arranque del 20/09 | sin fondear, **sin credenciales** |
 | Lote / posiciones por señal | 0.01 / 1 | 0.01 / 1 | 0.01 / 1 |
-| `MAX_SPREAD_FROM_ENTRY_PCT` | **0.5** — el control | 0.05 | 0.3 → **0.05** |
-| Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | 10 / 20 / 35 → **2 / 2 / 10** | 2 / 2 / 5 → **2 / 2 / 10** |
-| `MAX_DAILY_LOSS_PCT` | 0 | 0 → **5** | 3 → **5** |
-| `INSTANCE_NAMES` | `demo,fxpro,real` | `demo,fxpro` → **`demo,fxpro,real`** | `demo,fxpro,real` |
+| `MAX_SPREAD_FROM_ENTRY_PCT` | **0.5** — el control | 0.05 | 0.05 |
+| Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | **2 / 2 / 10** | **2 / 2 / 10** |
+| `MAX_DAILY_LOSS_PCT` | 0 | **5** | **5** |
+| `INSTANCE_NAMES` | `demo,fxpro,real` | `demo,fxpro,real` | `demo,fxpro,real` |
 | `ALLOWED_SYMBOLS` | 11, con BTCUSD | 12, con BTCUSD y ETHUSD | solo XAUUSD — **pregunta abierta** |
+| Clave de arranque | no (así la quiso) | **puesta y probada** el 20/09 | puesta, sin probar |
+
+Un detalle menor que quedó: el `.env` de MetaQuotes todavía tiene
+`TELEGRAM_BOT_TOKEN` y `TELEGRAM_NOTIFY_LEVEL`, del sistema de avisos que se
+sacó, y el bot lo avisa al arrancar. **Esas líneas se borran a mano**
+(`notepad .env`): `tct cambiar` cambia valores, no borra líneas, y esas dos las
+rechaza por obsoletas.
+
+### Lo que frena todo hoy: la demo de FxPro no puede abrir NINGUNA posición
+
+**El 20/09 el bot de FxPro corrió el día entero y no abrió ni una.** Todos los
+intentos murieron igual, y lo dice el bróker, no el bot:
+
+```
+El broker rechazo la apertura de XAUUSD (TP1): retcode=10019 No money
+```
+
+Son 7 rechazos en el log de ese día (05:30 ×3, 06:53 ×2, 08:34 ×3, 09:05 ×2).
+**El margen de UNA posición de 0.01 de oro no entra en la cuenta de 500.** Con
+1:20 pediría ~217 y entrarían 2; el "No money" dice que el apalancamiento de
+esa demo es mucho más bajo. El apalancamiento exacto **está pendiente de que él
+lo mande** (`tct mt5 --env-file .env.segunda`).
+
+**Por qué importa más allá de la demo: es el mismo cálculo que va a hacer la
+cuenta REAL de 500.** Si la abre con ese apalancamiento, el bot real no va a
+poder abrir nada. Esto hay que resolverlo **antes** de fondear.
+
+**Y el experimento del filtro quedó en pausa**: la comparación necesita que
+FxPro opere, y no operó nada. Los dos "rechazada por el filtro" de ese día
+(06:55 y 07:11, entrada 4358 a 0.1% del mercado) **no son señales perdidas**:
+son ediciones del mismo mensaje que ya había fallado por margen, reprocesadas
+cuando el precio ya se había movido. Como dato del filtro, no valen.
+
+Para que no vuelva a pasar sin avisar, `tct mt5` ahora **le pregunta al bróker
+el margen de una posición y dice cuántas entran** (§3). Es el número que decide
+`MAX_OPEN_TRADES`, y hasta ahora se elegía a ciegas.
 
 **Qué están midiendo, y cómo cambió el 19/09.** La demo de FxPro con 500 es
 **el ensayo de la real**. Lo dijo así: *"quiero que la real esté igual que la
@@ -75,42 +112,32 @@ saltearía señales y se perdería justo el dato que se quiere mirar.
 
 **Pendiente, pedido y sin respuesta:**
 
-1. **Correr los dos `tct cambiar`** (el comando es nuevo, del 19/09: §3). Pidió
-   *"un comando que se pueda poner en la consola para cambiarlo solo"* en vez
-   de editar a mano. Después de `git pull`, en `consola.bat`:
+1. **El apalancamiento de la demo de FxPro de 500**, que es lo que explica el
+   `No money` de arriba y lo único que bloquea todo lo demás. Con el MetaTrader
+   de FxPro abierto en esa cuenta:
 
    ```
-   tct cambiar --env-file .env.segunda MAX_POSITIONS_PER_SYMBOL=2 MAX_OPEN_TRADES=2 MAX_SIGNALS_PER_DAY=10 MAX_DAILY_LOSS_PCT=5 INSTANCE_NAMES=demo,fxpro,real
-   tct cambiar --env-file .env.real MAX_SIGNALS_PER_DAY=10 MAX_DAILY_LOSS_PCT=5 MAX_SPREAD_FROM_ENTRY_PCT=0.05
+   tct mt5 --env-file .env.segunda
    ```
 
-   El de `.env.real` va a guardar y avisar que ese archivo todavía no deja
-   arrancar el bot (le faltan las credenciales): es lo esperado.
-
-   **El 20/09 mandó el `findstr` de nuevo y estaba igual que el 19**: no es que
-   no quiso, es que el comando `tct cambiar` se sube en este mismo cambio.
-   Primero `git pull`, después los dos comandos.
-2. **Reiniciar los dos bots** y mandar la línea `MT5 listo | servidor=...
-   balance=...` del de FxPro. Si dice ~109.600, `.env.segunda` todavía tiene el
-   login de la demo vieja y el bot re-loguea la terminal en ESA cuenta cada vez
-   que arranca: hay que poner el login, la password y el servidor de la de 500
-   —y el freno del 5% no reflejaría a la real—. Un bot que no se reinicia sigue
-   con el código viejo en memoria (el informe del 18/09 con 3 posiciones y lote
-   0.1 fue eso).
-3. **`ALLOWED_SYMBOLS`: solo oro en las dos, o BTC en las dos.** La demo opera
+   Eso ahora imprime el apalancamiento **y** el margen que pide una posición de
+   0.01 de cada símbolo, con cuántas entran. Con ese número se decide si la
+   cuenta real de 500 sirve como está, si hace falta otro apalancamiento, o si
+   hay que pensar de nuevo el tamaño.
+2. **`ALLOWED_SYMBOLS`: solo oro en las dos, o BTC en las dos.** La demo opera
    oro, BTC y otros; la real, solo oro. Se le recomendó solo oro: con
    `MAX_OPEN_TRADES=2`, un BTC en la demo ocupa un lugar que en la real estaría
    libre, y la demo deja de mostrar lo que haría la real. Sin respuesta. (La
    decisión vieja de "BTCUSD se queda en ALLOWED_SYMBOLS", más abajo, era de
    cuando la demo de FxPro era solo un experimento.)
 
-**La CLAVE DE ARRANQUE: dice que ya la puso.** Pidió que el bot real y la demo
-de FxPro le pidan una contraseña antes de arrancar (commits `3f7c82a` y
-`829292c`). El 19/09 contestó *"las claves de env real y segunda ya las puse"*.
-**Sin verificar**: se verifica reiniciando `iniciar_segunda.bat`, que tiene que
-pedirla antes de conectar (si arranca sin pedirla, algo quedó mal). La de
-`.env.real` no se puede probar hasta completarle las credenciales: el bot corta
-antes de llegar a pedirla. Lo que hizo fue, una vez por archivo:
+**La CLAVE DE ARRANQUE: puesta y PROBADA.** Pidió que el bot real y la demo de
+FxPro le pidan una contraseña antes de arrancar (commits `3f7c82a` y `829292c`).
+En el arranque del 20/09 el bot de FxPro la pidió, él le erró una vez
+(*"Clave incorrecta. Te quedan 2 intento(s)"*) y con la buena arrancó: el camino
+funciona de punta a punta. La de `.env.real` está puesta pero **sin probar**: ese
+bot corta antes de pedirla, porque le faltan las credenciales. Lo que hizo fue,
+una vez por archivo:
 
 ```
 tct clave --env-file .env.real
@@ -193,8 +220,10 @@ credenciales obligatorias con dinero real y la cuenta verificada contra el
 TP" con varias candidatas no mueve ninguna; `tct informe` arreglado de punta a
 punta; `tct status` no toca un estado corrupto; **el sistema de avisos por
 Telegram se sacó del proyecto** a pedido suyo —lo que decía va al log—; la
-**clave de arranque** para el bot real y la demo de FxPro; y **`tct cambiar`**,
-para que los cambios de configuración no dependan de editar el `.env` a mano.
+**clave de arranque** para el bot real y la demo de FxPro; **`tct cambiar`**,
+para que los cambios de configuración no dependan de editar el `.env` a mano; y
+**el margen en `tct mt5`**, que es lo que explicó por qué la demo de FxPro no
+abría nada.
 
 ---
 
@@ -590,7 +619,7 @@ La CLI (`cli.py`) expone:
 | Comando | Para qué |
 |---|---|
 | `check` | Diagnóstico. Lo primero en una máquina nueva. |
-| `mt5` | Lee la cuenta MT5 abierta y dice qué poner en el `.env`. |
+| `mt5` | Lee la cuenta MT5 abierta y dice qué poner en el `.env`. Con `--env-file` usa **la terminal de ese archivo** (con dos MetaTrader instalados, "la que encuentre" no tiene respuesta correcta) y agrega **cuánto margen pide una posición del lote configurado y cuántas entran en la cuenta**, preguntándoselo al bróker (`order_calc_margin`), no estimándolo. Si no entra ninguna, lo dice y nombra el `No money` que va a devolver el bróker. Anda incluso con un `.env.real` a medio llenar, que es justo cuando se necesita. |
 | `clave` | Pone o cambia la clave de arranque de un `.env`. La pide dos veces sin mostrarla y guarda su huella. |
 | `cambiar` | **Cambia valores de un `.env` sin abrirlo**: `tct cambiar --env-file .env.segunda MAX_OPEN_TRADES=2 MAX_DAILY_LOSS_PCT=5`. Muestra antes → después, no toca otra línea, y se niega —sin guardar nada— ante un nombre mal escrito, un valor que no es del tipo o un cambio con el que el bot no arrancaría. No toca la clave ni las dos llaves del dinero real. El detalle, en §5. |
 | `simular` | **Reproduce los mensajes reales del grupo.** Sin `--ejecutar` no toca nada. Con `--con-precios` compara cada entrada contra el precio real de MT5 y sugiere el límite, sin operar. |
@@ -1605,6 +1634,18 @@ de cuánto importan con la cuenta real andando:
     que editar el `.env` a mano. El arreglo de fondo es que `load_settings`
     exija un número finito y no negativo en los límites; no se hizo todavía
     porque toca el camino de arranque de los dos bots que están operando.
+
+24. **El sufijo de una letra no distingue una cripto de un sufijo de bróker.**
+    `elegir_nombre_de_simbolo` acepta `EURUSDT` como si fuera `EURUSD`: la regla
+    del "sufijo corto" deja pasar cualquier agregado de 1 o 2 caracteres, que es
+    exactamente la forma de `XAUUSDm` o `XAUUSD.r` (el mismo instrumento con el
+    sufijo del bróker) y también de `EURUSDT` (otra cosa: la cripto contra
+    USDT). **El comentario del código decía que lo evitaba y no era cierto**;
+    salió de escribirle un test a esa función al sacarla afuera. Hoy no muerde,
+    porque el nombre exacto gana primero y un bróker que ofrece `EURUSDT`
+    ofrece `EURUSD`; mordería en un bróker que solo tenga la cripto. Hay un
+    test que fija el comportamiento actual, así que el día que se toque la
+    regla se va a ver qué cambia.
 
 ### Del parser: lo que se midió el 2026-09-16 y NO se tocó
 
