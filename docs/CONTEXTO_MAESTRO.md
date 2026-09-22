@@ -152,6 +152,14 @@ Y de paso mide algo que antes no se podía: **cuánto habría costado o ahorrado
 freno diario del 5%**, porque ahora hay un día completo sin freno para
 comparar.
 
+**Lo que NO cambió, y se le preguntó expresamente el 22/09: sigue una posición
+por señal, la del TP1** (*"no, lo dejamos que agarre el primero"*). Se le ofreció
+retomar los tres objetivos ahora que el apalancamiento ilimitado hace barata la
+exposición triple, y dijo que no. El motivo que se le dio, y que vale para
+cuando se retome: cambiarlo ahora metería una segunda diferencia entre las dos
+instancias y ninguna de las dos preguntas quedaría contestada. **Una pregunta a
+la vez**, y la que está corriendo es la del filtro.
+
 **MetaQuotes queda como está, a propósito**: sin topes que muerdan y sin
 filtro, opera TODAS las señales. Cualquier señal que FxPro saltee —por el
 filtro, por el tope de 2 o por el freno del 5%— se busca en el informe de
