@@ -197,8 +197,8 @@ saltearía señales y se perdería justo el dato que se quiere mirar.
 2. **Confirmarle a FxPro el apalancamiento de la cuenta REAL con saldo** (arriba,
    "La cuenta REAL ya existe"). Es lo único que puede volver a trabar todo, y se
    pregunta en el chat de soporte sin fondear nada.
-3. **Que confirme que el bot de MetaQuotes también quedó corriendo.** Sin el
-   control no hay comparación: se le preguntó el 22/09 y no contestó todavía.
+**Los dos bots están corriendo** desde el 22/09: FxPro con la configuración
+nueva (02:16) y MetaQuotes como control, confirmado por él ese mismo día.
 
 **La CLAVE DE ARRANQUE: puesta y PROBADA.** Pidió que el bot real y la demo de
 FxPro le pidan una contraseña antes de arrancar (commits `3f7c82a` y `829292c`).
