@@ -109,6 +109,14 @@ NOMBRES_RESERVADOS = frozenset({"todo", "todos", "all", "ambos", "ambas"})
 # configurable sigan funcionando igual.
 ROSTER_POR_DEFECTO = ("demo", "real", "papel", "paper")
 
+# Lo que cuenta como "si" en una variable de si/no. Cualquier otra cosa es "no",
+# asi que `tct cambiar` la usa para rechazar un "ture" antes de que llegue aca.
+VALORES_SI = frozenset({"1", "true", "yes", "y", "si", "on"})
+
+# Variables de un sistema que ya no existe: los avisos por Telegram.
+VARIABLES_OBSOLETAS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_NOTIFY_CHAT_ID",
+                       "TELEGRAM_NOTIFY_LEVEL")
+
 
 class _Env:
     """Lector tipado sobre un diccionario de configuracion."""
@@ -124,7 +132,7 @@ class _Env:
         raw = self.str(key).lower()
         if not raw:
             return default
-        return raw in {"1", "true", "yes", "y", "si", "on"}
+        return raw in VALORES_SI
 
     def float(self, key: str, default: float) -> float:
         raw = self.str(key)
@@ -404,11 +412,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     # del proyecto. Si el .env todavia las tiene con un valor, se ignoran; pero
     # ignorarlas callado deja a la persona creyendo que configuro algo -un
     # token puesto "por las dudas", un nivel en 'problems'- que no hace nada.
-    obsoletas = [
-        clave for clave in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_NOTIFY_CHAT_ID",
-                            "TELEGRAM_NOTIFY_LEVEL")
-        if env.str(clave)
-    ]
+    obsoletas = [clave for clave in VARIABLES_OBSOLETAS if env.str(clave)]
     if obsoletas:
         warnings.append(
             f"{', '.join(obsoletas)} ya no se usa: el bot no manda avisos por "

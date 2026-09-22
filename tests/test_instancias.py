@@ -328,6 +328,18 @@ def test_las_plantillas_de_ejemplo_no_cuentan(tmp_path, monkeypatch):
     assert _avisar(tmp_path, monkeypatch, settings, str(tmp_path / ".env")) == ""
 
 
+@pytest.mark.parametrize("nombre", [".env.segunda.tmp", ".env.segunda.bak", ".env.txt", ".env.tmp"])
+def test_temporales_y_respaldos_no_cuentan(tmp_path, monkeypatch, nombre):
+    """Un `tct cambiar` cortado en el medio deja un `.tmp`, y la gente guarda
+    respaldos: ningun bot los lee, y un aviso por ellos manda a 'arreglar' un
+    archivo que no importa."""
+    escribir_env(tmp_path, "INSTANCE_NAMES=demo,fxpro\nINSTANCE_NAME=fxpro\n", ".env")
+    escribir_env(tmp_path, "INSTANCE_NAMES=otra,cosa\n", nombre)
+    settings = load_settings(tmp_path / ".env")
+
+    assert _avisar(tmp_path, monkeypatch, settings, str(tmp_path / ".env")) == ""
+
+
 def test_con_una_sola_instancia_no_compara_nada(tmp_path, monkeypatch):
     escribir_env(tmp_path, "INSTANCE_NAME=demo\n", ".env")
     escribir_env(tmp_path, "INSTANCE_NAMES=otra,cosa\n", ".env.vieja")

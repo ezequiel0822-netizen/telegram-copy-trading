@@ -38,6 +38,10 @@ echo    tct status         Posiciones abiertas y estadisticas
 echo    tct probar         Verifica la cadena completa contra MetaTrader
 echo    tct run            Arranca el bot
 echo.
+echo    tct cambiar --env-file .env.segunda MAX_OPEN_TRADES=2
+echo        Cambia valores del .env sin abrirlo, y muestra cada uno como
+echo        antes -^> despues. Ayuda y ejemplos: tct cambiar --help
+echo.
 echo    tct simular --horas 2
 echo        Muestra que habria hecho con los mensajes de las ultimas 2 horas.
 echo        Sin --ejecutar no toca nada.

@@ -29,7 +29,6 @@ from __future__ import annotations
 import getpass
 import hashlib
 import hmac
-import os
 import re
 import secrets
 import sys
@@ -113,43 +112,26 @@ def escribir_en_env(ruta: Path, huella: str) -> None:
     """Pone la huella en el .env: reemplaza la linea si existe, o la agrega.
 
     Toca SOLO esa linea. El resto del archivo -credenciales, comentarios, el
-    orden, los fines de linea de Windows- queda exactamente como estaba.
+    orden, los fines de linea de Windows- queda exactamente como estaba. El
+    como (cortar donde python-dotenv corta, respetar la marca BOM, escribir
+    atomico) esta en `archivo_env`, el mismo que usa `tct cambiar`, y tambien
+    su ultima red: antes de reemplazar, el archivo nuevo se lee como lo lee el
+    bot, y si la clave no quedo o se movio otra variable, lanza
+    CambioRechazado sin tocar nada. Sin eso, "Listo" podia dejar vigente la
+    huella VIEJA.
     """
+    from tct.archivo_env import escribir_atomico, leer_archivo, poner_linea, verificar_lectura
+
     if not es_valida(huella):
         raise ValueError("no es una huella de tct clave")
     ruta = Path(ruta)
     crudo = ruta.read_bytes().decode("utf-8") if ruta.exists() else ""
-    fin = "\r\n" if "\r\n" in crudo else "\n"
-    nueva = f"{VARIABLE}={huella}"
-
-    # Se corta SOLO en saltos de linea de verdad. `splitlines` corta tambien en
-    # caracteres raros (U+2028, \x0b, \x0c...) que python-dotenv no toma como fin
-    # de linea: la clave podia quedar escrita en el medio del valor de otra
-    # variable y el comando igual decia "Listo".
-    lineas = re.findall(r"[^\n]*\n|[^\n]+$", crudo)
-    # La primera linea puede traer la marca BOM que pone el Bloc de notas viejo:
-    # sin contemplarla, una clave en la primera linea no se encontraba y quedaba
-    # duplicada.
-    patron = re.compile(rf"^\ufeff?\s*{VARIABLE}\s*=")
-    reemplazos = 0
-    for i, linea in enumerate(lineas):
-        if patron.match(linea):
-            bom = "\ufeff" if linea.startswith("\ufeff") else ""
-            cierre = linea[len(linea.rstrip("\r\n")):] or fin
-            lineas[i] = bom + nueva + cierre
-            reemplazos += 1
-    if not reemplazos:
-        if lineas and not lineas[-1].endswith(("\n", "\r")):
-            lineas[-1] += fin
-        lineas.append(f"{fin}# Clave de arranque (la pone 'tct clave'; no es la clave, es su huella){fin}")
-        lineas.append(nueva + fin)
-
-    # Atomico: se escribe al lado y se reemplaza de una. El .env tiene las
-    # credenciales de MetaTrader y de Telegram; un corte a mitad de escritura
-    # lo dejaria truncado. Asi, o queda el nuevo entero o el viejo intacto.
-    temporal = ruta.with_name(ruta.name + ".tmp")
-    try:
-        temporal.write_bytes("".join(lineas).encode("utf-8"))
-        os.replace(temporal, ruta)
-    finally:
-        temporal.unlink(missing_ok=True)
+    antes = leer_archivo(ruta) if ruta.exists() else {}
+    nuevo = poner_linea(
+        crudo, VARIABLE, f"{VARIABLE}={huella}",
+        comentario="# Clave de arranque (la pone 'tct clave'; no es la clave, es su huella)",
+    )
+    consejo = (f"El archivo tiene alguna linea rara. Abrilo con  notepad {ruta}, borra\n"
+               f"    las lineas de {VARIABLE} y volve a correr tct clave.")
+    escribir_atomico(ruta, nuevo, antes_de_reemplazar=lambda temporal: verificar_lectura(
+        antes, temporal, {VARIABLE: huella}, consejo))

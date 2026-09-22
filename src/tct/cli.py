@@ -628,10 +628,14 @@ def _avisar_rosters_desparejos(settings: Settings, env_file: str | None) -> None
     try:
         from dotenv import dotenv_values
 
+        from tct.archivo_env import es_env_de_un_bot
+
         actual = Path(env_file or ".env").resolve()
         mio = set(settings.instance_names)
         for otro in sorted(Path(".").glob(".env*")):
-            if otro.name.endswith(".example") or otro.resolve() == actual:
+            # Ni plantillas, ni el .tmp que deja un `tct cambiar` cortado en el
+            # medio, ni respaldos: ningun bot los lee.
+            if not es_env_de_un_bot(otro.name) or otro.resolve() == actual:
                 continue
             declarado = (dotenv_values(otro) or {}).get("INSTANCE_NAMES")
             if not declarado:
@@ -1571,6 +1575,14 @@ def cmd_clave(args: argparse.Namespace) -> int:
         print("No se cambio nada.")
         return 1
 
+    # Sin una consola, getpass no falla: se queda esperando para siempre.
+    from tct.archivo_env import hay_teclado
+
+    if not hay_teclado():
+        print("La clave se escribe a mano, y esta ventana no tiene teclado propio.")
+        print("Abri scripts\\consola.bat y corre el comando ahi. No se cambio nada.")
+        return 1
+
     print(f"Clave de arranque para {ruta}")
     print("Se te va a pedir cada vez que arranques el bot con este archivo.")
     print("No se muestra mientras la escribis.\n")
@@ -1588,8 +1600,13 @@ def cmd_clave(args: argparse.Namespace) -> int:
         print(f"\nTiene que tener al menos {LARGO_MINIMO} caracteres. No se cambio nada.")
         return 1
 
+    from tct.archivo_env import CambioRechazado
+
     try:
         escribir_en_env(ruta, hashear(primera))
+    except CambioRechazado as exc:
+        print(f"\n{exc}\nNo se cambio nada.")
+        return 1
     except OSError:
         print(f"\nNo se pudo escribir {ruta}. Casi siempre es una de dos:")
         print("  1. Esta abierto en otro programa que lo tiene bloqueado.")
@@ -1598,6 +1615,105 @@ def cmd_clave(args: argparse.Namespace) -> int:
         return 1
     print(f"\nListo. {VARIABLE} quedo guardada en {ruta}.")
     print("Si te la olvidas, volve a correr este mismo comando y pone otra.")
+    return 0
+
+
+def cmd_cambiar(args: argparse.Namespace) -> int:
+    """Cambia valores del .env sin abrirlo. El detalle, en `tct/archivo_env.py`.
+
+    Muestra cada cambio como antes -> despues: es lo que reemplaza el "ya" de
+    quien edito el archivo a mano, que dos veces resulto no estar hecho.
+    """
+    from tct.archivo_env import (
+        CambioRechazado,
+        cambiar_variables,
+        entre_comillas,
+        mismo_roster,
+        mostrar,
+    )
+
+    # Con la salida mandada a un archivo (`> salida.txt`), Windows escribe en
+    # cp1252, y un emoji en un valor viejo reventaba DESPUES de guardar: el
+    # archivo quedaba cambiado y la persona veia un error. Mejor que el emoji
+    # salga escrito como su codigo.
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
+
+    ruta = Path(args.env_file or ".env")
+    if not args.asignaciones:
+        # Un molde y no un ejemplo copiable: copiado tal cual, un ejemplo
+        # "de verdad" cambiaba el .env del bot de control.
+        print("Decime que cambiar. Va el archivo y uno o varios NOMBRE=VALOR:\n")
+        print("    tct cambiar --env-file ARCHIVO NOMBRE=VALOR NOMBRE=VALOR ...\n")
+        print("Para ver los archivos:  dir /b .env*     Mas ayuda:  tct cambiar --help")
+        return 1
+
+    try:
+        resultado = cambiar_variables(ruta, args.asignaciones)
+    except CambioRechazado as exc:
+        print(f"{exc}\n\nNo se cambio nada en {ruta}.")
+        return 1
+    except OSError as exc:
+        # El PermissionError del reemplazo trae el nombre del temporal, que la
+        # persona nunca vio y que ya no existe cuando va a buscarlo.
+        culpable = exc.filename or ruta
+        if str(culpable).endswith(".tmp"):
+            culpable = ruta
+        print(f"No se pudo escribir {culpable}. Casi siempre es una de dos:")
+        print("  1. Esta abierto en otro programa que lo tiene bloqueado.")
+        print("  2. Es de solo lectura (clic derecho -> Propiedades).")
+        print(f"No se cambio nada en {ruta}.")
+        return 1
+
+    ancho = max(len(c.nombre) for c in resultado.cambios)
+    cambiadas = [c for c in resultado.cambios if c.cambia]
+    iguales = [c for c in resultado.cambios if not c.cambia]
+    if cambiadas:
+        print(f"Cambios en {ruta}:")
+        ancho_antes = max(len(mostrar(c.nombre, c.antes)) for c in cambiadas)
+        for c in cambiadas:
+            print(f"  {c.nombre:<{ancho}}  {mostrar(c.nombre, c.antes):<{ancho_antes}}  ->  "
+                  f"{mostrar(c.nombre, c.despues)}")
+    if iguales:
+        if cambiadas:
+            print()
+        print("Ya estaban asi, no se tocaron:")
+        for c in iguales:
+            print(f"  {c.nombre:<{ancho}}  {mostrar(c.nombre, c.despues)}")
+    if not resultado.guardado:
+        print(f"\n{ruta} queda como estaba.")
+
+    for nombre, valor in resultado.pisadas_por_el_entorno.items():
+        print(f"\n[AVISO] {nombre} tambien esta puesta como variable de entorno de")
+        print(f"        Windows, y esa le gana al archivo: el bot va a seguir usando "
+              f"{mostrar(nombre, valor)}.")
+        print("        Para sacarla: cerra esta ventana y abri consola.bat de nuevo. Si")
+        print(f"        sigue, Inicio -> 'variables de entorno' -> borra {nombre}.")
+
+    if resultado.error_que_queda:
+        print("\n[AVISO] Este archivo todavia no deja arrancar el bot, por algo que este")
+        print("        cambio no toca:\n")
+        for linea in resultado.error_que_queda.splitlines():
+            print(f"        {linea}")
+
+    if resultado.rosters_de_los_otros:
+        nuevo = next(c.despues for c in resultado.cambios if c.nombre == "INSTANCE_NAMES")
+        print()
+        for otro, declarado in resultado.rosters_de_los_otros.items():
+            if mismo_roster(nuevo, declarado):
+                print(f"  INSTANCE_NAMES coincide con {otro}.")
+            else:
+                print(f"[AVISO] {otro} dice INSTANCE_NAMES={declarado or '(nada)'}. Tiene que ser")
+                print("        la MISMA lista en todos. Para igualarlo:")
+                print(f"            tct cambiar --env-file "
+                      f"{entre_comillas(ruta.parent / otro)} INSTANCE_NAMES={nuevo}")
+
+    if resultado.guardado:
+        print("\nListo. El bot lee este archivo SOLO al arrancar: si esta andando,")
+        print("cerralo y volvelo a abrir, y fijate que las lineas del arranque")
+        print("digan lo nuevo.")
     return 0
 
 
@@ -1857,6 +1973,26 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("check", parents=[comunes], help="Diagnostico del entorno y la configuracion")
     sub.add_parser("mt5", parents=[comunes], help="Lee tu cuenta de MetaTrader 5 y dice que poner en el .env")
     sub.add_parser("clave", parents=[comunes], help="Pone o cambia la clave que se pide para arrancar el bot")
+    cambiar = sub.add_parser(
+        "cambiar", parents=[comunes],
+        help="Cambia valores del .env sin abrirlo: tct cambiar --env-file .env MAX_OPEN_TRADES=2",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Cambia valores de un .env sin abrirlo. Muestra cada uno como\n"
+                    "antes -> despues, y no guarda nada si algo esta mal.",
+        epilog="Ejemplos:\n"
+               "  tct cambiar --env-file .env.segunda MAX_OPEN_TRADES=2 MAX_DAILY_LOSS_PCT=5\n"
+               '  tct cambiar --env-file .env.real MT5_SERVER="FxPro-MT5 Live"\n'
+               "  tct cambiar --env-file .env.real MT5_PASSWORD\n"
+               "\n"
+               "Un valor con espacios va entre comillas DOBLES. Las passwords\n"
+               "(MT5_PASSWORD, TELEGRAM_API_HASH, METAAPI_TOKEN) van sin '=': el\n"
+               "comando las pide sin mostrarlas. TRADING_MODE, ALLOW_LIVE_TRADING y\n"
+               "CLAVE_DE_ARRANQUE no se cambian con este comando.\n"
+               "El bot lee el .env solo al arrancar: despues, hay que reiniciarlo.",
+    )
+    # nargs="*" y no "+": sin nada que cambiar, argparse contestaria en ingles.
+    cambiar.add_argument("asignaciones", nargs="*", metavar="NOMBRE=VALOR",
+                         help="Una o varias, separadas por espacios")
 
     simular = sub.add_parser(
         "simular", parents=[comunes],
@@ -1910,12 +2046,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    # `tct cambiar A=1 --env-file .env.segunda B=2`: argparse junta los
+    # NOMBRE=VALOR de antes de la opcion y deja los de despues como "sobrantes",
+    # con un error en ingles. Para `cambiar` son mas cambios; para el resto de
+    # los comandos, el mismo error de siempre.
+    args, sobrantes = parser.parse_known_args(argv)
+    if sobrantes:
+        if args.command == "cambiar" and not any(s.startswith("-") for s in sobrantes):
+            args.asignaciones = [*args.asignaciones, *sobrantes]
+        else:
+            parser.error(f"unrecognized arguments: {' '.join(sobrantes)}")
 
     handlers = {
         "check": cmd_check,
         "mt5": cmd_mt5,
         "clave": cmd_clave,
+        "cambiar": cmd_cambiar,
         "simular": cmd_simular,
         "probar": cmd_probar,
         "chats": cmd_chats,

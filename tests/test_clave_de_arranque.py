@@ -279,8 +279,24 @@ def test_la_orden_de_prueba_tambien_la_pide(tmp_path, monkeypatch):
 
 
 def correr_clave(monkeypatch, env, *escritas):
+    # En una corrida de tests la entrada no es una consola, y `tct clave` se
+    # niega a preguntar algo que no se muestra donde no hay teclado.
+    monkeypatch.setattr("tct.archivo_env.hay_teclado", lambda: True)
     monkeypatch.setattr("getpass.getpass", respuestas(*escritas))
     return cli.cmd_clave(argparse.Namespace(env_file=str(env)))
+
+
+def test_sin_teclado_no_pregunta_la_clave_y_lo_dice(tmp_path, monkeypatch, capsys):
+    """Sin consola, getpass no falla: se queda esperando para siempre."""
+    env = tmp_path / ".env.real"
+    env.write_text("TRADING_MODE=LIVE\n", encoding="utf-8")
+    monkeypatch.setattr("tct.archivo_env.hay_teclado", lambda: False)
+    monkeypatch.setattr("getpass.getpass", lambda _p="": pytest.fail("pregunto sin teclado"))
+
+    assert cli.cmd_clave(argparse.Namespace(env_file=str(env))) == 1
+
+    assert "consola.bat" in capsys.readouterr().out
+    assert env.read_text(encoding="utf-8") == "TRADING_MODE=LIVE\n"
 
 
 def test_tct_clave_la_guarda(tmp_path, monkeypatch):

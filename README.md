@@ -129,8 +129,14 @@ python -m tct chats     # lista tus grupos de Telegram con sus IDs
 python -m tct test      # prueba el parser con un mensaje, sin tocar nada
 python -m tct status    # posiciones abiertas y estadísticas
 python -m tct informe   # qué llegó, qué se operó y por qué no el resto
+python -m tct cambiar MAX_OPEN_TRADES=2   # cambia valores del .env sin abrirlo
 python -m tct run       # arranca el bot
 ```
+
+`cambiar` toca solo las líneas de esas variables, muestra cada una como
+antes → después, y no guarda nada si un nombre está mal escrito o si con el
+cambio el bot no arrancaría. Con `--env-file` cambia otro archivo
+(`--env-file .env.segunda`).
 
 `check` es el primero que hay que correr en una máquina nueva: dice qué falta
 antes de que falte.

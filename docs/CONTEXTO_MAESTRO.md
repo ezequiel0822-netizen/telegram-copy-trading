@@ -5,10 +5,10 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-19 · v2.1.0 · 692 tests · el último commit que describe
-es `829292c`, más este mismo cambio
+Actualizado: 2026-09-21 · v2.2.0 · 836 tests · el último commit que describe
+es `f4983e6`, más este mismo cambio
 
-**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-19"**, al
+**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-20"**, al
 principio de §2: es dónde quedó parado el usuario, qué tiene configurado en su
 PC, qué decisiones esperan su respuesta y cuál es el próximo paso. Después §5 y
 §9, que son las que evitan romper algo que costó caro.
@@ -37,55 +37,80 @@ Eso viene del pedido original y sigue vigente.
 
 ## 2. Dónde está el usuario ahora mismo
 
-### Estado al 2026-09-19 — leer esto primero
+### Estado al 2026-09-20 — leer esto primero
 
 **Dos bots en demo, operando el canal. La cuenta real de FxPro todavía NO está
 fondeada.** El chat anterior se cerró por falta de contexto; esto es lo que
 hay que saber para seguir.
 
-**Lo que tiene en su PC** (leído el 19/09 de sus `.env` con `findstr`, que
-muestra las opciones sin contraseñas):
+**Lo que tiene en su PC** (leído el 19/09 a la tarde con el `findstr` de §10,
+que muestra las opciones sin contraseñas). Las flechas son los cambios que se
+le dieron para correr con `tct cambiar` (abajo) y que **todavía no confirmó**:
 
-| | `.env` — MetaQuotes demo | `.env.segunda` — FxPro demo |
-|---|---|---|
-| Cuenta | ~98.600 | **500**, nueva desde el 19/09 — confirmar (abajo) |
-| `DEFAULT_LOT` / `MAX_LOT` | 0.01 / 0.01 | 0.01 / 0.01 |
-| `POSITIONS_PER_SIGNAL` | 1 | 1 |
-| `MAX_SPREAD_FROM_ENTRY_PCT` | **0.5** — el control | **0.05** — el filtro a prueba |
-| Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 **(ver abajo)** | 10 / 20 / 35 |
-| `MAX_DAILY_LOSS_PCT` | 0 | 0 |
-| `INSTANCE_NAMES` | `demo,fxpro` | `demo,fxpro` |
+| | `.env` — MetaQuotes demo | `.env.segunda` — FxPro demo | `.env.real` — FxPro real |
+|---|---|---|---|
+| Cuenta | ~98.600 | **500**, nueva desde el 19/09 — confirmar | sin fondear, **sin credenciales** |
+| Lote / posiciones por señal | 0.01 / 1 | 0.01 / 1 | 0.01 / 1 |
+| `MAX_SPREAD_FROM_ENTRY_PCT` | **0.5** — el control | 0.05 | 0.3 → **0.05** |
+| Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | 10 / 20 / 35 → **2 / 2 / 10** | 2 / 2 / 5 → **2 / 2 / 10** |
+| `MAX_DAILY_LOSS_PCT` | 0 | 0 → **5** | 3 → **5** |
+| `INSTANCE_NAMES` | `demo,fxpro,real` | `demo,fxpro` → **`demo,fxpro,real`** | `demo,fxpro,real` |
+| `ALLOWED_SYMBOLS` | 11, con BTCUSD | 12, con BTCUSD y ETHUSD | solo XAUUSD — **pregunta abierta** |
 
-**Qué están midiendo:** si el filtro de entrada tarde (`0.05`) le conviene. Los
-dos bots operan la misma estrategia y la única diferencia que importa es ese
-número: cada señal que FxPro saltee por *"La entrada estaba lejos del precio
-real"* se busca en el informe de MetaQuotes y se ve cómo terminó. Por eso
-**MetaQuotes NO lleva el filtro, a propósito** (§2, más abajo, tiene los datos
-que lo motivaron: dos entradas tarde que arriesgaban ~11 para ganar ~1).
+**Qué están midiendo, y cómo cambió el 19/09.** La demo de FxPro con 500 es
+**el ensayo de la real**. Lo dijo así: *"quiero que la real esté igual que la
+segunda para ver qué pasaría si dejara la real así como está la segunda, por
+eso le puse 500 dólares"*. O sea: `.env.segunda` y `.env.real` llevan **los
+mismos números**, los decididos para la real (2 / 2 / 10 / 5%), y el filtro de
+entrada tarde en **0.05 en las dos** —la real tenía 0.3—. Si la comparación
+dice que 0.05 saltea de más, se cambia en los dos archivos a la vez.
 
-**Pendiente de confirmar, pedido y sin respuesta:**
+**MetaQuotes queda como está, a propósito**: sin topes que muerdan y sin
+filtro, opera TODAS las señales. Cualquier señal que FxPro saltee —por el
+filtro, por el tope de 2 o por el freno del 5%— se busca en el informe de
+MetaQuotes y se ve cómo terminó. Antes se le habían ofrecido dos opciones
+(igualar MetaQuotes a 10/20/35, o poner los números de la real en las dos);
+las dos quedaron descartadas: con topes en MetaQuotes, esa instancia también
+saltearía señales y se perdería justo el dato que se quiere mirar.
 
-1. **Que el bot de FxPro esté en la cuenta de 500.** Al arrancar imprime
-   `MT5 listo | servidor=... balance=...`. Si dice ~109.600, `.env.segunda`
-   todavía tiene el login de la demo vieja y el bot re-loguea la terminal en
-   ESA cuenta cada vez que arranca: hay que poner el login, la password y el
-   servidor de la de 500.
-2. **Los topes del `.env` de MetaQuotes.** Se le pidió igualarlos a FxPro
-   (10/20/35) para que el único motivo de un salteo sea el filtro; dijo "ya",
-   pero el `findstr` fue anterior y no se volvió a leer. Después se le sugirió
-   algo mejor: poner en **los dos** los números de la real
-   (`MAX_POSITIONS_PER_SYMBOL=2`, `MAX_OPEN_TRADES=2`, `MAX_SIGNALS_PER_DAY=10`,
-   `MAX_DAILY_LOSS_PCT=5`), así FxPro de 500 es una copia exacta de la real y
-   MetaQuotes sigue de control. Sin respuesta.
-3. **Que reinició los dos bots después del `git pull`** (quedó en `6b305d5`).
-   Un bot que no se reinicia sigue con el código viejo en memoria: ese fue el
-   motivo de un informe del 18/09 que mostraba 3 posiciones y lote 0.1 con el
-   `.env` ya cambiado.
+**Pendiente, pedido y sin respuesta:**
 
-**Lo último que se hizo, y que tiene que hacer él: la CLAVE DE ARRANQUE.**
-Pidió que el bot real y la demo de FxPro le pidan una contraseña antes de
-arrancar (commits `3f7c82a` y `829292c`). Está hecho y subido, pero **todavía
-no la puso**. En su PC, después de `git pull`, una vez por archivo:
+1. **Correr los dos `tct cambiar`** (el comando es nuevo, del 19/09: §3). Pidió
+   *"un comando que se pueda poner en la consola para cambiarlo solo"* en vez
+   de editar a mano. Después de `git pull`, en `consola.bat`:
+
+   ```
+   tct cambiar --env-file .env.segunda MAX_POSITIONS_PER_SYMBOL=2 MAX_OPEN_TRADES=2 MAX_SIGNALS_PER_DAY=10 MAX_DAILY_LOSS_PCT=5 INSTANCE_NAMES=demo,fxpro,real
+   tct cambiar --env-file .env.real MAX_SIGNALS_PER_DAY=10 MAX_DAILY_LOSS_PCT=5 MAX_SPREAD_FROM_ENTRY_PCT=0.05
+   ```
+
+   El de `.env.real` va a guardar y avisar que ese archivo todavía no deja
+   arrancar el bot (le faltan las credenciales): es lo esperado.
+
+   **El 20/09 mandó el `findstr` de nuevo y estaba igual que el 19**: no es que
+   no quiso, es que el comando `tct cambiar` se sube en este mismo cambio.
+   Primero `git pull`, después los dos comandos.
+2. **Reiniciar los dos bots** y mandar la línea `MT5 listo | servidor=...
+   balance=...` del de FxPro. Si dice ~109.600, `.env.segunda` todavía tiene el
+   login de la demo vieja y el bot re-loguea la terminal en ESA cuenta cada vez
+   que arranca: hay que poner el login, la password y el servidor de la de 500
+   —y el freno del 5% no reflejaría a la real—. Un bot que no se reinicia sigue
+   con el código viejo en memoria (el informe del 18/09 con 3 posiciones y lote
+   0.1 fue eso).
+3. **`ALLOWED_SYMBOLS`: solo oro en las dos, o BTC en las dos.** La demo opera
+   oro, BTC y otros; la real, solo oro. Se le recomendó solo oro: con
+   `MAX_OPEN_TRADES=2`, un BTC en la demo ocupa un lugar que en la real estaría
+   libre, y la demo deja de mostrar lo que haría la real. Sin respuesta. (La
+   decisión vieja de "BTCUSD se queda en ALLOWED_SYMBOLS", más abajo, era de
+   cuando la demo de FxPro era solo un experimento.)
+
+**La CLAVE DE ARRANQUE: dice que ya la puso.** Pidió que el bot real y la demo
+de FxPro le pidan una contraseña antes de arrancar (commits `3f7c82a` y
+`829292c`). El 19/09 contestó *"las claves de env real y segunda ya las puse"*.
+**Sin verificar**: se verifica reiniciando `iniciar_segunda.bat`, que tiene que
+pedirla antes de conectar (si arranca sin pedirla, algo quedó mal). La de
+`.env.real` no se puede probar hasta completarle las credenciales: el bot corta
+antes de llegar a pedirla. Lo que hizo fue, una vez por archivo:
 
 ```
 tct clave --env-file .env.real
@@ -121,17 +146,19 @@ El detalle y la regla, en §9.
   mirar si el precio se movió a favor o en contra, así que un número apretado
   también saltea entradas MEJORES. Se le ofreció hacer que solo rechace cuando
   se movió en contra. Sin respuesta.
-- **`MAX_SPREAD_FROM_ENTRY_PCT` en la real.** Su `.env.real` tiene 0.3. Se
-  decide con lo que salga de la comparación de arriba, en unas dos semanas.
+- **`MAX_SPREAD_FROM_ENTRY_PCT` en la real: 0.05, igual que la demo de FxPro**
+  (decidido el 19/09, al pedir que la real sea igual a la segunda). Se revisa
+  en los DOS archivos con lo que salga de la comparación, en unas dos semanas.
 
 **`.env.real` existe, y NO se puede arrancar todavía** (tampoco hay que): tiene
 `TRADING_MODE=LIVE` y `ALLOW_LIVE_TRADING=true` pero **ninguna credencial de
 MT5**, y `tct check` lo rechaza con el error nuevo de §6 — que es lo correcto:
 con el código anterior ese mismo archivo habría arrancado y operado la cuenta
 que encontrara. **Se copió de la plantilla VIEJA**, así que tiene números que
-ya no son los decididos: `MAX_DAILY_LOSS_PCT=3` (lo decidido es **5**),
-`MAX_SIGNALS_PER_DAY=5` (lo decidido es **10**) e `INSTANCE_NAMES=demo,real`.
-Hay que corregirlos antes de ir a real.
+ya no son los decididos: `MAX_DAILY_LOSS_PCT=3` (lo decidido es **5**) y
+`MAX_SIGNALS_PER_DAY=5` (lo decidido es **10**). El `INSTANCE_NAMES` ya lo
+corrigió él (`demo,fxpro,real`). Los dos números los corrige el `tct cambiar`
+del punto 1 de arriba.
 
 **El plan para pasar a real, tal como lo entendió el usuario:** hoy MetaQuotes
 demo + FxPro demo. Cuando fondee:
@@ -139,7 +166,17 @@ demo + FxPro demo. Cuando fondee:
 1. Cerrar el bot de FxPro demo (`iniciar_segunda.bat`).
 2. **Con ese bot cerrado**, loguear MetaTrader de FxPro en la cuenta real y
    correr `tct mt5` para sacar login, servidor y apalancamiento.
-3. Completar `.env.real` (y corregir los números de arriba).
+3. Completar `.env.real`, en una sola línea, con la password al final y **sin
+   `=`** (el comando la pide sin mostrarla; escrita en la línea, la consola le
+   cambia caracteres sin avisar — §5):
+
+   ```
+   tct cambiar --env-file .env.real MT5_LOGIN=<login> "MT5_SERVER=<servidor>" "MT5_PATH=<ruta a terminal64.exe>" MT5_PASSWORD
+   ```
+
+   Se puede de a una: un `.env.real` que todavía no arranca igual se guarda, y
+   el comando avisa qué le falta. Lo que **no** deja tocar es `TRADING_MODE` ni
+   `ALLOW_LIVE_TRADING`: las dos llaves se cambian a mano, a propósito.
 4. Poner la clave, si todavía no la puso: `tct clave --env-file .env.real`.
 5. `tct check --env-file .env.real` y `tct probar --operar --env-file .env.real`
    (este último pide la clave: abre y cierra 0.01 de verdad).
@@ -150,13 +187,14 @@ plata: **primero se cierra el bot, después se toca la cuenta.** Si quisiera
 FxPro demo y FxPro real al mismo tiempo, hace falta una segunda instalación de
 MetaTrader de FxPro en otra carpeta, con su `MT5_PATH` en cada `.env`.
 
-**Lo que se hizo en esta tanda** (del 15 al 19/09), en §6 y §5 el detalle:
+**Lo que se hizo en esta tanda** (del 15 al 20/09), en §6 y §5 el detalle:
 credenciales obligatorias con dinero real y la cuenta verificada contra el
 `.env`; el breakeven que le alejaba el stop a la otra posición de oro; "mover
 TP" con varias candidatas no mueve ninguna; `tct informe` arreglado de punta a
 punta; `tct status` no toca un estado corrupto; **el sistema de avisos por
-Telegram se sacó del proyecto** a pedido suyo —lo que decía va al log—; y la
-**clave de arranque** para el bot real y la demo de FxPro.
+Telegram se sacó del proyecto** a pedido suyo —lo que decía va al log—; la
+**clave de arranque** para el bot real y la demo de FxPro; y **`tct cambiar`**,
+para que los cambios de configuración no dependan de editar el `.env` a mano.
 
 ---
 
@@ -188,7 +226,7 @@ es un sistema que se está montando: es uno que corre y del que hay datos.
 
 Desde el 2026-09-13 corren **dos instancias en paralelo**, sobre el mismo
 canal y con configuraciones distintas a propósito. **Esta tabla ya no es la
-configuración actual** —la de hoy está en "Estado al 2026-09-19"—; se deja
+configuración actual** —la de hoy está en "Estado al 2026-09-20"—; se deja
 porque explica de dónde salen los datos de la primera semana.
 
 | | `.env` — instancia DEMO | `.env.segunda` — instancia FXPRO |
@@ -355,8 +393,9 @@ sí dice:
 - **Una entrada tarde se come el TP1.** Dos operadas ganaron +0.86 y +1.14:
   el mensaje decía 4386 y llenó cerca de 4389, con el TP1 en 4390. Con el stop
   a 8 puntos de la entrada del mensaje, arriesgaban ~11 para ganar ~1. El límite
-  de `.env.real.example` (0.3%, ~13 puntos en oro) es más de tres veces el TP1:
-  **bajarlo a 0.05 es una decisión pendiente del usuario.**
+  que tenía `.env.real.example` (0.3%, ~13 puntos en oro) es más de tres veces
+  el TP1. **El 19/09 el usuario lo bajó a 0.05 en la real**, igual que en la
+  demo de FxPro (§2, "Estado al 2026-09-20"), y la plantilla ya lo trae.
 - **El arreglo del breakeven funciona en producción:** las de antes cerraban en
   −0.42 y −1.08; la de 11:25, después, cerró en **+0.00 exacto** en las tres.
 
@@ -553,6 +592,7 @@ La CLI (`cli.py`) expone:
 | `check` | Diagnóstico. Lo primero en una máquina nueva. |
 | `mt5` | Lee la cuenta MT5 abierta y dice qué poner en el `.env`. |
 | `clave` | Pone o cambia la clave de arranque de un `.env`. La pide dos veces sin mostrarla y guarda su huella. |
+| `cambiar` | **Cambia valores de un `.env` sin abrirlo**: `tct cambiar --env-file .env.segunda MAX_OPEN_TRADES=2 MAX_DAILY_LOSS_PCT=5`. Muestra antes → después, no toca otra línea, y se niega —sin guardar nada— ante un nombre mal escrito, un valor que no es del tipo o un cambio con el que el bot no arrancaría. No toca la clave ni las dos llaves del dinero real. El detalle, en §5. |
 | `simular` | **Reproduce los mensajes reales del grupo.** Sin `--ejecutar` no toca nada. Con `--con-precios` compara cada entrada contra el precio real de MT5 y sugiere el límite, sin operar. |
 | `probar` | Verifica la cadena contra MT5. Con `--operar` abre y cierra una posición mínima. |
 | `informe` | **Qué pasó con lo que llegó.** Agrupa por mensaje (no por evento, ver §2), separa operadas de descartadas y dice el motivo de cada descarte. Con `--con-resultados` va al historial de MT5 y agrega cómo terminó cada una: TP, SL, breakeven o cierre a mano. Es de solo lectura. |
@@ -612,10 +652,14 @@ clavado: el roster sale de `INSTANCE_NAMES` (`config.py::_resolver_roster`), y
 sea **cerrado** y el **mismo en todos los `.env`**: sin lista fija,
 `/pausa mercado feo` se leía como dirigido a una instancia llamada "mercado";
 y sin los nombres de las otras, una instancia no distingue un `/pausa fxpro`
-que no es para ella de un motivo escrito a mano. **Nadie compara los `.env`
-entre sí**: cada uno solo valida que su `INSTANCE_NAME` esté en su propio
-`INSTANCE_NAMES`. Si dos declaran listas distintas, lo único que lo delata es
-el roster que cada bot imprime al arrancar.
+que no es para ella de un motivo escrito a mano. **La validación que frena es
+solo la propia**: cada `.env` valida que su `INSTANCE_NAME` esté en su propio
+`INSTANCE_NAMES`. Que dos archivos declaren listas distintas **no frena
+nada**; lo avisan dos cosas: `tct run` al arrancar (`_avisar_rosters_desparejos`,
+un WARNING en la ventana) y `tct cambiar` cuando se le cambia `INSTANCE_NAMES`
+a un archivo (dice con cuáles de los otros coincide y con cuáles no). El
+19/09 el usuario tenía `.env.segunda` desparejo (`demo,fxpro` contra
+`demo,fxpro,real` en los otros dos).
 
 **`risk.py` — el contraste con el mercado son DOS límites, no uno.** Una orden
 a mercado entra al precio de *ahora*, así que una entrada lejana significa que
@@ -915,6 +959,80 @@ lugar. Se arregló agregando las opciones comunes a cada subcomando con
 `default=argparse.SUPPRESS`: **el `SUPPRESS` es lo que las hace convivir**, sin
 él el subcomando escribe su `None` encima del valor que puso el parser
 principal y la forma que sí andaba deja de andar.
+
+**`archivo_env.py` (`tct cambiar`) — lo que el bot LEE es lo único que cuenta.**
+El comando edita el `.env` sin abrirlo, y todo lo delicado está en que el
+archivo nuevo, leído por el mismo lector que usa el bot (`dotenv_values`), sea
+el viejo más lo pedido. Cinco cosas que no hay que "simplificar":
+
+- **La última red (`verificar_lectura`) relee el archivo nuevo antes de
+  reemplazar el viejo**, y compara: cada valor pedido tiene que llegar tal
+  cual, y ninguna otra variable puede cambiar, aparecer **ni aparecer sin
+  valor** —así es como python-dotenv lee el pedazo suelto que queda cuando se
+  reemplaza la primera línea de un valor de varias—. `tct clave` usa la misma
+  red: sin ella, un "Listo" podía dejar vigente la huella VIEJA.
+- **Se reemplazan TODAS las asignaciones de esa variable, no la primera:**
+  python-dotenv se queda con la última.
+- **Se corta donde corta python-dotenv** (CRLF, LF y **un CR suelto**), y en
+  nada más: `splitlines` corta también en U+2028 y en el tabulador vertical,
+  que para python-dotenv son parte del valor.
+- **El "antes" se lee del ARCHIVO, no del texto ya cargado en memoria.** Abrir
+  en modo texto convierte los CRLF de adentro de un valor de varias líneas:
+  leer el antes de una forma y el después de otra hacía parecer que ese valor
+  había cambiado, y rechazaba cambios buenos.
+- **Una asignación que aparece o desaparece cuenta como cambio, aunque el bot
+  lea lo mismo** (`verificar_asignaciones`, con el parser de python-dotenv).
+  Partir un valor de varias líneas deja un pedazo suelto que puede quedar
+  tapado por otra asignación de más abajo: el bot lee bien y el archivo queda
+  con basura. Y un pedazo así **no se nombra como si fuera una variable** en el
+  mensaje: no existe en ninguna parte y manda a buscar un fantasma.
+- **Un error de configuración que ya estaba no frena el cambio; uno nuevo sí.**
+  Es lo que permite completar `.env.real` de a una credencial. Se distingue por
+  las variables que el error NOMBRA: si nombra alguna de las que se cambiaron
+  —o ninguna, y entonces no se le puede atribuir a otra—, se rechaza.
+
+**`tct cambiar` — las credenciales NO se aceptan en la línea del comando.**
+cmd.exe procesa la línea antes de que llegue al bot: se come los `^`, corta en
+`&` y `>`, reemplaza `%ALGO%` y saca las comillas dobles. Con un número no
+pasa nada; con una password de broker sí, y como en pantalla sale `****`, no
+había forma de darse cuenta de que se guardó otra —el bot fallaba al loguear
+días después—. Por eso `MT5_PASSWORD`, `TELEGRAM_API_HASH` y `METAAPI_TOKEN`
+van **sin `=`** y el comando las pide dos veces sin mostrarlas, que es texto
+que cmd no toca. Por lo mismo se rechaza lo que tiene pinta de haber pasado por
+ese filtro: un valor partido por un espacio, una comilla doble adentro, u otro
+`NOMBRE=VALOR` pegado dentro de un valor (eso último cambiaba `DATA_DIR` a una
+carpeta nueva y el bot arrancaba sin sus posiciones abiertas).
+
+Dos detalles de esa familia que costaron un hallazgo cada uno: el consejo de
+*"el valor va entre comillas dobles"* **corta en el nombre de la variable
+siguiente** —si no, `MT5_SERVER=FxPro-MT5 Live MT5_PASSWORD` sugería pegar
+`MT5_SERVER="FxPro-MT5 Live MT5_PASSWORD"`, que se acepta, deja la cuenta real
+sin poder loguear y encima se come el pedido de la password—; y **sin consola
+no se pregunta nada** (`hay_teclado()`): `getpass` lee del teclado y no de la
+entrada, así que con la entrada redirigida el proceso se quedaba esperando para
+siempre, sin mensaje. Los comandos que sugiere van **entre comillas si la ruta
+tiene espacios**, porque la carpeta del proyecto se llama "telegram copy
+trading".
+
+**`tct cambiar` — solo edita un `.env` que algún bot lea.** Lo peor que puede
+hacer este comando es editar **una copia**: con TAB, al lado de `.env.real`
+aparecen el respaldo (`.env.real.bak`), el `.env.txt` que deja el "Guardar
+como" del Bloc de notas y el `.env.real.tmp` de un cambio cortado por la mitad.
+Editar cualquiera de esos salía *"Listo"* con los antes → después bien puestos,
+y el bot real seguía leyendo el original —con el freno del día en 0 y la
+persona convencida de haberlo puesto en 5—. Por eso `es_env_de_un_bot()` decide
+qué archivo se puede tocar (`.env`, `.env.segunda`, `.env.real`…, y **no** los
+`.example`, `.tmp`, `.bak`, `.txt`), y el rechazo dice cuál era el bueno. La
+misma función filtra los avisos de roster: mandar a "arreglar" un respaldo
+confunde. **Si algún día hace falta un `.env` con otro nombre, se edita a mano**
+—eso es a propósito: el riesgo de la copia es peor que la incomodidad—.
+
+**`tct cambiar` — un número que apaga una protección se rechaza.**
+`MAX_DAILY_LOSS_PCT=-5` o `=nan` **apagan el freno diario** (`risk.py` lo mira
+con `<= 0`) mientras el arranque sigue imprimiendo *"Tope perdida dia: -5.0%"*.
+`config.py` los acepta sin decir nada —eso sigue igual, es el punto 23 de §8—,
+así que el comando no deja escribirlos: negativos y `nan`/`inf` se rechazan con
+el motivo ("para frenar al perder 5%, se escribe 5, sin signo").
 
 **`.env` — las comillas dobles rompen TODA ruta de MetaTrader.** `python-dotenv`
 interpreta las secuencias de escape solo cuando el valor esta entre comillas
@@ -1253,6 +1371,14 @@ código, y de ahí salieron las correcciones de esta versión.
 Y **una revisión a medias es un resultado, no un fracaso** — pero hay que
 decir cuál mitad corrió.
 
+**Y pasó otra vez el 2026-09-20, en la mitad de una verificación.** De las dos
+mitades que revisaban los arreglos de `tct cambiar`, una terminó (y encontró 7
+cosas, una grave) y la otra **murió por límite de uso semanal** sin escribir una
+línea. Lo que se hizo: reportar cuál mitad corrió —arriba de todo, no en una
+nota al pie— y anotar en §8 lo que quedó sin revisar, en vez de decir "revisado".
+→ **Una revisión a medias no se cuenta como revisión.** Decí qué mitad corrió,
+qué quedó sin mirar, y dejalo escrito donde se retoma el proyecto.
+
 **Verificar imports no es verificar comportamiento.** `import tct.cli` pasaba
 con el control desconectado.
 → Verificar el efecto, no que el módulo cargue.
@@ -1278,6 +1404,33 @@ mismas mutaciones dieron 3, 1 y 1.
 → **Al medir mutaciones, contá también el código de salida de pytest**, que no
 depende del formato. Y si una mutación da 0, desconfiá primero de la medición
 y después de los tests.
+
+**Una aserción con `in` puede pasar por PREFIJO, y el test queda verde por el
+motivo equivocado.** Escribiendo `tct cambiar`, un test comprobaba que el error
+nombrara el archivo real (`f"--env-file {ruta}" in mensaje`) y no el temporal…
+que se llama `{ruta}.tmp`, o sea que contiene el texto buscado. El test pasaba
+igual con el bug puesto, y lo delató una mutación que sobrevivió.
+→ Cuando lo que se compara es un nombre de archivo o un prefijo, **afirmá
+también lo que NO tiene que estar** (`".tmp" not in mensaje`), o compará la
+línea entera.
+
+**Y la versión más traicionera: pytest le pone al directorio temporal el NOMBRE
+DEL TEST.** Un test llamado `test_una_plantilla_no_se_toca` corre en
+`...\test_una_plantilla_no_se_toca0\`, esa ruta sale en el mensaje de error, y
+un `assert "plantilla" in motivo` pasa **sin que el código diga la palabra**.
+También lo encontró una mutación que sobrevivía: se apagó el chequeo de las
+plantillas y el test siguió verde.
+→ Afirmá **la frase**, no la palabra (`"es una plantilla" in motivo`), sobre
+todo si la palabra está en el nombre del test o en el del archivo de prueba.
+
+**Un test nuevo puede chocar con el valor que ya estaba, y eso es un dato.**
+Un test del arreglo de `tct cambiar` pedía escribir 2 donde el archivo de
+prueba ya tenía 20; el "20" que el bug generaba coincidía con el original, el
+texto no cambiaba y el comando cortaba por "no había nada que cambiar". No era
+un test mal escrito: mostraba que la decisión estaba tomada mirando el TEXTO en
+vez de lo PEDIDO. Se arregló el código, no el test.
+→ Si un test nuevo falla por una coincidencia con los datos de prueba,
+preguntate primero si el código no está mirando la cosa equivocada.
 
 **Caché de bytecode.** Una vez `inspect.getsource` mostró el código nuevo
 mientras corría el viejo. Si algo no tiene sentido, limpiar `__pycache__`.
@@ -1357,7 +1510,7 @@ Ordenado por lo que más importa antes de dinero real.
    El *filling mode* de FxPro es compatible.
 3. **Terminar el paso a la cuenta real de FxPro.** El código está; falta que
    el usuario fondee. Los pasos y lo que hay que corregir en su `.env.real`
-   (que salió de la plantilla vieja) están en **§2, "Estado al 2026-09-19"**.
+   (que salió de la plantilla vieja) están en **§2, "Estado al 2026-09-20"**.
 
    Y lo de siempre, que es fácil de olvidar justo cuando más importa: las
    protecciones de la demo **no** se heredan a la real. `.env.real.example`
@@ -1443,6 +1596,16 @@ de cuánto importan con la cuenta real andando:
     por una en vez de decirlo al inicio. `connect()` sí mira el
     `trade_allowed` de la *terminal*, que es el caso común.
 
+23. **`config.py` acepta números que apagan protecciones, y no lo dice.**
+    `MAX_DAILY_LOSS_PCT=-5`, `nan` o `inf` dejan el freno diario APAGADO
+    (`risk.py` lo mira con `<= 0`) mientras el arranque imprime *"Tope perdida
+    dia: -5.0%"*; `MAX_LOT=nan` deja pasar cualquier lote, porque
+    `volume > max_lot` nunca es verdad. Salió de la revisión de `tct cambiar`,
+    que ahora **no deja escribirlos** (§5), así que para que esto muerda hay
+    que editar el `.env` a mano. El arreglo de fondo es que `load_settings`
+    exija un número finito y no negativo en los límites; no se hizo todavía
+    porque toca el camino de arranque de los dos bots que están operando.
+
 ### Del parser: lo que se midió el 2026-09-16 y NO se tocó
 
 Tres variaciones de formato que el parser lee mal. **Las tres terminan en señal
@@ -1521,6 +1684,23 @@ otro a medias. Sigue sin mirar nadie más:
   la misma persona. Lo que sí tiene son tests de mutación: romper el cableado
   pone 11 tests en rojo, neutralizar la regla en `risk.py` otros 8, y
   desconectar el chequeo de escala otros 6.
+- **El código nuevo de `tct cambiar`, o sea los ARREGLOS de su revisión.** El
+  comando sí se revisó: cuatro revisores independientes lo ejecutaron el 19/09
+  y encontraron 18 cosas, todas arregladas; después una segunda vuelta volvió a
+  correr cada reproducción contra el código arreglado (11 de 14 arreglos
+  confirmados, y 7 hallazgos nuevos que también se arreglaron — el peor:
+  editaba una copia del `.env` y decía "Listo"). Lo que **no** corrió es la otra
+  mitad de esa segunda vuelta: el ataque adversarial al código que se escribió
+  para arreglar, que es justo donde suelen quedar los bugs nuevos (§6, tercera
+  ronda: "arreglar una familia de bugs no la cierra sola"). **Murió por límite
+  de uso semanal**, sin reportar nada. Lo que sí tiene: 62 mutaciones, todas
+  atajadas por algún test (el guion está en el scratchpad de ese chat), y 833
+  tests en verde. Si retomás, eso es lo primero para mandar a revisar: el
+  recorrido de `interpretar()`, el pedido de credenciales, el atribuidor de
+  errores (`_variables_que_nombra`) y `_comentario_al_final`. Y las **dos redes**
+  (`verificar_lectura` y `verificar_asignaciones`) se prueban una sin la otra a
+  propósito: son redundantes en casi todo, y sin eso apagar una no ponía en rojo
+  ningún test.
 - **La investigación del punto como separador de miles** (punto 4 de arriba).
 - **Todo lo de la cuarta ronda**: `informe.py`, `lockfile.py`, la lectura de
   desenlaces, `--esperar-mt5` y la guarda `es_descarte_deliberado`. Salió de
@@ -1680,6 +1860,13 @@ dos secciones que nadie contrastó contra el código.**
   descubre cuando nota que faltan operaciones. Por eso lo que el bot tiene que
   decir va al log como WARNING, por eso el corte de conexión queda como ERROR,
   y por eso el arranque imprime la configuración que va a usar.
+- **Para cambiarle un valor del `.env`, no le dictes líneas para el Bloc de
+  notas: dale un `tct cambiar`.** Lo pidió él el 19/09 (*"para eso no hay un
+  comando que se pueda poner en la consola para cambiarlo solo?"*). Una sola
+  línea para copiar, con todos los cambios de un archivo:
+  `tct cambiar --env-file .env.segunda MAX_OPEN_TRADES=2 MAX_DAILY_LOSS_PCT=5`.
+  Lo que imprime —cada variable con antes → después— es lo que reemplaza al
+  "ya": pedile que te lo pegue. Y después, igual, que reinicie el bot.
 - **Para saber qué tiene configurado, no preguntes: pedile que lo muestre.** En
   la ventana de `consola.bat`, `dir /b .env*` lista qué archivos existen, y
   esto muestra las opciones que importan **sin ninguna contraseña**:
