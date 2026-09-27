@@ -554,6 +554,360 @@ def test_una_password_mal_escrita_no_se_repite_en_pantalla(tmp_path, asignacione
     assert "Fxpro2024" not in motivo and "Nueva" not in motivo
 
 
+LA_LINEA_DE_TELEGRAM = ["TELEGRAM_API_ID=12345678", "TELEGRAM_SOURCE_CHATS=-1004363872187",
+                        "ENABLE_TELEGRAM_CONTROL=false"]
+
+
+def no_muestra(motivo: str, *secretos: str) -> None:
+    """Ningun pedazo de 4 letras o mas de lo escrito como credencial."""
+    for secreto in secretos:
+        for largo in range(4, len(secreto) + 1):
+            for desde in range(len(secreto) - largo + 1):
+                pedazo = secreto[desde:desde + largo]
+                assert pedazo.lower() not in motivo.lower(), f"se ve {pedazo!r}"
+
+
+@pytest.mark.parametrize("valor", [["Zq7abcd9f0123"], ["Fxpro2024", "Nueva"],
+                                   ["Zq7ab=="], ["Mi", "Xk9Wq=Tz82Lp"]])
+def test_el_valor_escrito_despues_de_una_credencial_dice_que_borrar(tmp_path, valor):
+    """27/09, completando la real: se le dijo "sin el =", saco el = y dejo el
+    hash. La palabra suelta no decia que borrar, y no se cambio nada dos veces.
+    Con un = adentro (un token en base64) se mostraba el principio."""
+    ruta = archivo(tmp_path)
+
+    motivo = rechaza(ruta, *LA_LINEA_DE_TELEGRAM, "TELEGRAM_API_HASH", *valor)
+
+    assert "Despues de TELEGRAM_API_HASH quedo escrito su valor" in motivo
+    assert "palabra suelta" not in motivo
+    no_muestra(motivo, *(p for parte in valor for p in parte.split("=") if p))
+
+
+def test_la_linea_corregida_trae_todos_los_cambios_y_se_acepta(tmp_path):
+    """El ejemplo con la credencial sola se copiaba, guardaba solo el hash y
+    decia Listo: el API_ID y los chats quedaban vacios sin que nadie avisara."""
+    ruta = archivo(tmp_path)
+
+    motivo = rechaza(ruta, *LA_LINEA_DE_TELEGRAM, "TELEGRAM_API_HASH", "Zq7abcd9f0123")
+
+    linea = motivo.rsplit("La linea corregida", 1)[1].splitlines()[1].strip()
+    assert linea == (f"tct cambiar --env-file {ruta} " + " ".join(LA_LINEA_DE_TELEGRAM)
+                     + " TELEGRAM_API_HASH")
+    argv = linea.split()[4:]
+    cambiar_variables(ruta, argv, pedir_secreto=lambda _nombre: "el-hash")
+    settings = load_settings(ruta)
+    assert settings.telegram_api_hash == "el-hash"
+    assert str(settings.telegram_api_id) == "12345678"
+    assert settings.enable_telegram_control is False
+
+
+@pytest.mark.parametrize("asignaciones", [
+    ["TELEGRAM_API_HASH=Zq7abcd9f0123"],
+    ["TELEGRAM_API_HASH", "=", "Zq7abcd9f0123"],
+    ["TELEGRAM_API_HASH", "=Zq7abcd9f0123"],
+    ["TELEGRAM_API_HASH=", "Zq7abcd9f0123"],
+])
+def test_una_credencial_con_su_valor_da_la_linea_corregida(tmp_path, asignaciones):
+    """Con espacios alrededor del =, decia "va NOMBRE=VALOR", que para una
+    credencial es justo lo que se rechaza despues."""
+    ruta = archivo(tmp_path)
+
+    motivo = rechaza(ruta, *LA_LINEA_DE_TELEGRAM, *asignaciones)
+
+    assert "NOMBRE=VALOR" not in motivo
+    assert (f"tct cambiar --env-file {ruta} " + " ".join(LA_LINEA_DE_TELEGRAM)
+            + " TELEGRAM_API_HASH") in motivo
+    no_muestra(motivo, "Zq7abcd9f0123")
+
+
+def test_con_otro_error_en_la_linea_no_sugiere_una_linea_corregida(tmp_path):
+    motivo = rechaza(archivo(tmp_path), "MT5_PASSWORD", "Fxpro2024", "MAX_OPEN_TRADES=-1")
+
+    assert "Despues de MT5_PASSWORD" in motivo
+    assert "MAX_OPEN_TRADES no puede ser negativo" in motivo
+    assert "La linea corregida" not in motivo
+
+
+def test_una_credencial_detras_de_otra_se_piden_las_dos(tmp_path):
+    pedidas = []
+
+    def pedir(nombre):
+        pedidas.append(nombre)
+        return "valor"
+
+    cambiar_variables(archivo(tmp_path), ["MT5_PASSWORD", "TELEGRAM_API_HASH"],
+                      pedir_secreto=pedir)
+
+    assert pedidas == ["MT5_PASSWORD", "TELEGRAM_API_HASH"]
+
+
+@pytest.mark.parametrize("delante", [[], ["TELEGRAM_API_ID=12345678"], ["MT5_SERVER=FxPro-MT5"],
+                                     ["ALLOWED_SYMBOLS=XAUUSD"], ["TELEGRAM_API_HASH"]])
+@pytest.mark.parametrize("mal_escrita", ["TELEGRAM_API_HAS", "TELEGRAM_API_HASH:",
+                                         "'TELEGRAM_API_HASH'", "TELEGRAM-API-HASH",
+                                         "TELEGRAM_API_HASH" + chr(0x200B)])
+def test_una_credencial_mal_escrita_con_su_valor_no_lo_muestra(tmp_path, delante, mal_escrita):
+    """Detras de un texto o una lista, el nombre mal escrito y el hash se leian
+    como la otra mitad del valor, y el mensaje los repetia enteros."""
+    motivo = rechaza(archivo(tmp_path), *delante, mal_escrita, "Zq7abcd9f0123")
+
+    assert "quisiste decir TELEGRAM_API_HASH?" in motivo
+    assert "quedo partido" not in motivo
+    no_muestra(motivo, "Zq7abcd9f0123")
+
+
+def test_una_credencial_mal_escrita_despues_de_otra_no_se_toma_como_su_valor(tmp_path):
+    motivo = rechaza(archivo(tmp_path), "TELEGRAM_API_HASH", "MT5_PASWORD")
+
+    assert "quisiste decir MT5_PASSWORD?" in motivo
+    assert "quedo escrito su valor" not in motivo
+    assert motivo.rstrip().endswith("TELEGRAM_API_HASH MT5_PASSWORD")
+
+
+@pytest.mark.parametrize("asignaciones", [
+    ["TELEGRAM_SOURCE_CHATS=-1004363872187", "Zq7abcd9f0123"],
+    ["TELEGRAM_API_ID=12345678", "Zq7abcd9f0123"],
+    ["MT5_LOGIN=516648640", "Zq7abcd9f0123"],
+])
+def test_una_palabra_suelta_detras_de_un_id_o_una_lista_no_es_la_otra_mitad(tmp_path,
+                                                                            asignaciones):
+    """El hash pegado sin su nombre despues de los chats se mostraba, y la
+    sugerencia -que se aceptaba- lo guardaba como un chat mas."""
+    motivo = rechaza(archivo(tmp_path), *asignaciones)
+
+    assert "quedo partido" not in motivo
+    assert "palabra suelta" in motivo
+    no_muestra(motivo, "Zq7abcd9f0123")
+
+
+@pytest.mark.parametrize("asignaciones", [
+    ["ALLOWED_SYMBOLS=XAUUSD,", "BTCUSD"],
+    ["ALLOWED_SYMBOLS=XAUUSD", ",BTCUSD"],
+    ["ALLOWED_SYMBOLS=XAUUSD,", "BTCUSD,", "ETHUSD"],
+])
+def test_una_lista_con_espacios_despues_de_la_coma_sigue_siendo_valor_partido(tmp_path,
+                                                                            asignaciones):
+    motivo = rechaza(archivo(tmp_path), *asignaciones)
+
+    assert "El valor de ALLOWED_SYMBOLS quedo partido" in motivo
+
+
+def test_el_valor_antes_del_nombre_de_la_credencial_dice_que_borrar(tmp_path):
+    ruta = archivo(tmp_path)
+
+    motivo = rechaza(ruta, "Zq7abcd9f0123", "TELEGRAM_API_HASH")
+
+    assert "Antes de TELEGRAM_API_HASH quedo escrita una palabra suelta" in motivo
+    assert f"tct cambiar --env-file {ruta} TELEGRAM_API_HASH" in motivo
+    no_muestra(motivo, "Zq7abcd9f0123")
+
+
+@pytest.mark.parametrize("pegado", [
+    ["MT5_LOGIN=7001234,MT5_PASSWORD=Qz7xWv9k", "TELEGRAM_API_HASH=Qz7xWv9k"],
+    ["MT5_LOGIN=7001234;MT5_PASSWORD=Qz7xWv9k"],
+    ["ALLOWED_SYMBOLS=XAUUSD,MT5_PASSWORD=Qz7xWv9k"],
+    ["TELEGRAM_API_ID=1234567,TELEGRAM_API_HASH=Qz7xWv9k", "MT5_PASSWORD"],
+    ["MT5_SERVER=FxPro-MT5" + chr(0x200B) + "MT5_PASSWORD=Qz7xWv9k", "METAAPI_TOKEN"],
+])
+def test_una_credencial_pegada_con_coma_a_otro_valor_no_se_guarda_ni_se_muestra(tmp_path,
+                                                                                 pegado):
+    """Se guardaba la password adentro de MT5_LOGIN, se mostraba en el antes ->
+    despues, y la linea corregida la repetia."""
+    motivo = rechaza(archivo(tmp_path), *pegado)
+
+    assert "trae pegada" in motivo
+    assert "La linea corregida" not in motivo
+    no_muestra(motivo, "Qz7xWv9k")
+
+
+def test_otro_cambio_pegado_con_coma_se_rechaza(tmp_path):
+    motivo = rechaza(archivo(tmp_path), "MT5_LOGIN=7001234,MAX_LOT=0.02")
+
+    assert "trae pegado otro cambio (MAX_LOT=...)" in motivo
+
+
+@pytest.mark.parametrize("asignaciones", [
+    ["MT5_PASSWORD=Fxpro2024", "DAILY_LOSS=5", "MAX_OPEN_TRADES=2"],
+    ["MT5_PASSWORD", "Fxpro2024", "SERVIDOR=FxPro-MT5-Live"],
+    ["MT5_PASSWORD", "Fxpro2024", "Server=FxPro-MT5-Live"],
+])
+def test_un_cambio_mal_escrito_detras_de_una_password_no_se_pierde_callado(tmp_path,
+                                                                          asignaciones):
+    """La linea corregida lo dejaba afuera, y copiada decia Listo."""
+    motivo = rechaza(archivo(tmp_path), *asignaciones)
+
+    assert "La linea corregida" not in motivo
+    assert "Si era otro cambio" in motivo
+    no_muestra(motivo, "Fxpro2024")
+
+
+def test_una_credencial_con_un_igual_suelto_respeta_el_cambio_de_atras(tmp_path):
+    ruta = archivo(tmp_path)
+
+    motivo = rechaza(ruta, "MT5_PASSWORD", "=", "MT5_LOGIN=7001234")
+
+    assert f"tct cambiar --env-file {ruta} MT5_LOGIN=7001234 MT5_PASSWORD" in motivo
+
+
+def test_la_linea_corregida_duplica_la_barra_antes_de_la_comilla(tmp_path):
+    """`"DATA_DIR=C:\\datos\\"` se lee con la comilla escapada: la linea
+    sugerida no se podia correr."""
+    ruta = archivo(tmp_path)
+    carpeta = "C:\\Users\\Juan Perez\\datos\\"
+
+    motivo = rechaza(ruta, f"DATA_DIR={carpeta}", "MT5_PASSWORD=Fxpro2024")
+
+    assert f'"DATA_DIR={carpeta}\\" MT5_PASSWORD' in motivo
+
+
+def test_con_espacios_alrededor_del_igual_la_cola_no_se_toma_como_password(tmp_path):
+    """`MT5_SERVER = FxPro-MT5 Live MT5_PASSWORD`: "Live" es del servidor, no la
+    password; decir que se borre dejaba el servidor cortado."""
+    motivo = rechaza(archivo(tmp_path), "MT5_SERVER", "=", "FxPro-MT5", "Live", "MT5_PASSWORD")
+
+    assert "'MT5_SERVER' va pegado a su valor" in motivo
+    assert "Antes de MT5_PASSWORD" not in motivo
+
+
+@pytest.mark.parametrize("asignaciones, secreta", [
+    (["TELEGRAM_API_HAS=Qz7xWv9k"], "TELEGRAM_API_HASH"),
+    (["MT5_PASWORD=", "Qz7xWv9k"], "MT5_PASSWORD"),
+    (["MT5_PASSWORD:Qz7x=Wv9k"], "MT5_PASSWORD"),
+    (["METAAPI_TOKEN" + chr(0xA0) + "Qz7xWv9kAb12=="], "METAAPI_TOKEN"),
+    (["api_hash=Qz7xWv9k"], "TELEGRAM_API_HASH"),
+])
+def test_una_credencial_mal_escrita_con_igual_se_dice_de_una_vez(tmp_path, asignaciones,
+                                                                  secreta):
+    """Eran tres o cuatro vueltas, y una decia que pegara la password al nombre."""
+    ruta = archivo(tmp_path)
+
+    motivo = rechaza(ruta, "MAX_OPEN_TRADES=2", *asignaciones)
+
+    assert f"quisiste decir {secreta}?" in motivo
+    assert f"tct cambiar --env-file {ruta} MAX_OPEN_TRADES=2 {secreta}" in motivo
+    no_muestra(motivo, "Qz7xWv9k", "Wv9kAb12")
+
+
+@pytest.mark.parametrize("asignaciones", [
+    ["MT5_SERVER=FxPro-MT5", "api_hash", "Qz7xWv9k0123"],
+    ["MT5_SERVER=FxPro-MT5", "PASSWD", "Qz7xWv9k0123"],
+    ["TELEGRAM_SESSION_NAME=tct", "api_hash", "Qz7xWv9k0123"],
+])
+def test_el_nombre_que_usa_la_gente_para_la_credencial_se_reconoce(tmp_path, asignaciones):
+    """`api_hash` es como lo llama la web de Telegram: se leia como la otra
+    mitad del servidor, y el hash salia entero en pantalla."""
+    motivo = rechaza(archivo(tmp_path), *asignaciones)
+
+    assert "quisiste decir" in motivo and "quedo partido" not in motivo
+    no_muestra(motivo, "Qz7xWv9k0123")
+
+
+@pytest.mark.parametrize("suelta", ["Qz7xW=v9k", "Qz7xWv9k"])
+def test_una_password_delante_de_su_nombre_no_se_muestra(tmp_path, suelta):
+    motivo = rechaza(archivo(tmp_path), "MAX_OPEN_TRADES=2", suelta, "MT5_PASSWORD")
+
+    assert "Antes de MT5_PASSWORD quedo escrita una palabra suelta" in motivo
+    no_muestra(motivo, "Qz7xWv9k")
+
+
+def test_un_nombre_desconocido_con_forma_de_password_no_se_repite(tmp_path):
+    motivo = rechaza(archivo(tmp_path), "Qz7xW=v9k")
+
+    assert "no se muestra" in motivo
+    no_muestra(motivo, "Qz7xW")
+
+
+def test_un_nombre_desconocido_con_forma_de_variable_se_sigue_nombrando(tmp_path):
+    motivo = rechaza(archivo(tmp_path), "daily_loss=5")
+
+    assert "DAILY_LOSS no es una variable que el bot lea" in motivo
+
+
+ZW = chr(0x200B)
+
+
+@pytest.mark.parametrize("asignaciones", [
+    ["MT5_SERVER=FxPro-MT5,api_hash=Qz7xWv9k0123", "MT5_PASSWORD=Qz7xWv9k0123"],
+    ["MT5_LOGIN=7001234,password=Qz7xWv9k0123"],
+    ["ALLOWED_SYMBOLS=XAUUSD,MT5_PASWORD=Qz7xWv9k0123"],
+    ["MAX_OPEN_TRADES=2,password=Qz7xWv9k0123"],
+    ["TELEGRAM_API_ID=12345678,api_hash=Qz7xWv9k0123"],
+    ["MT5_SERVER=FxPro-MT5" + chr(0xA0) + "password" + chr(0xA0) + "Qz7xWv9k0123"],
+])
+def test_una_credencial_con_otro_nombre_pegada_a_un_valor_no_se_guarda(tmp_path, asignaciones):
+    """`FxPro-MT5,api_hash=...` se guardaba como servidor, y la linea corregida
+    lo repetia: copiada, decia Listo."""
+    motivo = rechaza(archivo(tmp_path), *asignaciones)
+
+    assert "trae pegada" in motivo
+    assert "La linea corregida" not in motivo
+    no_muestra(motivo, "Qz7xWv9k0123")
+
+
+@pytest.mark.parametrize("nombre", [ZW + "MT5_PASSWORD", "MT5_" + ZW + "PASSWORD",
+                                    "contraseña", "Contraseña:", "apihash", "pwd",
+                                    "MT5_PASSWORD.Qz7x"])
+def test_mas_formas_de_escribir_una_credencial_detras_de_un_texto(tmp_path, nombre):
+    """Un invisible pegado desde un chat, la enie, o el nombre junto: se leian
+    como la otra mitad del servidor, y la password salia entera."""
+    motivo = rechaza(archivo(tmp_path), "MT5_SERVER=FxPro-MT5", nombre, "Qz7xWv9k0123")
+
+    assert "quedo partido" not in motivo
+    no_muestra(motivo, "Qz7xWv9k0123")
+
+
+@pytest.mark.parametrize("asignaciones", [
+    ["MT5_SERVER=FxPro-MT5", "Qz7xWv9k0123", "MT5_PASSWORD="],
+    ["QZ7X_WV9K0123=X", "MT5_PASSWORD="],
+    ["MAX_OPEN_TRADES=-1", "QZ7XWV9K0123=a", "MT5_PASSWORD"],
+])
+def test_una_password_delante_de_su_nombre_con_igual_no_se_muestra(tmp_path, asignaciones):
+    motivo = rechaza(archivo(tmp_path), *asignaciones)
+
+    no_muestra(motivo, "Qz7xWv9k0123")
+
+
+@pytest.mark.parametrize("asignaciones", [
+    ["TELEGRAM_SOURCE_CHATS=-1004363872187", "-1009876543210", "TELEGRAM_API_HASH"],
+    ["ALLOWED_SYMBOLS=XAUUSD", "BTCUSD", "MT5_PASSWORD"],
+])
+def test_una_lista_sin_coma_delante_de_una_credencial_no_da_una_linea_que_la_corte(
+        tmp_path, asignaciones):
+    """El segundo elemento se tomaba como el valor de la credencial, y la linea
+    corregida -aceptada- guardaba la lista con uno solo."""
+    motivo = rechaza(archivo(tmp_path), "TELEGRAM_API_ID=12345678", *asignaciones)
+
+    assert "La linea corregida" not in motivo
+    assert "separada por comas" in motivo
+    assert asignaciones[1] not in motivo
+
+
+@pytest.mark.parametrize("escrito, quiso", [
+    ("MAX-OPEN-TRADES=2", "MAX_OPEN_TRADES"), ("MaxOpenTrades=2", "MAX_OPEN_TRADES"),
+    ("MT5.SERVER=FxPro", "MT5_SERVER"),
+])
+def test_un_nombre_con_guiones_o_puntos_sugiere_la_variable(tmp_path, escrito, quiso):
+    motivo = rechaza(archivo(tmp_path), escrito)
+
+    assert f"Quisiste decir {quiso}?" in motivo
+
+
+def test_la_palabra_suelta_dice_como_se_escribe_una_credencial(tmp_path):
+    motivo = rechaza(archivo(tmp_path), "MAX_OPEN_TRADES=2", "Fxpro2024Nueva")
+
+    assert "palabra suelta" in motivo and "borrala" in motivo
+    assert "TELEGRAM_API_HASH" in motivo and "sin = y sin el valor" in motivo
+    assert "quisiste decir" not in motivo
+
+
+def test_un_nombre_de_credencial_mal_escrito_sugiere_el_bueno(tmp_path):
+    ruta = archivo(tmp_path)
+
+    motivo = rechaza(ruta, "TELEGRAM_API_HAS")
+
+    assert "quisiste decir TELEGRAM_API_HASH?" in motivo
+    assert motivo.rstrip().endswith(f"tct cambiar --env-file {ruta} TELEGRAM_API_HASH")
+
+
 def test_con_espacios_alrededor_del_igual_lo_dice(tmp_path):
     motivo = rechaza(archivo(tmp_path), "MAX_OPEN_TRADES", "=", "2")
 
@@ -829,14 +1183,27 @@ def test_al_rechazar_una_copia_dice_cual_era_el_bueno(tmp_path, copia, sugerido)
     assert str(tmp_path / sugerido) in motivo
 
 
-def test_el_valor_partido_no_se_come_la_password_que_venia_atras(tmp_path):
-    """La linea sugerida se copia tal cual: con MT5_PASSWORD adentro del valor,
-    dejaba la cuenta real con un servidor inventado y sin pedir la password."""
+@pytest.mark.parametrize("suelto", ["Live", "Tr4de!Real"])
+def test_lo_suelto_delante_de_una_credencial_no_se_muestra_ni_se_pega_al_valor(tmp_path,
+                                                                             suelto):
+    """Con MT5_PASSWORD adentro del valor, la sugerencia dejaba la cuenta real
+    con un servidor inventado y sin pedir la password. Y lo suelto puede ser la
+    password misma escrita delante del nombre: el consejo de las comillas la
+    mostraba, y copiado la guardaba como parte del servidor."""
     motivo = rechaza(archivo(tmp_path, REAL_SIN_CREDENCIALES, ".env.real"),
-                     "MT5_LOGIN=7001234", "MT5_SERVER=FxPro-MT5", "Live", "MT5_PASSWORD")
+                     "MT5_LOGIN=7001234", "MT5_SERVER=FxPro-MT5", suelto, "MT5_PASSWORD")
+
+    assert "Antes de MT5_PASSWORD quedo algo suelto" in motivo
+    assert "entero entre comillas DOBLES" in motivo
+    assert suelto not in motivo
+    assert f'MT5_SERVER="FxPro-MT5 {suelto}"' not in motivo
+
+
+def test_un_servidor_con_espacios_sin_credencial_atras_sigue_con_el_consejo(tmp_path):
+    motivo = rechaza(archivo(tmp_path, REAL_SIN_CREDENCIALES, ".env.real"),
+                     "MT5_SERVER=FxPro-MT5", "Live", "MT5_LOGIN=7001234")
 
     assert 'MT5_SERVER="FxPro-MT5 Live"' in motivo
-    assert "MT5_PASSWORD" not in motivo.split("MT5_SERVER=\"")[1]
 
 
 def test_la_red_de_los_valores_sola_ataja_el_pedazo_suelto(tmp_path, monkeypatch):
@@ -1029,6 +1396,59 @@ def test_una_opcion_desconocida_en_cambiar_se_rechaza(tmp_path):
     with pytest.raises(SystemExit):
         correr("cambiar", "MAX_OPEN_TRADES=2", "--env-file", str(ruta), "--forzar")
     assert ruta.read_bytes() == SEGUNDA.encode("utf-8")
+
+
+def test_una_password_que_empieza_con_guion_no_sale_en_el_error(tmp_path, capsys):
+    ruta = archivo(tmp_path)
+
+    with pytest.raises(SystemExit):
+        correr("cambiar", "--env-file", str(ruta), "MT5_PASSWORD", "-Fxpro2024")
+
+    salida = capsys.readouterr()
+    assert "Fxpro" not in salida.out + salida.err
+    assert "no se muestra" in salida.err
+    assert ruta.read_bytes() == SEGUNDA.encode("utf-8")
+
+
+@pytest.mark.parametrize("opcion", ["-v=Qz7xWv9k", "--v=Qz7xWv9k", "--e=Qz7xWv9k",
+                                    "--verbose=Qz7xWv9k", "-v=Qz7x'Wv9k", "--Qz7x Wv9k"])
+def test_una_password_con_forma_de_opcion_no_sale_en_el_error(tmp_path, capsys, opcion):
+    """argparse la repetia (-v=) o la tomaba como el archivo (--e= abrevia
+    --env-file) y decia "No existe <password>"."""
+    ruta = archivo(tmp_path)
+
+    with pytest.raises(SystemExit):
+        correr("cambiar", "--env-file", str(ruta), "MT5_PASSWORD", opcion)
+
+    salida = capsys.readouterr()
+    assert "Qz7x" not in salida.out + salida.err
+    assert ruta.read_bytes() == SEGUNDA.encode("utf-8")
+
+
+@pytest.mark.parametrize("opcion", [["--env", "{ruta}"], ["--env={ruta}"]])
+def test_una_opcion_abreviada_dice_que_va_entera(tmp_path, capsys, opcion):
+    ruta = archivo(tmp_path)
+
+    with pytest.raises(SystemExit):
+        correr("cambiar", *[o.format(ruta=ruta) for o in opcion], "MAX_OPEN_TRADES=2")
+
+    assert "van escritas enteras: --env-file" in capsys.readouterr().err
+    assert ruta.read_bytes() == SEGUNDA.encode("utf-8")
+
+
+@pytest.mark.parametrize("asignaciones", [
+    ["TELEGRAM_SOURCE_CHATS=-1001234567890,", "-1009876543210"],
+    ["MT5_PATH=C:\Program", "Files\FxPro", "-", "MetaTrader", "5\terminal64.exe"],
+])
+def test_un_guion_suelto_de_un_valor_partido_sigue_con_el_consejo(tmp_path, capsys,
+                                                                   asignaciones):
+    """Un chat -100... de una lista, o el guion de "FxPro - MetaTrader 5": no
+    son opciones, son la otra mitad de un valor sin comillas."""
+    ruta = archivo(tmp_path)
+
+    assert correr("cambiar", "--env-file", str(ruta), *asignaciones) == 1
+
+    assert "quedo partido" in capsys.readouterr().out
 
 
 def test_la_ayuda_dice_lo_de_las_comillas_y_las_passwords(capsys):

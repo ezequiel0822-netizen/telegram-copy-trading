@@ -5,13 +5,14 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-27 · v2.7.0 · 903 tests · el último commit que describe
-es `f4983e6`, más este mismo cambio
+Actualizado: 2026-09-27 · v2.7.0 · 1007 tests · el último commit que describe
+es `7f39c81`, más este mismo cambio
 
-**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-22"**, al
-principio de §2: es dónde quedó parado el usuario, qué tiene configurado en su
-PC, qué decisiones esperan su respuesta y cuál es el próximo paso. Después §5 y
-§9, que son las que evitan romper algo que costó caro.
+**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-27"**, al
+principio de §2: es dónde quedó parado el usuario, qué le falta a `.env.real` y
+cuál es el próximo paso. Después "Estado al 2026-09-22", que tiene la
+configuración de las tres instancias, y §5 y §9, que son las que evitan romper
+algo que costó caro.
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
 
 ---
@@ -37,7 +38,103 @@ Eso viene del pedido original y sigue vigente.
 
 ## 2. Dónde está el usuario ahora mismo
 
-### Estado al 2026-09-22 — leer esto primero
+### Estado al 2026-09-27 — leer esto primero
+
+**Dónde quedó:** completando `.env.real`, todavía **sin fondear**. Ya tiene
+lote 0.05, sin freno diario, 5 señales por día y `MT5_PATH`. Al revisarlo
+apareció que **le faltaba el bloque de Telegram entero**: `TELEGRAM_API_ID` y
+`TELEGRAM_SOURCE_CHATS` vacíos, `ENABLE_TELEGRAM_CONTROL=true` (él había
+elegido apagarlo) y el hash sin confirmar. Sin eso el bot real arranca y no
+escucha el canal. El nombre de sesión sí está bien
+(`telegram_copy_trading_real`, distinto al de los otros dos).
+
+Lo que tiene que correr, en `consola.bat`. El API_ID y el hash son de su cuenta
+de Telegram, los mismos de los otros dos bots: salen de
+`findstr /b "TELEGRAM_API_ID TELEGRAM_API_HASH" .env`.
+
+```
+tct cambiar --env-file .env.real TELEGRAM_API_ID=<el numero> TELEGRAM_SOURCE_CHATS=-1004363872187 ENABLE_TELEGRAM_CONTROL=false TELEGRAM_API_HASH
+```
+
+**Le falló dos veces, y no era un bug del código.** Primero lo escribió con
+`TELEGRAM_API_HASH=<valor>` (se rechaza a propósito: las credenciales no van en
+la línea). Se le dijo *"sin el `=` y sin el valor"*, y lo más probable es que
+sacara solo el `=`: `TELEGRAM_API_HASH <valor>` da exactamente el
+*"Hay una palabra suelta que no es NOMBRE=VALOR"* que pegó. Reproducido: ese
+mensaje sale solo con el valor escrito después del nombre, con el valor solo o
+con el nombre mal escrito; con el nombre solo, el comando pide el hash.
+
+**Lo que se cambió en `tct cambiar` por eso** (tres rondas de revisores que
+atacaron el mensaje ejecutándolo):
+
+- Una credencial escrita con su valor —después del nombre, con `=`, con
+  espacios alrededor del `=`, delante del nombre, o con el nombre mal escrito—
+  tiene un mensaje propio que dice **qué borrar**, y nunca muestra el valor.
+- Si eso es lo único mal, el mensaje termina con **la línea entera
+  corregida**, con todos los otros cambios que había escrito. Antes el ejemplo
+  traía solo la credencial: copiado tal cual, guardaba el hash, dejaba
+  `TELEGRAM_API_ID` vacío y decía "Listo".
+- Una palabra suelta detrás de un id (`TELEGRAM_API_ID`, `MT5_LOGIN`) o de una
+  lista sin coma en el borde ya no se toma como "valor partido". Antes el hash
+  pegado detrás de los chats se mostraba entero, y la sugerencia —que se
+  aceptaba— lo guardaba como un chat más.
+- Una credencial pegada a otro valor con coma, punto y coma o un carácter
+  invisible (`MT5_LOGIN=7001234,MT5_PASSWORD=...`) se rechaza sin mostrarla.
+  Antes se guardaba **adentro de `MT5_LOGIN`** y el comando decía "Listo".
+- Se reconocen los nombres que usa la gente: `api_hash` (como lo llama la web
+  de Telegram), `password`, `passwd`, `contraseña`, `token`; y el nombre
+  aunque traiga un carácter invisible pegado desde un chat. Ninguno de esos se
+  repite en pantalla, tampoco pegado con coma dentro de otro valor.
+- Una lista escrita con espacio en vez de coma delante de una credencial
+  (`ALLOWED_SYMBOLS=XAUUSD BTCUSD MT5_PASSWORD`) no da línea corregida: lo
+  suelto puede ser el segundo elemento, y la línea lo perdía.
+- `MT5_SERVER=FxPro-MT5 <algo> MT5_PASSWORD` ya no sugiere
+  `MT5_SERVER="FxPro-MT5 <algo>"`: ese `<algo>` puede ser la password escrita
+  delante del nombre, y copiado la guardaba en el servidor. Ahora dice que o el
+  servidor va entero entre comillas, o eso se borra, sin repetirlo.
+- Un valor que empieza con `-` ya no sale en el error de argparse, y
+  `--e=<algo>` ya no se toma como `--env-file`: en `tct cambiar` las opciones
+  van escritas enteras, y si no, lo dice.
+
+Cómo se verificó, para la próxima vez que se toque esto: además de los tests,
+una matriz de ~37.000 líneas legítimas comparada contra la versión anterior
+(0 diferencias) y un fuzz donde la versión nueva nunca acepta algo que la
+anterior rechazaba. Esos scripts vivían en el scratchpad de la sesión del
+27/09 y no quedaron en el repo.
+
+**Un diagnóstico equivocado que NO hay que repetir.** El chat anterior miró el
+venv de la máquina de desarrollo, vio un `main` local viejo (`f4983e6`) y
+concluyó que los bots del usuario corrían el código del 19/09 y que nada del
+22/09 en adelante había llegado a `main`. Las dos cosas eran falsas: **son dos
+máquinas distintas**, y GitHub `main` ya tenía todo (`7f39c81`). Él lo confirmó
+en su ventana: su `tct` sale de
+`C:\Users\Administrator\Documents\Copytrading\telegram-copy-trading-main\src\tct\`,
+su propia carpeta, que se actualiza con `git pull`. Ese traspaso quedó en un
+commit (`710d86e`) de otra rama que no se subió; no mergearlo.
+
+**Su carpeta está en `7f39c81`** (lo confirmó con `git log --oneline -1` el
+27/09): tiene la auditoría del 26/09 y el filtro que mira el lado. **Lo que
+falta confirmar es que reinició los dos bots demo después del `git pull`**: el
+código se carga al arrancar, y una ventana abierta desde antes sigue con el
+viejo. Se le pidió cerrarlas y abrirlas de nuevo.
+
+**La lista para el día que fondee**, completa:
+
+1. Fondear.
+2. Cerrar el bot de FxPro demo (`iniciar_segunda.bat`).
+3. Loguear MetaTrader de FxPro en la cuenta real.
+4. `tct mt5 --env-file .env.real`: apalancamiento y margen con el dinero
+   adentro. Si el oro dice `NO ENTRA NINGUNA`, se para acá.
+5. `tct cambiar --env-file .env.real MT5_LOGIN=<login> "MT5_SERVER=<servidor>" MT5_PASSWORD`
+   (la password, sin `=` y sin valor: la pide aparte).
+6. `tct chats --env-file .env.real`: la sesión de Telegram es nueva, así que
+   pide el código. No se puede antes, porque el comando exige el `.env`
+   completo.
+7. `tct check --env-file .env.real`.
+8. `tct probar --operar --env-file .env.real` (pide la clave de arranque).
+9. `iniciar_real.bat`. `iniciar_segunda.bat` no se abre más.
+
+### Estado al 2026-09-22
 
 **El experimento ARRANCÓ.** El 22/09 a las 02:16 quedó corriendo la instancia de
 FxPro con la configuración nueva, después de resolver el problema de margen que
@@ -57,7 +154,7 @@ arrancar**, así que cualquier cambio empieza a valer en el próximo arranque.
 
 | | `.env` — MetaQuotes demo | `.env.segunda` — FxPro demo | `.env.real` — FxPro real |
 |---|---|---|---|
-| Cuenta | ~98.300 | **500**, apalancamiento **ilimitado** desde el 22/09 | #516648640, **sin fondear**; solo le faltan las credenciales |
+| Cuenta | ~98.300 | **500**, apalancamiento **ilimitado** desde el 22/09 | #516648640, **sin fondear**; le faltan las credenciales de MT5 y el bloque de Telegram (27/09) |
 | Lote / posiciones por señal | 0.01 / 1 | **0.05** / 1 desde el 25/09 | **0.05** / 1 |
 | `MAX_SPREAD_FROM_ENTRY_PCT` | **0.5** — el control | 0.05 | 0.05 |
 | Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | **30 / 100 / 100** desde el 22/09 | **2 / 2 / 5** |
@@ -321,14 +418,13 @@ El detalle y la regla, en §9.
 `TRADING_MODE=LIVE` y `ALLOW_LIVE_TRADING=true` pero **ninguna credencial de
 MT5**, y `tct check` lo rechaza con el error nuevo de §6 — que es lo correcto:
 con el código anterior ese mismo archivo habría arrancado y operado la cuenta
-que encontrara. **Se copió de la plantilla VIEJA**, así que tiene números que
-ya no son los decididos: `MAX_DAILY_LOSS_PCT=3` (lo decidido es **5**) y
-`MAX_SIGNALS_PER_DAY=5` (lo decidido es **10**). El `INSTANCE_NAMES` ya lo
-corrigió él (`demo,fxpro,real`). Los dos números los corrige el `tct cambiar`
-del punto 1 de arriba.
+que encontrara. Salió de la plantilla VIEJA; los números ya se corrigieron
+con `tct cambiar` (lo vigente, en la tabla de arriba), y el 27/09 apareció que
+tampoco tenía el bloque de Telegram ("Estado al 2026-09-27").
 
-**El plan para pasar a real, tal como lo entendió el usuario:** hoy MetaQuotes
-demo + FxPro demo. Cuando fondee:
+**El plan para pasar a real, tal como lo entendió el usuario** (la versión
+vigente, con el paso de Telegram, está en "Estado al 2026-09-27"): hoy
+MetaQuotes demo + FxPro demo. Cuando fondee:
 
 1. Cerrar el bot de FxPro demo (`iniciar_segunda.bat`).
 2. **Con ese bot cerrado**, loguear MetaTrader de FxPro en la cuenta real y
@@ -474,7 +570,10 @@ es **reemplazar la demo de FxPro**, no agregar una tercera instancia.
 - `tct mt5` muestra ahora el **apalancamiento**, que es lo que decide cuántas
   posiciones entran en una cuenta chica.
 
-**Las decisiones, tomadas el 2026-09-15.** Ya están en `.env.real.example`:
+**Las decisiones, tomadas el 2026-09-15.** Ya están en `.env.real.example`.
+**El 27/09 cambiaron dos**: sin freno diario y 5 señales por día, con lote
+0.05 (§2, "Los primeros datos del experimento"). La tabla queda como el
+razonamiento de entonces:
 
 | | Elegido | Por qué |
 |---|---|---|
@@ -1241,6 +1340,18 @@ siempre, sin mensaje. Los comandos que sugiere van **entre comillas si la ruta
 tiene espacios**, porque la carpeta del proyecto se llama "telegram copy
 trading".
 
+Y la regla que salió del 27/09 (§2): **cuando el mensaje sugiere una línea,
+tiene que ser la línea ENTERA**, con todos los cambios que el usuario había
+escrito, no un ejemplo con la credencial sola. Él copia lo que ve: con el
+ejemplo corto se guardaba el hash, se perdía el resto de la línea y el comando
+decía "Listo". Y **"sin `=`" no alcanza como instrucción**: le sacó el `=` y
+dejó el valor. El mensaje tiene que decir *"borralo"*. Lo que sigue a una
+credencial suelta (o a un nombre de credencial mal escrito) se trata como su
+valor y no se muestra nunca, aunque tenga un `=` adentro. Y el "valor partido"
+no se ofrece detrás de un id (`TELEGRAM_API_ID`, `MT5_LOGIN`) ni de una lista
+sin coma en el borde: ahí lo suelto es casi siempre una credencial pegada en el
+lugar equivocado.
+
 **`tct cambiar` — solo edita un `.env` que algún bot lea.** Lo peor que puede
 hacer este comando es editar **una copia**: con TAB, al lado de `.env.real`
 aparecen el respaldo (`.env.real.bak`), el `.env.txt` que deja el "Guardar
@@ -1777,12 +1888,14 @@ Ordenado por lo que más importa antes de dinero real.
    mismo precio —el `10025`, que cada bróker puede contestar distinto— y cerró.
    El *filling mode* de FxPro es compatible.
 3. **Terminar el paso a la cuenta real de FxPro.** El código está; falta que
-   el usuario fondee. Los pasos y lo que hay que corregir en su `.env.real`
-   (que salió de la plantilla vieja) están en **§2, "Estado al 2026-09-22"**.
+   el usuario complete Telegram en `.env.real` y fondee. Los pasos, en orden,
+   están en **§2, "Estado al 2026-09-27"**.
 
    Y lo de siempre, que es fácil de olvidar justo cuando más importa: las
-   protecciones de la demo **no** se heredan a la real. `.env.real.example`
-   trae los valores decididos (5%, 10 señales), pero su `.env.real` es anterior.
+   protecciones de la demo **no** se heredan a la real. Su `.env.real` salió
+   de la plantilla vieja y ya se corrigió a mano con `tct cambiar`: lo vigente
+   es sin freno diario y 5 señales por día (27/09), no el 5% y las 10 que trae
+   `.env.real.example`.
 4. **Punto como separador de miles.** `"DAX SELL 18.500"` → 18.5. Los tres
    números escalan juntos, así que la geometría no lo nota. El contraste con
    el mercado ahora lo ataja *si el bróker cotiza ese símbolo*, pero eso es una

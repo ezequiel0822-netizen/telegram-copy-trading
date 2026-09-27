@@ -59,7 +59,8 @@ import math
 import os
 import re
 import sys
-from collections.abc import Callable, Iterator
+import unicodedata
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -506,6 +507,12 @@ def _problema_con(nombre: str, valor: str, ruta: Path) -> str | None:
         pista = f" Quisiste decir {parecida[0]}?" if parecida else ""
         return f"{nombre} no es una variable que el bot lea.{pista}"
 
+    # Antes que cualquier otro control: esos repiten el valor en pantalla.
+    secreta = _credencial_adentro(valor)
+    if secreta:
+        return (f"El valor de {nombre} trae pegada {secreta} (no se muestra): cada cambio\n"
+                "    va separado por un espacio comun, y " + _sin_valor(secreta))
+
     if not valor:
         return None  # vacio es "el valor por defecto", que el bot sabe leer
     if tipo in ("int", "float"):
@@ -533,7 +540,12 @@ def _problema_con(nombre: str, valor: str, ruta: Path) -> str | None:
                 "    un valor termina en una barra invertida justo antes de la comilla de\n"
                 "    cierre: la consola se come la comilla y todo lo que sigue. Sacale la\n"
                 "    barra del final.")
-    pegado = re.search(r"\s([A-Za-z_][A-Za-z0-9_]*)=", valor)
+    pegado = re.search(r"\s([A-Za-z_][A-Za-z0-9_]*)=", valor) or next(
+        # Con coma o punto y coma, solo si lo de despues es una variable y no
+        # es una URL, que puede traer `;data_dir=` en la consulta.
+        # `MT5_LOGIN=7001234,MAX_LOT=0.02` es un error.
+        (m for m in _OTRO_CAMBIO_CON_COMA.finditer(valor)
+         if m.group(1).upper() in VARIABLES_DEL_ENV and "://" not in valor), None)
     if pegado:
         return (f"El valor de {nombre} trae pegado otro cambio ({pegado.group(1)}=...): van\n"
                 "    separados por un espacio comun. Escribilos de nuevo a mano, sin pegar.")
@@ -547,40 +559,280 @@ def _valor_partido(nombre: str, valor: str, sueltas: list[str]) -> str:
             f'        {nombre}="{completo}"')
 
 
+# Los caracteres que no se ven y llegan pegando desde un chat o una web. Con
+# chr(), por lo mismo que BOM.
+_INVISIBLES = "".join(map(chr, (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)))
+_OTRO_CAMBIO_CON_COMA = re.compile(f"[,;{_INVISIBLES}]([A-Za-z_][A-Za-z0-9_]*)=")
+# Donde termina un nombre y empieza lo que puede ser una password: un nombre
+# no tiene espacios, =, :, comas, puntos ni barras.
+_FIN_DEL_NOMBRE = re.compile(f"[\\s=:,;./\\\\{_INVISIBLES}]+")
+_SIN_INVISIBLES = str.maketrans("", "", _INVISIBLES)
+_SOLO_EL_NOMBRE = re.compile(r"[A-Za-z0-9_-]+")
+
+# Como la llama la gente, no el .env. `api_hash` es el nombre que usa la web de
+# Telegram para ese valor. Van sin tildes ni enie: se sacan antes de comparar.
+_OTROS_NOMBRES_DE_CREDENCIALES = {
+    "API_HASH": "TELEGRAM_API_HASH", "HASH": "TELEGRAM_API_HASH",
+    "TELEGRAM_HASH": "TELEGRAM_API_HASH",
+    "PASSWORD": "MT5_PASSWORD", "PASSWD": "MT5_PASSWORD", "PASS": "MT5_PASSWORD",
+    "PWD": "MT5_PASSWORD", "MT5_PASS": "MT5_PASSWORD", "PASSWORD_MT5": "MT5_PASSWORD",
+    "CONTRASENA": "MT5_PASSWORD", "CONTRASENA_MT5": "MT5_PASSWORD",
+    "TOKEN": "METAAPI_TOKEN", "API_TOKEN": "METAAPI_TOKEN",
+}
+
+# Textos que no pueden tener espacios: un numero de cuenta, un id. Lo que
+# sigue suelto no es la otra mitad del valor, y no se repite en pantalla (un
+# hash pegado despues de TELEGRAM_API_ID se mostraba entero).
+_SIN_ESPACIOS = frozenset({"TELEGRAM_API_ID", "MT5_LOGIN", "METAAPI_ACCOUNT_ID",
+                           "TELEGRAM_CONTROL_CHAT"})
+
+
+def _sin_tildes(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", texto)
+                   if not unicodedata.combining(c))
+
+
+def _primeras_palabras(texto: str) -> list[str]:
+    """El nombre que `texto` trae adelante, limpio, en sus lecturas posibles.
+
+    Un caracter invisible puede separar el nombre de la password
+    (`MT5_PASSWORD<invisible>abc`) o estar metido en el nombre (`MT5_<invisible>
+    PASSWORD`): se prueba cortando ahi y sacandolo. Lo de despues no se mira.
+    """
+    texto = _sin_tildes(texto).strip().strip(_INVISIBLES).strip().strip("'\"")
+    palabras = []
+    for variante in (texto, texto.translate(_SIN_INVISIBLES)):
+        primera = _FIN_DEL_NOMBRE.split(variante.strip(), maxsplit=1)[0]
+        limpio = "".join(_SOLO_EL_NOMBRE.findall(primera)).upper().replace("-", "_")
+        if limpio and limpio not in palabras:
+            palabras.append(limpio)
+    return palabras
+
+
+def _a_que_variable_se_parece(texto: str, candidatas: Iterable[str]) -> str | None:
+    """La variable que `texto` quiso nombrar, o None. Nunca devuelve `texto`."""
+    candidatas = list(candidatas)
+    for limpio in _primeras_palabras(texto):
+        if len(limpio) < 4 and limpio not in candidatas:
+            continue
+        if limpio in candidatas:
+            return limpio
+        parecida = difflib.get_close_matches(limpio, candidatas, n=1, cutoff=0.8)
+        if parecida:
+            return parecida[0]
+    return None
+
+
+def _a_que_credencial_se_parece(texto: str) -> str | None:
+    parecida = _a_que_variable_se_parece(texto, [*SECRETAS, *_OTROS_NOMBRES_DE_CREDENCIALES])
+    return _OTROS_NOMBRES_DE_CREDENCIALES.get(parecida, parecida) if parecida else None
+
+
+def _credencial_adentro(valor: str) -> str | None:
+    """La credencial que quedo pegada dentro de otro valor, si hay una.
+
+    Con su nombre exacto en cualquier lugar, o con otro nombre (`api_hash`,
+    `password`, uno mal escrito) despues de un espacio, una coma o un punto y
+    coma: `FxPro-MT5,api_hash=...` guardaba el hash como parte del servidor.
+    """
+    encontrada = re.search("|".join(sorted(SECRETAS)), valor, re.IGNORECASE)
+    if encontrada:
+        return encontrada.group(0).upper()
+    pedazos = re.split(f"[\\s,;{_INVISIBLES}]+", valor)
+    for numero, pedazo in enumerate(pedazos):
+        # El primero es el valor mismo: solo cuenta si trae un = o un : adentro.
+        if numero == 0 and not re.search("[=:]", pedazo):
+            continue
+        if (secreta := _a_que_credencial_se_parece(pedazo)) is not None:
+            return secreta
+    return None
+
+
+def _es_otro_cambio(texto: str) -> bool:
+    """Si `texto` empieza con el nombre de una variable (bien o mal escrito)."""
+    return (_a_que_variable_se_parece(texto, VARIABLES_DEL_ENV) is not None
+            or _a_que_credencial_se_parece(texto) is not None)
+
+
+def _tiene_forma_de_cambio(texto: str) -> bool:
+    """`DAILY_LOSS=5` o `Server=FxPro` si; `Xk9Wq=Tz82` (un pedazo de password) no."""
+    nombre, igual, _ = texto.partition("=")
+    nombre = nombre.strip()
+    return (bool(igual) and _NOMBRE.fullmatch(nombre) is not None
+            and ("_" in nombre or nombre.isupper() or nombre.islower()
+                 or (nombre.isalpha() and nombre.istitle())))
+
+
+def _se_puede_mostrar_como_nombre(escrito: str) -> bool:
+    """Un nombre desconocido se repite solo si tiene forma de variable: palabras
+    sin numeros unidas por guion bajo (MT5 aparte). Una password con un =
+    adentro (`Qz7xW=v9k`, `FXPRO_2024=x`) tambien llega como NOMBRE=VALOR."""
+    return (re.fullmatch(r"[A-Za-z]+(?:_(?:[A-Za-z]+|MT5))*|MT5(?:_[A-Za-z]+)+", escrito)
+            is not None and ("_" in escrito or escrito.isupper()))
+
+
+def _variable_que_quiso_decir(escrito: str) -> str | None:
+    """Para un nombre que no se muestra: `MaxOpenTrades`, `MAX-LOT`, `MT5.SERVER`."""
+    separado = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", escrito)
+    return _a_que_variable_se_parece(re.sub(r"[^A-Za-z0-9]+", "_", separado),
+                                     VARIABLES_DEL_ENV)
+
+
+def _es_la_otra_mitad(nombre: str, valor: str, suelta: str) -> bool:
+    """Si `suelta` puede ser el resto de un `NOMBRE=VALOR` con espacios."""
+    if nombre in _SIN_ESPACIOS:
+        return False
+    if VARIABLES_DEL_ENV[nombre] == "list":
+        # Una lista se separa con comas: `XAUUSD, BTCUSD` llega partido, y la
+        # coma queda en el borde. Sin coma no es una lista partida.
+        return valor.rstrip().endswith(",") or suelta.lstrip().startswith(",")
+    return True
+
+
+_CARACTERES_DE_CMD = re.compile(f'["%^&|<>{_INVISIBLES}]')
+
+
+def _linea_corregida(ruta: Path, pedidos: dict[str, str], a_pedir: list[str]) -> str | None:
+    """La linea del comando con lo que estaba bien, lista para copiar.
+
+    None si algun valor no se puede escribir en cmd tal cual (un %, una
+    comilla, un caracter invisible): la consola lo cambiaria, y es mejor no
+    sugerir nada.
+    """
+    partes = []
+    for nombre, valor in pedidos.items():
+        if _CARACTERES_DE_CMD.search(valor) or "=" in valor or _credencial_adentro(valor):
+            return None
+        parte = f"{nombre}={valor}"
+        if re.search(r"\s", valor):
+            # Entre comillas, una barra justo antes de la de cierre la escapa:
+            # se duplica, que es como la lee cualquier programa de Windows.
+            final = len(parte) - len(parte.rstrip(_BARRA))
+            parte = f'"{parte}{_BARRA * final}"'
+        partes.append(parte)
+    return f"tct cambiar --env-file {entre_comillas(ruta)} " + " ".join([*partes, *a_pedir])
+
+
+def _suelto_delante(anterior: str, secreta: str) -> str:
+    return (f"Antes de {secreta} quedo algo suelto (no se muestra): o es parte del valor\n"
+            f"    de {anterior}, o es el valor de {secreta}. Si es de {anterior}, escribilo\n"
+            f'    entero entre comillas DOBLES:  "{anterior}=el valor completo" (una lista va\n'
+            f"    separada por comas). Si era el de {secreta}, borralo: " + _sin_valor(secreta))
+
+
+def _sin_valor(secreta: str) -> str:
+    return (f"{secreta} va solo, sin = y sin el valor: el comando te lo pide aparte,\n"
+            "    sin mostrarlo (escrito en la linea, la consola le cambia caracteres\n"
+            "    como ^ & % sin avisar).")
+
+
 def interpretar(asignaciones: list[str], ruta: Path) -> tuple[dict[str, str], list[str]]:
     """Lo que se pidio: ({"MAX_OPEN_TRADES": "2", ...}, [credenciales a pedir]).
 
     Junta TODOS los problemas antes de rechazar: quien escribio cinco cambios
     con dos errores tiene que enterarse de los dos de una vez. Y no repite en
     pantalla nada que pueda ser una password: solo nombres de variables.
+
+    Si lo unico mal es una credencial escrita con su valor, el mensaje termina
+    con la linea entera corregida: copiar un ejemplo con la credencial sola
+    perdia los otros cambios de la linea, y el comando igual decia "Listo".
     """
     pedidos: dict[str, str] = {}
     a_pedir: list[str] = []
     problemas: list[str] = []
+    # Los problemas que se arreglan borrando un valor: si son todos de esos,
+    # la linea corregida se puede armar.
+    de_borrar = 0
+    # Si al saltear el valor de una credencial se fue algo con forma de
+    # NOMBRE=VALOR: puede ser otro cambio mal escrito, y la linea corregida lo
+    # perderia sin avisar.
+    se_salteo_un_cambio = False
     anterior: str | None = None  # el NOMBRE=VALOR de justo antes, bien leido
+    secreta_suelta: str | None = None  # la credencial sin = de justo antes
+    problemas_al_empezar_la_anterior = 0
     i = 0
+
+    def pedir(secreta: str) -> None:
+        if secreta not in a_pedir:
+            a_pedir.append(secreta)
+
+    def saltear_el_valor() -> bool:
+        """Consume lo que sigue hasta el proximo cambio: es una credencial.
+
+        Devuelve si consumio algo."""
+        nonlocal i, se_salteo_un_cambio
+        desde = i
+        while i < len(asignaciones) and not _es_otro_cambio(asignaciones[i]):
+            se_salteo_un_cambio |= _tiene_forma_de_cambio(asignaciones[i])
+            i += 1
+        return i > desde
+
+    def credencial_en(j: int) -> str | None:
+        """La credencial que se nombra en la posicion j, con o sin =."""
+        if j < len(asignaciones):
+            return _a_que_credencial_se_parece(asignaciones[j].partition("=")[0])
+        return None
+
     while i < len(asignaciones):
         texto = asignaciones[i]
         i += 1
-        nombre, igual, valor = texto.partition("=")
-        nombre = nombre.strip().upper()
+        # Si lo de justo antes se leyo sin problemas: solo ahi una palabra
+        # suelta delante de una credencial es su valor, y no la cola de otro.
+        limpio_antes = len(problemas) == problemas_al_empezar_la_anterior
+        problemas_al_empezar_la_anterior = len(problemas)
+        secreta_de_antes, secreta_suelta = secreta_suelta, None
+        escrito, igual, valor = texto.partition("=")
+        nombre = escrito.strip().upper()
         conocido = nombre in VARIABLES_DEL_ENV
+
+        if secreta_de_antes is not None and not _es_otro_cambio(texto):
+            # `TELEGRAM_API_HASH abc123`: se saco el = y quedo el valor (paso
+            # el 27/09 completando la real). Lo que sigue ES la credencial
+            # -aunque tenga un = adentro, como un token en base64-: no se
+            # muestra, y se consume entera.
+            saltear_el_valor()
+            de_borrar += 1
+            problemas.append(f"Despues de {secreta_de_antes} quedo escrito su valor (no se "
+                             "muestra): borralo.\n    " + _sin_valor(secreta_de_antes))
+            anterior = None
+            continue
 
         if not igual:
             if i < len(asignaciones) and asignaciones[i].startswith("="):
                 # NOMBRE = VALOR, o NOMBRE =VALOR: se consume el resto, que
                 # puede ser una password, sin mostrarlo.
-                if asignaciones[i] == "=" and i + 1 < len(asignaciones):
-                    i += 1
+                solo_el_igual = asignaciones[i] == "="
                 i += 1
-                cual = repr(texto.strip()) if conocido else "Un nombre"
-                problemas.append(f"{cual} va pegado a su valor, sin espacios alrededor del =:"
-                                 "  NOMBRE=VALOR")
+                if nombre in SECRETAS:
+                    # Lo que sigue se mira: si es otro cambio, se respeta.
+                    # `MT5_PASSWORD = MT5_LOGIN=7001234` perdia el login.
+                    saltear_el_valor()
+                    pedir(nombre)
+                    de_borrar += 1
+                    problemas.append(f"{nombre} quedo con su valor (no se muestra): borralo.\n"
+                                     "    " + _sin_valor(nombre))
+                else:
+                    if solo_el_igual and i < len(asignaciones):
+                        i += 1
+                    cual = repr(texto.strip()) if conocido else "Un nombre"
+                    problemas.append(f"{cual} va pegado a su valor, sin espacios alrededor"
+                                     " del =:  NOMBRE=VALOR")
             elif nombre in SECRETAS:
-                if nombre not in a_pedir:
-                    a_pedir.append(nombre)
+                pedir(nombre)
+                secreta_suelta = nombre
+            elif not conocido and (secreta := _a_que_credencial_se_parece(texto)) is not None:
+                # Una credencial mal escrita (`TELEGRAM_API_HAS`, `MT5_PASSWORD:`,
+                # `api_hash`): se reconoce ANTES de leerla como la otra mitad
+                # de un valor, que la repetia en pantalla con lo que venia detras.
+                sobra = ("\n    Lo que escribiste despues (no se muestra) sobra: borralo."
+                         if saltear_el_valor() else "")
+                pedir(secreta)
+                de_borrar += 1
+                problemas.append(f"Hay un nombre mal escrito: quisiste decir {secreta}?{sobra}\n"
+                                 "    " + _sin_valor(secreta))
             elif (anterior is not None and not conocido
-                  and VARIABLES_DEL_ENV[anterior] in ("str", "list")):
+                  and VARIABLES_DEL_ENV[anterior] in ("str", "list")
+                  and _es_la_otra_mitad(anterior, pedidos[anterior], texto)):
                 # Solo un texto puede tener espacios: despues de un numero,
                 # una palabra suelta es otra cosa, y no se repite.
                 sueltas = [texto]
@@ -590,15 +842,46 @@ def interpretar(asignaciones: list[str], ruta: Path) -> tuple[dict[str, str], li
                 # deja la cuenta real sin poder loguear- y encima la password
                 # ya no se pedia.
                 while (i < len(asignaciones) and "=" not in asignaciones[i]
-                       and asignaciones[i].strip().upper() not in VARIABLES_DEL_ENV):
+                       and not _es_otro_cambio(asignaciones[i])
+                       and _es_la_otra_mitad(anterior, sueltas[-1], asignaciones[i])):
                     sueltas.append(asignaciones[i])
                     i += 1
-                problemas.append(_valor_partido(anterior, pedidos.pop(anterior), sueltas))
+                if (secreta := credencial_en(i)) is not None:
+                    # Delante de una credencial, lo suelto puede ser su valor:
+                    # repetirlo mostraba la password, y el consejo de las
+                    # comillas la guardaba como parte del servidor.
+                    pedidos.pop(anterior)
+                    problemas.append(_suelto_delante(anterior, secreta))
+                else:
+                    problemas.append(_valor_partido(anterior, pedidos.pop(anterior), sueltas))
             elif conocido:
                 problemas.append(f"{texto.strip()!r} no tiene valor: va NOMBRE=VALOR, todo junto.")
+            elif (limpio_antes and anterior is not None
+                  and VARIABLES_DEL_ENV[anterior] in ("str", "list")
+                  and (secreta := credencial_en(i)) is not None):
+                # `ALLOWED_SYMBOLS=XAUUSD BTCUSD MT5_PASSWORD`: lo suelto puede
+                # ser otro elemento escrito sin la coma, o el valor de la
+                # credencial. No se adivina: la linea corregida lo perdia.
+                pedidos.pop(anterior)
+                problemas.append(_suelto_delante(anterior, secreta))
+            elif limpio_antes and (secreta := credencial_en(i)) is not None:
+                # `abc123 TELEGRAM_API_HASH`: el valor quedo delante del nombre.
+                de_borrar += 1
+                problemas.append(f"Antes de {secreta} quedo escrita una palabra suelta (no se "
+                                 "muestra):\n    si es su valor, borrala. " + _sin_valor(secreta))
             else:
-                problemas.append("Hay una palabra suelta que no es NOMBRE=VALOR (no se muestra:\n"
-                                 "    podria ser una password).")
+                # Se sugiere solo el nombre conocido: la palabra no se muestra.
+                parecida = _a_que_variable_se_parece(texto, VARIABLES_DEL_ENV)
+                pista = (f"\n    Si era un nombre mal escrito: quisiste decir {parecida}?"
+                         if parecida else "")
+                problemas.append(
+                    "Hay una palabra suelta que no es NOMBRE=VALOR (no se muestra:\n"
+                    "    podria ser una password). Una credencial ("
+                    + ", ".join(sorted(SECRETAS)) + ")\n"
+                    "    va con el nombre solo, sin = y sin el valor: el comando te la\n"
+                    "    pide aparte. Si no, borrala, o pegala a su nombre: NOMBRE=VALOR."
+                    + pista
+                )
             anterior = None
             continue
 
@@ -606,23 +889,52 @@ def interpretar(asignaciones: list[str], ruta: Path) -> tuple[dict[str, str], li
         if not nombre:
             problemas.append("Hay un = sin nombre adelante: va NOMBRE=VALOR, todo junto.")
             continue
+        if nombre in SECRETAS:
+            # MT5_PASSWORD=abc, MT5_PASSWORD= abc, o partida por un espacio: el
+            # resto de la password tampoco se muestra.
+            saltear_el_valor()
+            pedir(nombre)
+            de_borrar += 1
+            problemas.append(f"{nombre} no se escribe en la linea del comando (no se muestra).\n"
+                             "    " + _sin_valor(nombre))
+            continue
+        especial = nombre in NO_SE_CAMBIAN_ACA or nombre in VARIABLES_OBSOLETAS
+        if not conocido and not especial:
+            if (secreta := _a_que_credencial_se_parece(escrito)) is not None:
+                # `TELEGRAM_API_HAS=abc`, `MT5_PASSWORD:Tr4de=Real`: una
+                # credencial con su valor, mal escrita. Se dice de una vez;
+                # antes eran tres o cuatro vueltas hasta la forma buena.
+                saltear_el_valor()
+                pedir(secreta)
+                de_borrar += 1
+                problemas.append(f"Hay un nombre mal escrito y con su valor (no se muestra):\n"
+                                 f"    quisiste decir {secreta}? " + _sin_valor(secreta))
+                continue
+            if (secreta := credencial_en(i)) is not None:
+                # `Qz7xW=v9k MT5_PASSWORD`: una password con un = adentro,
+                # delante de su nombre.
+                de_borrar += 1
+                problemas.append(f"Antes de {secreta} quedo escrita una palabra suelta (no se "
+                                 "muestra):\n    si es su valor, borrala. " + _sin_valor(secreta))
+                continue
         if (not valor.strip() and i < len(asignaciones) and "=" not in asignaciones[i]
-                and asignaciones[i].strip().upper() not in VARIABLES_DEL_ENV):
+                and not _es_otro_cambio(asignaciones[i])):
             # NOMBRE= VALOR: el valor quedo suelto, y puede ser una password. (Si
             # lo que sigue es un nombre, es "vaciar esta y pedir aquella".)
             i += 1
             problemas.append(f"{nombre if conocido else 'Un nombre'} va pegado a su valor, sin "
                              "espacios despues del =:  NOMBRE=VALOR")
             continue
-        if nombre in SECRETAS:
-            while i < len(asignaciones) and "=" not in asignaciones[i]:
-                i += 1  # el resto de una password con espacios: tampoco se muestra
-            problemas.append(
-                f"{nombre} no se escribe en la linea del comando: la consola le cambia\n"
-                "    caracteres como ^ & % \" sin avisar. Escribi solo el nombre, sin =,\n"
-                "    y el comando te la pide sin mostrarla:\n"
-                f"        tct cambiar --env-file {entre_comillas(ruta)} {nombre}"
-            )
+        if not conocido and not especial and not _se_puede_mostrar_como_nombre(escrito.strip()):
+            quiso = _variable_que_quiso_decir(escrito.strip())
+            if quiso:
+                problemas.append("Hay un nombre que el bot no lee (no se muestra). Quisiste decir "
+                                 f"{quiso}?")
+            else:
+                problemas.append(
+                    "Hay un NOMBRE=VALOR con un nombre que el bot no lee (no se muestra:\n"
+                    "    podria ser una password con un = adentro). Una credencial va\n"
+                    "    con el nombre solo, sin = y sin el valor: el comando te la pide.")
             continue
 
         valor = _sin_comillas(valor.strip())
@@ -641,6 +953,15 @@ def interpretar(asignaciones: list[str], ruta: Path) -> tuple[dict[str, str], li
         anterior = nombre
 
     if problemas:
+        if de_borrar == len(problemas) and not se_salteo_un_cambio:
+            linea = _linea_corregida(ruta, pedidos, a_pedir)
+            if linea:
+                problemas.append("La linea corregida, con todo lo demas que escribiste:\n"
+                                 f"        {linea}")
+        elif se_salteo_un_cambio:
+            problemas.append("Despues del valor de una credencial habia algo con forma de\n"
+                             "    NOMBRE=VALOR, y se tomo como parte del valor (no se muestra).\n"
+                             "    Si era otro cambio, fijate que el nombre este bien escrito.")
         raise CambioRechazado("\n".join(problemas))
     return pedidos, a_pedir
 

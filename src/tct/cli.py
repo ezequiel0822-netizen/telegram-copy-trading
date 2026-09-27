@@ -21,6 +21,7 @@ import asyncio
 import logging
 import math
 import platform
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -2225,6 +2226,15 @@ def build_parser() -> argparse.ArgumentParser:
     # nargs="*" y no "+": sin nada que cambiar, argparse contestaria en ingles.
     cambiar.add_argument("asignaciones", nargs="*", metavar="NOMBRE=VALOR",
                          help="Una o varias, separadas por espacios")
+    # Una password que empieza con guion llega como opcion. Sin abreviaturas,
+    # `--e=<password>` no se lee como --env-file (main() pide la opcion
+    # entera); y argparse no repite nada entre comillas ni lo que sigue a
+    # "explicit argument": con `-v=<password>` la mostraba en el error.
+    cambiar.allow_abbrev = False
+    error_de_argparse = cambiar.error
+    cambiar.error = lambda mensaje: error_de_argparse(re.sub(
+        r"(explicit argument ).*", r"\1(no se muestra)",
+        re.sub(r"'[^']*'|\"[^\"]*\"", "(no se muestra)", mensaje)))
 
     simular = sub.add_parser(
         "simular", parents=[comunes],
@@ -2276,6 +2286,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _abrevia_una_opcion_de_cambiar(texto: str) -> bool:
+    """`--env`, `--env=.env.segunda`, `--verb`: una opcion escrita a medias."""
+    opcion = texto.partition("=")[0]
+    return len(opcion) >= 4 and any(o.startswith(opcion) for o in ("--env-file", "--verbose"))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     # `tct cambiar A=1 --env-file .env.segunda B=2`: argparse junta los
@@ -2283,11 +2299,25 @@ def main(argv: list[str] | None = None) -> int:
     # con un error en ingles. Para `cambiar` son mas cambios; para el resto de
     # los comandos, el mismo error de siempre.
     args, sobrantes = parser.parse_known_args(argv)
-    if sobrantes:
-        if args.command == "cambiar" and not any(s.startswith("-") for s in sobrantes):
-            args.asignaciones = [*args.asignaciones, *sobrantes]
-        else:
-            parser.error(f"unrecognized arguments: {' '.join(sobrantes)}")
+    if args.command == "cambiar":
+        # Lo que argparse no reconoce y empieza con guion es una opcion mal
+        # escrita o una password: no se repite ninguna de las dos. Entre las
+        # asignaciones solo cuenta el doble guion (`"--env=C:\mi carpeta\..."`,
+        # que por el espacio argparse deja ahi): un guion solo es la otra
+        # mitad de un valor, como el chat -100... de una lista o la ruta
+        # "FxPro - MetaTrader 5", y eso lo explica `interpretar`.
+        con_guion = [*(s for s in sobrantes if s.startswith("-")),
+                     *(s for s in args.asignaciones if s.startswith("--"))]
+        if any(_abrevia_una_opcion_de_cambiar(s) for s in con_guion):
+            parser.error("las opciones van escritas enteras: --env-file (o --verbose).")
+        if con_guion:
+            parser.error("hay una palabra que empieza con - y no es una opcion de este comando\n"
+                         "(no se muestra: podria ser una password). Si es el valor de una\n"
+                         "credencial, borralo: la credencial va con el nombre solo, sin = y\n"
+                         "sin el valor, y el comando te la pide aparte.")
+        args.asignaciones = [*args.asignaciones, *sobrantes]
+    elif sobrantes:
+        parser.error(f"unrecognized arguments: {' '.join(sobrantes)}")
 
     handlers = {
         "check": cmd_check,
