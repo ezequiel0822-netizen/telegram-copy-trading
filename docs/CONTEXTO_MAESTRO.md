@@ -40,23 +40,18 @@ Eso viene del pedido original y sigue vigente.
 
 ### Estado al 2026-09-27 — leer esto primero
 
-**Dónde quedó:** completando `.env.real`, todavía **sin fondear**. Ya tiene
-lote 0.05, sin freno diario, 5 señales por día y `MT5_PATH`. Al revisarlo
-apareció que **le faltaba el bloque de Telegram entero**: `TELEGRAM_API_ID` y
-`TELEGRAM_SOURCE_CHATS` vacíos, `ENABLE_TELEGRAM_CONTROL=true` (él había
-elegido apagarlo) y el hash sin confirmar. Sin eso el bot real arranca y no
-escucha el canal. El nombre de sesión sí está bien
-(`telegram_copy_trading_real`, distinto al de los otros dos).
+**Dónde quedó:** `.env.real` **completo salvo las credenciales de MT5**, que
+se ponen el día que fondee con la cuenta real abierta. Todavía **sin fondear**.
+Tiene lote 0.05, sin freno diario, 5 señales por día, `MT5_PATH`, y desde el
+27/09 el bloque de Telegram: `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`,
+`TELEGRAM_SOURCE_CHATS=-1004363872187` y `ENABLE_TELEGRAM_CONTROL=false`
+(la salida de `tct cambiar` los mostró uno por uno). Ese bloque **faltaba
+entero** —el archivo salió de la plantilla— y sin él el bot real habría
+arrancado sin escuchar el canal. El nombre de sesión es
+`telegram_copy_trading_real`, distinto al de los otros dos: por eso el día de
+fondear `tct chats` le va a pedir el código de Telegram.
 
-Lo que tiene que correr, en `consola.bat`. El API_ID y el hash son de su cuenta
-de Telegram, los mismos de los otros dos bots: salen de
-`findstr /b "TELEGRAM_API_ID TELEGRAM_API_HASH" .env`.
-
-```
-tct cambiar --env-file .env.real TELEGRAM_API_ID=<el numero> TELEGRAM_SOURCE_CHATS=-1004363872187 ENABLE_TELEGRAM_CONTROL=false TELEGRAM_API_HASH
-```
-
-**Le falló dos veces, y no era un bug del código.** Primero lo escribió con
+**Completar el hash le falló dos veces, y no era un bug del código.** Primero lo escribió con
 `TELEGRAM_API_HASH=<valor>` (se rechaza a propósito: las credenciales no van en
 la línea). Se le dijo *"sin el `=` y sin el valor"*, y lo más probable es que
 sacara solo el `=`: `TELEGRAM_API_HASH <valor>` da exactamente el
@@ -112,11 +107,12 @@ en su ventana: su `tct` sale de
 su propia carpeta, que se actualiza con `git pull`. Ese traspaso quedó en un
 commit (`710d86e`) de otra rama que no se subió; no mergearlo.
 
-**Su carpeta está en `7f39c81`** (lo confirmó con `git log --oneline -1` el
-27/09): tiene la auditoría del 26/09 y el filtro que mira el lado. **Lo que
-falta confirmar es que reinició los dos bots demo después del `git pull`**: el
-código se carga al arrancar, y una ventana abierta desde antes sigue con el
-viejo. Se le pidió cerrarlas y abrirlas de nuevo.
+**Su carpeta estaba en `7f39c81`** (lo confirmó con `git log --oneline -1` el
+27/09): tiene la auditoría del 26/09 y el filtro que mira el lado. Después se
+subió `1dc9f6c` (el arreglo de `tct cambiar`), que solo toca ese comando. **Lo
+que falta confirmar es que reinició los dos bots demo después del `git pull`
+de `7f39c81`**: el código se carga al arrancar, y una ventana abierta desde
+antes sigue con el viejo. Dijo que hizo el pull; el reinicio no lo confirmó.
 
 **La lista para el día que fondee**, completa:
 
@@ -154,7 +150,7 @@ arrancar**, así que cualquier cambio empieza a valer en el próximo arranque.
 
 | | `.env` — MetaQuotes demo | `.env.segunda` — FxPro demo | `.env.real` — FxPro real |
 |---|---|---|---|
-| Cuenta | ~98.300 | **500**, apalancamiento **ilimitado** desde el 22/09 | #516648640, **sin fondear**; le faltan las credenciales de MT5 y el bloque de Telegram (27/09) |
+| Cuenta | ~98.300 | **500**, apalancamiento **ilimitado** desde el 22/09 | #516648640, **sin fondear**; Telegram completo (27/09), le faltan las credenciales de MT5 |
 | Lote / posiciones por señal | 0.01 / 1 | **0.05** / 1 desde el 25/09 | **0.05** / 1 |
 | `MAX_SPREAD_FROM_ENTRY_PCT` | **0.5** — el control | 0.05 | 0.05 |
 | Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | **30 / 100 / 100** desde el 22/09 | **2 / 2 / 5** |
