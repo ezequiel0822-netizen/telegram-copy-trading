@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-26 · v2.6.0 · 889 tests · el último commit que describe
+Actualizado: 2026-09-27 · v2.7.0 · 903 tests · el último commit que describe
 es `f4983e6`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-22"**, al
@@ -200,6 +200,51 @@ saltearía señales y se perdería justo el dato que se quiere mirar.
 **Los dos bots están corriendo** desde el 22/09: FxPro con la configuración
 nueva (02:16) y MetaQuotes como control, confirmado por él ese mismo día.
 
+### Los primeros datos del experimento, y lo que decidieron (27/09)
+
+Once días de las dos instancias, leídos con `tct informe --horas 336
+--con-resultados`. **Ojo con el titular:** MetaQuotes muestra −326.94, pero casi
+todo es de la época vieja (14 al 18/09, lote 0.1 y tres posiciones por señal).
+Desde el 21/09, que es cuando quedó en 0.01 y una posición —la configuración
+que va a tener la real—:
+
+| | |
+|---|---|
+| Señales operadas | 13 |
+| TP1 / breakeven / stop | 8 / 1 / 4 |
+| Ganancia promedio | +4.70 |
+| Pérdida promedio | −6.59 |
+| **Neto** | **+11.26** (unos +2% sobre 500, en 5 días) |
+
+**Lo que contestó sobre el filtro.** En once días el filtro de 0.05 actuó **una
+sola vez**, y fue para rechazar una señal en la que el precio se había movido
+**a favor**: BUY 4358 con el mercado en 4354.8, tres puntos más barato. En
+MetaQuotes esa misma señal terminó en TP1, +5.70. La segunda edición de ese
+mensaje sí llegó con el precio en contra y se rechazó bien. O sea: el umbral no
+está mal, lo que estaba mal era no mirar el lado — y eso se arregló (§5).
+Todas las señales frescas midieron entre 0.00% y 0.05%, y una quedó justo en el
+límite y ganó, así que **el umbral de 0.05 no tiene margen de sobra**: si algún
+día empiezan a aparecer rechazos por *"precio real"* en contra, el número a
+mirar es ese.
+
+**El bot le evitó un error del canal.** El 24/09 mandaron `SELL BUY XAUUSD 4266`
+con el stop del lado equivocado; las dos instancias la rechazaron. Dos minutos
+después el canal escribió *"mi error, escribí SELL en lugar de BUY"*.
+
+**Dos decisiones suyas, del 27/09:**
+
+1. **Lote 0.05 en las dos, también en la real.** Lo cambió él en la demo el
+   25/09 (*"sin arriesgar poco pero tampoco demasiado"*) y ahí se explican los
+   +24.24 y +18.49 de ese día, que al principio no cerraban. En oro, 0.05 son
+   5 dólares por punto: cada stop de este canal cuesta **20 a 40**, o sea 4% a
+   8% de una cuenta de 500.
+2. **Sin freno diario en la real** (`MAX_DAILY_LOSS_PCT=0`), *"ya que no abre
+   muchas operaciones, con los SL está bien"*. Revierte lo decidido el 15/09,
+   y el motivo es coherente con el lote nuevo: con 5% (25 dólares) el freno
+   cortaría al PRIMER stop. Se le dijo con números lo que implica —un día malo
+   de 3 stops son unos 120, el 24% de la cuenta— y es su decisión. Con el freno
+   apagado, **lo único que acota un día malo es `MAX_SIGNALS_PER_DAY`**.
+
 ### La auditoría del 26/09, antes de fondear
 
 Él avisó *"ya tengo el dinero y todo listo para fondear"* y pidió una auditoría
@@ -260,10 +305,14 @@ El detalle y la regla, en §9.
   esperar, porque el escenario había empeorado: desde el 22/09 la demo de FxPro
   corre **sin topes y sin freno diario**, así que una orden suya en la cuenta
   real podía abrir hasta 100 posiciones. Ver §5 y §9.
-- **Filtro que mire el lado.** El filtro de entrada mide la distancia sin
-  mirar si el precio se movió a favor o en contra, así que un número apretado
-  también saltea entradas MEJORES. Se le ofreció hacer que solo rechace cuando
-  se movió en contra. Sin respuesta.
+- ~~**Filtro que mire el lado.**~~ **HECHO el 27/09**, y lo decidieron los
+  datos: en once días el filtro de 0.05 actuó **una sola vez**, y fue para
+  rechazar una señal en la que el precio se había movido **a favor** (BUY 4358
+  con el mercado en 4354.8, tres puntos más barato). Esa misma señal, en
+  MetaQuotes, terminó en TP1 +5.70. Ahora el límite apretado se aplica solo en
+  contra; a favor hay un techo diez veces más ancho, porque el otro trabajo del
+  filtro —cazar un precio mal leído— no depende del lado. El detalle y el por
+  qué del factor, en §5.
 - **`MAX_SPREAD_FROM_ENTRY_PCT` en la real: 0.05, igual que la demo de FxPro**
   (decidido el 19/09, al pedir que la real sea igual a la segunda). Se revisa
   en los DOS archivos con lo que salga de la comparación, en unas dos semanas.
@@ -784,6 +833,23 @@ un WARNING en la ventana) y `tct cambiar` cuando se le cambia `INSTANCE_NAMES`
 a un archivo (dice con cuáles de los otros coincide y con cuáles no). El
 19/09 el usuario tenía `.env.segunda` desparejo (`demo,fxpro` contra
 `demo,fxpro,real` en los otros dos).
+
+**`risk.py` — el filtro de entrada tarde mira PARA QUÉ LADO se movió el precio,
+y aun así tiene techo de los dos.** El filtro hace dos trabajos distintos y solo
+uno depende del lado:
+
+1. **La entrada tarde**: el precio se fue en contra y el TP queda a nada. Eso
+   solo tiene sentido medirlo en contra, y se mide con
+   `MAX_SPREAD_FROM_ENTRY_PCT` (0.05 hoy, unos 2 puntos en oro).
+2. **El precio MAL LEÍDO** —otro instrumento, otra escala, un dígito comido—.
+   Eso cae para cualquier lado: un *"BTC BUY 65000"* leído como oro, con el oro
+   en 4438, es un mercado **93% "a favor"**, y abriría oro con el stop de BTC.
+
+Por eso a favor el techo es `FACTOR_A_FAVOR` (10) veces más ancho, no infinito:
+con 0.05 quedan 0.5%, que en oro son 21 puntos —más que todos los objetivos del
+canal juntos— y un precio de otro instrumento sigue quedando afuera por lejos.
+**Abrir del todo el lado favorable dejaría entrar justo la familia de errores
+para la que se escribió el filtro.**
 
 **`risk.py` — el contraste con el mercado son DOS límites, no uno.** Una orden
 a mercado entra al precio de *ahora*, así que una entrada lejana significa que
@@ -1620,6 +1686,19 @@ un test mal escrito: mostraba que la decisión estaba tomada mirando el TEXTO en
 vez de lo PEDIDO. Se arregló el código, no el test.
 → Si un test nuevo falla por una coincidencia con los datos de prueba,
 preguntate primero si el código no está mirando la cosa equivocada.
+
+**Y la herramienta de mutaciones mintió otra vez, ahora por los fines de
+línea.** El 27/09, midiendo los arreglos de la auditoría, ocho de quince
+mutaciones "sobrevivieron" — o sea, *"los tests no protegen esto"*. Eran todas
+las de anclaje de **varias líneas**: el guion las buscaba con `\n` y esos
+archivos tienen CRLF, así que el `str.replace` no encontraba nada, el archivo
+quedaba **sin mutar**, los tests pasaban y el resultado se leía como un agujero
+en los tests. Aplicada a mano, la primera mutación ponía tres tests en rojo.
+La trampa es la misma de `-rs`: **lo que falla es la medición, no lo medido**, y
+el error apunta justo para el lado que hace perder tiempo.
+→ Un guion de mutaciones tiene que **verificar que el archivo haya cambiado**
+(`assert texto.replace(v, n, 1) != texto`) y normalizar el ancla a los fines de
+línea del archivo. Si una mutación "sobrevive", aplicala a mano antes de creerle.
 
 **Caché de bytecode.** Una vez `inspect.getsource` mostró el código nuevo
 mientras corría el viejo. Si algo no tiene sentido, limpiar `__pycache__`.

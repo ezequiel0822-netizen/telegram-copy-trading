@@ -189,6 +189,9 @@ def _market_distance_reasons(
     # la tolerancia de una orden a mercado rechazaria senales buenas.
     if event.order_type is OrderType.MARKET:
         limite, llave = settings.max_spread_from_entry_pct, "MAX_SPREAD_FROM_ENTRY_PCT"
+        # A FAVOR se tolera mucho mas. Ver FACTOR_A_FAVOR.
+        if mercado_a_favor(event, market_price):
+            limite, llave = limite * FACTOR_A_FAVOR, f"{llave} x{FACTOR_A_FAVOR:g} (a favor)"
     else:
         limite, llave = settings.max_pending_distance_pct, "MAX_PENDING_DISTANCE_PCT"
 
@@ -201,6 +204,57 @@ def _market_distance_reasons(
         "Casi siempre es un simbolo mal leido, un mensaje viejo o un precio con la "
         f"escala cambiada. Si el precio del mensaje estaba bien, subi {llave} en el .env."
     ]
+
+
+# Cuanto mas lejos puede estar el mercado cuando se movio A FAVOR. Es un
+# FACTOR sobre MAX_SPREAD_FROM_ENTRY_PCT, no un porcentaje aparte.
+#
+# POR QUE EXISTE
+# --------------
+# El filtro medía la distancia sin mirar para que lado se movio el precio, y
+# rechazaba tambien las entradas MEJORES. Medido en la demo de FxPro: el 21/09
+# el canal mando BUY 4358 con el mercado en 4354.8 -tres puntos mas barato- y
+# la senal se rechazo por "lejos del precio real". En MetaQuotes, que no tenia
+# el filtro apretado, esa misma senal termino en TP1 (+5.70). Fue la unica vez
+# que el filtro actuo en once dias, y fue para sacar a la cuenta de una
+# operacion ganadora en la que ademas entraba mejor.
+#
+# POR QUE NO SE ABRE DEL TODO
+# ---------------------------
+# El filtro tiene DOS trabajos y solo uno depende del lado:
+#   1. La entrada tarde (el precio se fue en contra y el TP queda a nada). Ese
+#      es el que se mide con el numero apretado, y solo tiene sentido en contra.
+#   2. El precio MAL LEIDO -otro simbolo, otra escala, un digito comido-. Ese
+#      cae para cualquier lado: "BTC BUY 65000" leido como oro con el oro en
+#      4438 es un mercado 93% "a favor", y abriria oro con el stop de BTC.
+# Por eso a favor tambien hay techo, diez veces mas ancho: con 0.05 quedan
+# 0.5%, que en oro son 21 puntos -mas que todos los objetivos del canal
+# juntos-, y un precio de otro instrumento sigue quedando afuera por lejos.
+FACTOR_A_FAVOR = 10.0
+
+
+def mercado_a_favor(event: SignalEvent, market_price: float) -> bool | None:
+    """Si el precio real es MEJOR que el del mensaje para el lado de la senal.
+
+    Comprar mas barato o vender mas caro es a favor. Con un rango de entrada se
+    mide contra el borde mas cercano, igual que la distancia; adentro del rango
+    no hay a favor ni en contra. None si no se sabe el lado.
+    """
+    entry = event.entry
+    if entry is None or entry <= 0 or event.side is None:
+        return None
+
+    low = event.entry_low if event.entry_low is not None else entry
+    high = event.entry_high if event.entry_high is not None else entry
+    if low > high:
+        low, high = high, low
+    if low <= market_price <= high:
+        return None
+
+    borde = low if market_price < low else high
+    if event.side is Side.BUY:
+        return market_price < borde
+    return market_price > borde
 
 
 def distancia_al_mercado(event: SignalEvent, market_price: float) -> float | None:
