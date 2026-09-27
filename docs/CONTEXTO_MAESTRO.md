@@ -51,17 +51,17 @@ funciona, la cuenta es la de 500 (`balance=500.0`), los topes quedaron en
 roster desparejo, y el bróker resuelve los nombres solo (`XAUUSD -> GOLD`,
 `BTCUSD -> BITCOIN`, `XAGUSD -> SILVER`, `ETHUSD -> ETHEREUM`).
 
-**Lo que tiene en su PC** (los `tct cambiar` del 20 y del 22 ya corridos; su
-salida los mostró uno por uno). Recordar siempre: **el `.env` se lee solo al
+**Lo que tiene en su PC**, con todos los `tct cambiar` corridos hasta el 27/09
+(su salida los mostró uno por uno). Recordar siempre: **el `.env` se lee solo al
 arrancar**, así que cualquier cambio empieza a valer en el próximo arranque.
 
 | | `.env` — MetaQuotes demo | `.env.segunda` — FxPro demo | `.env.real` — FxPro real |
 |---|---|---|---|
-| Cuenta | ~98.300 | **500**, apalancamiento **ilimitado** desde el 22/09 | #516648640, sin fondear, **sin credenciales** |
-| Lote / posiciones por señal | 0.01 / 1 | 0.01 / 1 | 0.01 / 1 |
+| Cuenta | ~98.300 | **500**, apalancamiento **ilimitado** desde el 22/09 | #516648640, **sin fondear**; solo le faltan las credenciales |
+| Lote / posiciones por señal | 0.01 / 1 | **0.05** / 1 desde el 25/09 | **0.05** / 1 |
 | `MAX_SPREAD_FROM_ENTRY_PCT` | **0.5** — el control | 0.05 | 0.05 |
-| Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | **30 / 100 / 100** desde el 22/09 (antes 2 / 2 / 10) | **2 / 2 / 10** |
-| `MAX_DAILY_LOSS_PCT` | 0 | **0** desde el 22/09 (antes 5) | **5** |
+| Topes: por símbolo / abiertas / señales día | 30 / 100 / 100 | **30 / 100 / 100** desde el 22/09 | **2 / 2 / 5** |
+| `MAX_DAILY_LOSS_PCT` | 0 | **0** desde el 22/09 | **0** — apagado a pedido suyo (27/09) |
 | `INSTANCE_NAMES` | `demo,fxpro,real` | `demo,fxpro,real` | `demo,fxpro,real` |
 | `ALLOWED_SYMBOLS` | 11, con BTCUSD | 12, con BTCUSD y ETHUSD | solo XAUUSD |
 | Clave de arranque | no (así la quiso) | **puesta y probada** | puesta, sin probar |
