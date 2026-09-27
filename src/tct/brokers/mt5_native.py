@@ -325,6 +325,48 @@ class MT5NativeBroker(Broker):
     async def is_ready(self) -> bool:
         return self._ready and self._mt5 is not None
 
+    def _cuenta_sigue_siendo_la_del_env(self) -> str:
+        """"" si la terminal sigue en la cuenta del .env, o el motivo para no operar.
+
+        La verificacion de `connect()` corre UNA vez, al arrancar. Con dos
+        cuentas del mismo broker en la MISMA terminal -el plan del usuario: la
+        demo de FxPro y la real conviven ahi- alcanza con que alguien loguee la
+        terminal en la otra cuenta con el bot andando para que todas las ordenes
+        siguientes vayan a la cuenta equivocada. Reproducido: el bot de la demo
+        -que corre sin topes y sin freno diario- abrio en la cuenta REAL, y el
+        resultado volvio ok=True, "orden ejecutada".
+
+        Por eso se pregunta antes de CADA `order_send`, y tambien antes de dar
+        el equity: el freno diario comparando contra el saldo de otra cuenta es
+        otra forma de mentir.
+
+        AL REVES QUE EL RESTO DEL BOT: aca, sin dato, NO se opera. La regla de
+        §9 -"sin dato no se inventa un rechazo"- vale para el equity y para la
+        cotizacion, donde lo que se arriesga es perder una senal. No saber en
+        que cuenta se esta es otra cosa: el lado barato es no mandar nada.
+
+        Sin `MT5_LOGIN` no hay contra que comparar (una sola cuenta, el .env no
+        la nombra) y no se opina: engancharse a la terminal que haya abierta es
+        lo documentado para ese caso.
+        """
+        if not self.settings.mt5_login:
+            return ""
+        try:
+            esperado = int(self.settings.mt5_login)
+        except ValueError:
+            return "MT5_LOGIN no es numerico"
+        try:
+            cuenta = self._mt5.account_info()
+        except Exception:
+            cuenta = None
+        if cuenta is None:
+            return "no se pudo leer en que cuenta esta la terminal"
+        actual = getattr(cuenta, "login", None)
+        if actual != esperado:
+            return (f"la terminal esta en la cuenta {actual} y este bot es de la "
+                    f"{esperado}: primero se cierra el bot, despues se toca la cuenta")
+        return ""
+
     def _ensure_demo(self, account: dict[str, Any]) -> tuple[bool, str]:
         # El chequeo se saltea SOLO con las dos llaves: `is_live` exige
         # TRADING_MODE=LIVE y ALLOW_LIVE_TRADING=true. Antes miraba solo la
@@ -357,6 +399,12 @@ class MT5NativeBroker(Broker):
         return await asyncio.to_thread(self._equity_sync)
 
     def _equity_sync(self) -> float | None:
+        # El equity de otra cuenta es peor que no tener equity: el freno diario
+        # compararia el saldo de hoy contra el de una cuenta que no es esta.
+        motivo = self._cuenta_sigue_siendo_la_del_env()
+        if motivo:
+            logger.error("No se lee el equity: %s", motivo)
+            return None
         try:
             cuenta = self._mt5.account_info()
         except Exception:
@@ -448,7 +496,23 @@ class MT5NativeBroker(Broker):
         # posicion puede estar viva; solo la tupla vacia significa "no esta".
         if posiciones is None:
             return None
-        return len(posiciones) > 0
+        if len(posiciones) > 0:
+            return True
+
+        # Todavia puede estar viva como ORDEN PENDIENTE, que vive en otra lista.
+        # Sin preguntar aca, el motor la daba por "se cerro sola en el broker" y
+        # la sacaba del registro: la orden seguia en la cuenta y podia
+        # dispararse despues, abriendo una posicion REAL que el bot ya no
+        # gestiona -sin breakeven, sin parcial, y sin ocupar lugar en
+        # MAX_OPEN_TRADES-.
+        try:
+            ordenes = self._mt5.orders_get(ticket=ticket)
+        except Exception:
+            logger.warning("No se pudo consultar la orden %s", ticket, exc_info=True)
+            return None
+        if ordenes is None:
+            return None
+        return len(ordenes) > 0
 
     async def market_price(self, symbol: str) -> float | None:
         if not await self.is_ready():
@@ -516,6 +580,14 @@ class MT5NativeBroker(Broker):
         take_profit: float | None,
     ) -> OrderResult:
         mt5 = self._mt5
+
+        # Antes de CADA orden: la terminal puede haber cambiado de cuenta con
+        # el bot andando (dos cuentas del mismo broker, una sola terminal).
+        motivo = self._cuenta_sigue_siendo_la_del_env()
+        if motivo:
+            logger.error("NO se abrio nada: %s", motivo)
+            return OrderResult(False, "open", f"No se abrio nada: {motivo}",
+                               symbol=symbol)
 
         # Primero se le pregunta al broker como se llama el instrumento; el
         # perfil de sufijos del .env queda como respaldo por si la terminal
@@ -650,6 +722,14 @@ class MT5NativeBroker(Broker):
         mt5 = self._mt5
         action = "close" if fraction >= 1.0 else "partial_close"
 
+        # Antes de CADA orden: la terminal puede haber cambiado de cuenta con
+        # el bot andando (dos cuentas del mismo broker, una sola terminal).
+        motivo = self._cuenta_sigue_siendo_la_del_env()
+        if motivo:
+            logger.error("NO se cerro nada: %s", motivo)
+            return OrderResult(False, action, f"No se cerro nada: {motivo}",
+                               ticket=ticket, symbol=symbol)
+
         positions = mt5.positions_get(ticket=ticket)
         # None y () NO son lo mismo, y confundirlos cuesta caro en las dos
         # direcciones. None es un error de consulta (terminal caida, sin
@@ -731,6 +811,14 @@ class MT5NativeBroker(Broker):
 
     def _modify_sl_sync(self, ticket: int, symbol: str, stop_loss: float) -> OrderResult:
         mt5 = self._mt5
+        # Antes de CADA orden: la terminal puede haber cambiado de cuenta con
+        # el bot andando (dos cuentas del mismo broker, una sola terminal).
+        motivo = self._cuenta_sigue_siendo_la_del_env()
+        if motivo:
+            logger.error("NO se movio el stop: %s", motivo)
+            return OrderResult(False, "modify_sl", f"No se movio el stop: {motivo}",
+                               ticket=ticket, symbol=symbol)
+
         positions = mt5.positions_get(ticket=ticket)
         if positions is None:
             return OrderResult(
@@ -803,6 +891,14 @@ class MT5NativeBroker(Broker):
         y se manda el stop que tiene puesto.
         """
         mt5 = self._mt5
+        # Antes de CADA orden: la terminal puede haber cambiado de cuenta con
+        # el bot andando (dos cuentas del mismo broker, una sola terminal).
+        motivo = self._cuenta_sigue_siendo_la_del_env()
+        if motivo:
+            logger.error("NO se movio el TP: %s", motivo)
+            return OrderResult(False, "modify_tp", f"No se movio el TP: {motivo}",
+                               ticket=ticket, symbol=symbol)
+
         positions = mt5.positions_get(ticket=ticket)
         if positions is None:
             return OrderResult(

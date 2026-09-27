@@ -78,9 +78,25 @@ _LABEL_RE = re.compile(
 _NUMBER_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:[.,]\d+)?")
 
 _SIDE_RE = re.compile(r"\b(BUY|SELL|LONG|SHORT|COMPRA|VENTA)\b")
+# El tipo de orden tiene que estar PEGADO al lado, de uno u otro lado:
+# "BUY LIMIT 2345" o "LIMIT BUY 2345". Antes la segunda forma aceptaba un
+# LIMIT o un STOP en cualquier parte del texto con tal de que despues hubiera
+# un BUY o un SELL, y eso convertia una orden a mercado en PENDIENTE con solo
+# nombrar la palabra:
+#
+#     "Ojo con el stop de ayer. DEAL | GOLD BUY XAUUSD 4432..."  -> BUY STOP
+#
+# Este canal habla del stop loss todo el tiempo y a veces le pone una frase
+# adelante al mensaje de apertura, asi que no era hipotetico. Y una pendiente
+# es justo lo que el bot peor maneja: se dispara sola mas tarde y abre una
+# posicion que nadie gestiona.
+#
+# Se pierde reconocer "SELL 2350 limit" (el tipo despues del precio). Es el
+# lado barato: perder una pendiente cuesta una senal, inventarla cuesta una
+# posicion que nadie pidio (§12).
 _ORDER_TYPE_RE = re.compile(
     r"\b(?:BUY|SELL|LONG|SHORT)\s+(LIMIT|STOP|NOW|MARKET)\b"
-    r"|\b(LIMIT|STOP)\s+(?:ORDER)?\b(?=.*\b(?:BUY|SELL)\b)"
+    r"|\b(LIMIT|STOP)\s*(?:ORDER)?\s*[:\-]?\s*(?=(?:BUY|SELL|LONG|SHORT)\b)"
 )
 
 _PARTIAL_RE = re.compile(

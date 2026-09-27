@@ -106,6 +106,8 @@ class FakeMT5:
             "XAUUSD": {"bid": 4438.0, "ask": 4438.5},
         }
         self._posiciones: dict[int, FakePosition] = {}
+        # Las ordenes PENDIENTES viven aparte de las posiciones, como en MT5.
+        self._pendientes: dict[int, FakePosition] = {}
         self._proximo_ticket = 500_001
         # Todo lo que se le mando: es lo que permite afirmar que volumen SALIO
         # de verdad, en vez de creerle al numero que el motor dice tener.
@@ -125,6 +127,10 @@ class FakeMT5:
         # Bajarla reproduce un llenado parcial, que es lo que hace que el
         # volumen pedido y el ejecutado dejen de coincidir.
         self.llenado = 1.0
+        # En que cuenta esta esta terminal. Cambiarla en el medio de un test
+        # reproduce lo que pasa cuando alguien loguea la terminal en la otra
+        # cuenta con el bot andando.
+        self.cuenta_login = 555
 
     # -- Consultas ---------------------------------------------------------
 
@@ -154,6 +160,24 @@ class FakeMT5:
             return None
         return FakeTick(datos.get("bid", 0.0), datos.get("ask", 0.0))
 
+    def orders_get(self, ticket=None):
+        """Las ORDENES PENDIENTES, que viven en una lista aparte de las posiciones.
+
+        Una pendiente viva NO aparece en `positions_get`, y darla por cerrada
+        deja una orden real en la cuenta que el bot ya no gestiona: se dispara
+        sola mas tarde y abre una posicion sin breakeven ni parcial. Por eso el
+        falso tiene las dos listas, como MT5.
+        """
+        if ticket is None:
+            return tuple(self._pendientes.values())
+        orden = self._pendientes.get(ticket)
+        return (orden,) if orden else ()
+
+    def poner_pendiente(self, ticket, symbol="XAUUSD", volume=0.01):
+        """Deja una orden pendiente viva con ese ticket (para los tests)."""
+        self._pendientes[ticket] = FakePosition(ticket, symbol, volume, self.ORDER_TYPE_BUY)
+        return self._pendientes[ticket]
+
     def positions_get(self, ticket=None):
         if ticket is None:
             return tuple(self._posiciones.values())
@@ -161,7 +185,15 @@ class FakeMT5:
         return (posicion,) if posicion else ()
 
     def account_info(self):
+        # El login SIEMPRE viene en un MT5 de verdad, y el bot lo compara con
+        # MT5_LOGIN antes de cada orden (una terminal puede cambiar de cuenta
+        # con el bot andando). Por defecto informa la misma cuenta que usan los
+        # tests (555), para que los que no hablan de cuentas no tengan que
+        # configurarla; `self.cuenta_login` la cambia.
+        cuenta_login = self.cuenta_login
+
         class Cuenta:
+            login = cuenta_login
             equity = 10_000.0
             balance = 10_000.0
             server = "FakeBroker-Demo"

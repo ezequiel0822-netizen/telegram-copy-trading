@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-22 · v2.5.0 · 864 tests · el último commit que describe
+Actualizado: 2026-09-26 · v2.6.0 · 889 tests · el último commit que describe
 es `f4983e6`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-22"**, al
@@ -200,6 +200,36 @@ saltearía señales y se perdería justo el dato que se quiere mirar.
 **Los dos bots están corriendo** desde el 22/09: FxPro con la configuración
 nueva (02:16) y MetaQuotes como control, confirmado por él ese mismo día.
 
+### La auditoría del 26/09, antes de fondear
+
+Él avisó *"ya tengo el dinero y todo listo para fondear"* y pidió una auditoría
+del camino de la cuenta real. **Se encontraron y arreglaron dos cosas capaces de
+costar plata**, las dos reproducidas ejecutando el código:
+
+1. **Una orden del bot de la demo podía entrar en la cuenta REAL.** Las dos
+   cuentas de FxPro comparten terminal; si alguien la loguea en la otra cuenta
+   con el bot andando, todas las órdenes siguientes van ahí, y el resultado
+   vuelve `ok=True`. Estaba documentado como decisión pendiente desde el 19/09,
+   pero **había empeorado**: desde el 22/09 la demo corre sin topes y sin freno
+   diario, o sea que podía abrir hasta 100 posiciones en la cuenta real.
+   Arreglado: la cuenta se verifica antes de cada orden (§5, §9).
+2. **Una orden pendiente inventada por una palabra, que después el bot soltaba
+   del registro.** Los puntos 19 y 10 del §8, encadenados: *"Ojo con el stop de
+   ayer. DEAL | GOLD BUY…"* creaba una pendiente; la reconciliación la daba por
+   cerrada; la orden se disparaba después y abría una posición real que el bot
+   no gestionaba. Los dos arreglados.
+
+**Lo que se verificó y está bien:** el freno diario del 5% frena de verdad en
+una cuenta de 500 (deja pasar con -4,8% y corta con -5,2%, diciendo el motivo);
+`MAX_LOT` se aplica sobre el volumen que sale; las dos llaves del dinero real;
+la clave de arranque; y la reconciliación sigue sin perder señales.
+
+**Lo que NO se alcanzó a auditar** (los seis revisores murieron por límite de
+uso y hubo que rescatar su trabajo de las transcripciones, §7): el punto 22 del
+§8 —cuatro cosas sin verificar sobre avisos e informes— y la convivencia de las
+tres instancias corriendo a la vez. Ninguna de esas mueve plata por sí sola: son
+avisos que pueden mentir. Quedan como lo primero para la próxima auditoría.
+
 **La CLAVE DE ARRANQUE: puesta y PROBADA.** Pidió que el bot real y la demo de
 FxPro le pidan una contraseña antes de arrancar (commits `3f7c82a` y `829292c`).
 En el arranque del 20/09 el bot de FxPro la pidió, él le erró una vez
@@ -224,20 +254,12 @@ El detalle y la regla, en §9.
 
 **Decisiones que esperan su respuesta** (no volver a plantearlas desde cero):
 
-- **Verificar la cuenta antes de CADA orden, no solo al conectar.** Hoy la
-  verificación de que la cuenta sea la del `.env` corre una vez, en
-  `connect()`. Si con el bot andando alguien cambia la cuenta de la terminal a
-  mano, el bot opera la otra. Se le ofreció tres veces; el 19/09 pidió un
-  ejemplo y se le mostró corriendo el código: el bot demo verificó la cuenta
-  111 al arrancar, la terminal pasó a la 222 (real), llegó una señal y **la
-  orden entró en la REAL** con la configuración de la demo, sin freno diario.
-  Para rehacerlo: una subclase de `tests/fake_mt5.FakeMT5` con `initialize`,
-  `login` (que cambia la cuenta activa), `account_info` (que devuelve la
-  activa) y un `order_send` que anota en qué cuenta entró cada orden; se la
-  pone en `sys.modules["MetaTrader5"]`, se llama a `connect()`, se cambia la
-  cuenta activa y se manda una señal. **No está implementada** hasta que diga
-  que sí; el lugar natural es `mt5_native` antes de cada `order_send`.
-  Importa porque su plan pasa las dos cuentas de FxPro por la misma terminal.
+- ~~**Verificar la cuenta antes de CADA orden.**~~ **HECHO el 26/09**, en la
+  auditoría previa a fondear. Se le había ofrecido tres veces sin respuesta;
+  con la plata lista para entrar se reprodujo de nuevo y se arregló sin
+  esperar, porque el escenario había empeorado: desde el 22/09 la demo de FxPro
+  corre **sin topes y sin freno diario**, así que una orden suya en la cuenta
+  real podía abrir hasta 100 posiciones. Ver §5 y §9.
 - **Filtro que mire el lado.** El filtro de entrada mide la distancia sin
   mirar si el precio se movió a favor o en contra, así que un número apretado
   también saltea entradas MEJORES. Se le ofreció hacer que solo rechace cuando
@@ -826,6 +848,43 @@ otras sería peor que no mover ninguna.
 mercado —la mitad de los desastres— pero un stop del lado correcto y
 absurdamente lejos lo **acepta sin chistar**: la posición queda sin protección
 real y nadie se entera. Ese hueco es el que tapa el chequeo de escala.
+
+**`mt5_native.py` — la cuenta se verifica antes de CADA orden, y ahí la regla
+de "sin dato no se rechaza" va AL REVÉS.** `connect()` verifica una vez. Con dos
+cuentas del mismo bróker en la MISMA terminal —el plan del usuario— alcanza con
+que alguien loguee la terminal en la otra cuenta con el bot andando para que
+todas las órdenes siguientes vayan a la cuenta equivocada. Reproducido el 26/09
+con la configuración de ese día: **el bot de la demo abrió en la cuenta REAL**, y
+el resultado volvió `ok=True, "orden ejecutada"`.
+
+`_cuenta_sigue_siendo_la_del_env()` corre antes de los cuatro `order_send`
+(abrir, cerrar, parcial, mover SL, mover TP) y antes de dar el equity —el freno
+diario comparando contra el saldo de otra cuenta es otra forma de mentir—. Tres
+cosas que no hay que "simplificar":
+
+- **Sin dato, NO se opera.** La regla de §9 —*sin dato no se inventa un
+  rechazo*— vale para el equity y la cotización, donde lo que se arriesga es
+  perder una señal. No saber en qué cuenta se está es otra cosa: ahí el lado
+  barato es no mandar nada.
+- **También al cerrar y al mover.** Los números de ticket de dos cuentas
+  distintas pueden coincidir: un cierre mandado a la cuenta equivocada podría
+  cerrar OTRA posición.
+- **Sin `MT5_LOGIN` no opina.** Con una sola cuenta el `.env` no la nombra, y
+  engancharse a la terminal que haya abierta es lo documentado para ese caso.
+
+**`mt5_native.py` — una posición puede estar viva en DOS listas distintas.**
+`positions_get()` trae las posiciones y `orders_get()` las órdenes pendientes.
+Preguntar solo por la primera daba por cerrada una pendiente viva, la soltaba
+del registro, y esa orden se disparaba después abriendo una posición real que el
+bot ya no gestionaba —sin breakeven, sin parcial, y sin ocupar lugar en
+`MAX_OPEN_TRADES`—. Hay que preguntar por las dos antes de concluir que algo no
+está.
+
+**`parser.py` — el tipo de orden tiene que estar PEGADO al lado.** `BUY LIMIT` o
+`LIMIT BUY`, no un `limit` o un `stop` sueltos en cualquier parte del mensaje.
+Con la regla vieja, *"Ojo con el stop de ayer. DEAL | GOLD BUY XAUUSD 4432…"*
+salía `BUY STOP`: una orden pendiente inventada por una palabra que este canal
+usa todo el tiempo. Ver §8, punto 19.
 
 **`mt5_native.py` — `positions_get()` devolviendo `None` y `()` NO es lo mismo.**
 `None` es un error de consulta (terminal caída, sin conexión) y `()` es "la
@@ -1679,19 +1738,14 @@ Ordenado por lo que más importa antes de dinero real.
 Confirmados ejecutando el 2026-09-15, ninguno arreglado todavía. Van en orden
 de cuánto importan con la cuenta real andando:
 
-10. **Una orden PENDIENTE viva se borra del estado como "se cerró sola".**
-    `posicion_existe()` solo consulta `positions_get()`, y una pendiente vive en
-    `orders_get()`: la reconciliación de §9 la lee como ausente, la saca del
-    registro y avisa *"se cerraron solas en el broker"*. La orden **sigue viva**
-    y puede dispararse en cualquier momento, abriendo una posición real que el
-    bot no gestiona (sin breakeven, sin parcial) y que no cuenta para
-    `MAX_OPEN_TRADES`. Medido: el bot quedó con 2 posiciones en el estado y el
-    bróker con 2 posiciones **más una pendiente** que nadie miraba. Hoy no
-    dispara porque este canal manda órdenes a mercado —hace falta que escriba
-    `BUY LIMIT` o `SELL STOP`—, pero es peor que el punto 7 de esta lista: no es
-    que no se puedan cancelar, es que el bot cree que ya no existen. El arreglo
-    es chico: preguntar también por `orders_get(ticket=...)` antes de concluir
-    que no está.
+10. ~~**Una orden PENDIENTE viva se borra del estado como "se cerró sola".**~~
+    **ARREGLADO el 26/09** (auditoría previa a fondear). `posicion_existe()`
+    ahora pregunta también por `orders_get(ticket=...)`: una pendiente viva
+    cuenta como existente y no se suelta del registro. Se arregló junto con el
+    punto 19, que era la otra mitad de la cadena. Lo que sigue valiendo: un
+    error de consulta (`None`) nunca borra nada, y lo que no está en ninguna de
+    las dos listas sí se da por cerrado, que es lo que evita perder una señal
+    de cada dos (§9).
 11. **`ENABLE_TELEGRAM_CONTROL=false` con dinero real arranca igual, y ahora
     es lo que el usuario quiere.** La guarda de §9 vive DENTRO de
     `if enable_telegram_control:`, así que con el control apagado el bloque
@@ -1771,13 +1825,17 @@ que no se entiende es barato—. Se anotan porque cuestan señales, no plata:
     única marca sea esa palabra. Perder una señal es más barato que abrir una
     operación que nadie pidió. Hoy no muerde porque el canal escribe `TP1:`. Si
     algún día cambia el formato, esto es lo primero a mirar.
-19. **La palabra `limit` o `stop` suelta ANTES del lado convierte una orden a
-    mercado en PENDIENTE.** *"Atención: hay un limit importante en 4450. GOLD
-    BUY XAUUSD 4432…"* → `OrderType.LIMIT`. Encadenado con el punto 10 —una
-    pendiente que el bot borra del estado creyendo que se cerró sola— es el
-    único camino por el que este canal podría dejar una orden viva sin gestión.
-    Requiere que el canal escriba esa palabra en inglés y suelta; no se observó
-    nunca.
+19. ~~**La palabra `limit` o `stop` suelta ANTES del lado convierte una orden a
+    mercado en PENDIENTE.**~~ **ARREGLADO el 26/09**, y era **peor de lo que
+    decía este punto**: no hacía falta la palabra en inglés ni un caso raro.
+    *"Ojo con el stop de ayer. DEAL | GOLD BUY XAUUSD 4432…"* daba `BUY STOP`,
+    y este canal habla del stop loss todo el tiempo y a veces le pone una frase
+    adelante al mensaje de apertura (el punto 17 es de esa familia). Ahora el
+    tipo de orden tiene que estar **pegado al lado** (`BUY LIMIT` o
+    `LIMIT BUY`), que es como lo escribe cualquier canal que de verdad mande
+    pendientes. Se pierde reconocer `SELL 2350 limit` —el tipo después del
+    precio—, y es el lado barato: perder una pendiente cuesta una señal,
+    inventarla cuesta una posición que nadie pidió (§12).
 
 ### Lo que quedó sin arreglar del informe y de la gestión
 
@@ -1956,6 +2014,12 @@ dos secciones que nadie contrastó contra el código.**
   con la misma `DATA_DIR` y distinto `STATE_PATH` arrancan los dos y se pisan
   `events.jsonl` y `paper_trades.jsonl`. Tampoco vigila la terminal ni la
   sesión de Telethon. Verificado con los cuatro casos.
+- **La cuenta se verifica antes de CADA orden, no solo al conectar**, y sin
+  saber en qué cuenta se está no se manda nada. Es la única regla donde "sin
+  dato" significa NO operar; el motivo, en §5.
+- **Una posición existe si está en las posiciones O en las órdenes
+  pendientes.** Solo cuando no está en ninguna de las dos se la saca del
+  registro.
 - **Con dinero real, las credenciales de MT5 son obligatorias, y la cuenta a la
   que se LLEGA tiene que ser la del `.env`.** Son las dos mitades del mismo
   agujero (§6, sexta ronda): `connect()` solo hace `login()` con las tres
