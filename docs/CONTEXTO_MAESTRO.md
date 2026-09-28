@@ -87,6 +87,24 @@ mitad", "cerrar"— y dice en qué paso falla y cuántos ms tardó. Datos en
 `data/ensayo/<fecha>`, nunca en los de la real. No volver a proponer otra
 instancia para esto.
 
+**El ensayo corrió el 29/09 a la 01:33 y dio `TODO ENTRA BIEN`.** Lo que se
+sabe de Bullwaves desde ahí (cuenta demo #4049265):
+
+- Empresa en MetaTrader: **Equitex Capital Limited**; servidor
+  `BullWaves-LIVE` (también para la demo: el bot la reconoció como demo por el
+  `trade_mode` que informa MetaTrader, no por el nombre del servidor).
+- Terminal: `C:\Program Files\BullWaves MT5 Terminal\terminal64.exe`.
+- El oro se llama **`XAUUSD`**, a secas. Lote mínimo 0.01, paso 0.01.
+- **Distancia mínima del stop: 0**. El breakeven no debería rechazarse por
+  cercanía (el 10016 que se temía).
+- Spread del oro a esa hora: ~0.19 (medio 4158.795, llenó en 4158.89). El
+  filtro de 0.05% son ~2 puntos: no lo toca.
+- Abrir tardó 174 ms de punta a punta (chequeos + orden); mover el SL, el
+  parcial y el cierre, ~160 ms cada uno.
+- "Cerrar la mitad" con 0.05 cierra 0.02 y deja 0.03 (0.025 no existe).
+- La demo tenía apalancamiento 1:500 y saldo 1000; el de la real se ve con
+  `tct mt5` al loguearla.
+
 Sobre su miedo de que más bots demoren la real: cada bot es un proceso aparte
 que recibe el mensaje a la vez que los otros; no hacen fila. Medido en la
 auditoría: con la IA de los tres ocupada, la señal entró en 0,01 s.
