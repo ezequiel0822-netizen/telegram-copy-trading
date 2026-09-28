@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-28 · v2.7.0 · 1113 tests · el último commit que describe
-es `d4ca830`, más este mismo cambio
+Actualizado: 2026-09-28 · v2.7.0 · 1108 tests · el último commit que describe
+es `e001701`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
 principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
@@ -75,26 +75,7 @@ de fondear. **No se evaluó al bróker** (regulación, retiros): eso lo revisa �
 Por eso el orden de abajo empieza por la ruta: `tct mt5 --env-file .env.real`
 se conecta a la terminal de ese `MT5_PATH`, y con la ruta vieja leería FxPro.
 
-**Antes de la real, una DEMO DE BULLWAVES** (lo pidió el 28/09: *"antes de
-poner la real ponemos la demo para ver si todo bien?"*). Cuarta instancia,
-`bullwaves`: `.env.bullwaves.example` → `.env.bullwaves`, arranca con
-`scripts\iniciar_bullwaves.bat`. Tiene **los mismos números que la real**
-(0.05, 2/2/5, filtro 0.05, solo oro, SL del canal, sin control por Telegram);
-`tests/test_demo_de_bullwaves.py` compara las dos plantillas para que no se
-separen. Roster en los cuatro `.env`: `INSTANCE_NAMES=demo,fxpro,bullwaves,real`.
-
-**Usa el MISMO MetaTrader de Bullwaves que la real** (una cuenta por
-terminal), así que es temporal y no corren a la vez: con la misma `MT5_PATH`
-la real no arranca (`_choques_con_otras_instancias`). Mientras dura la demo,
-`.env.real` se deja como está. Para pasar a la real: cerrar la demo,
-`ren .env.bullwaves .env.bullwaves.retirada` (deja de contar como bot) y
-seguir la lista de abajo; sus datos quedan en `data/bullwaves` para comparar.
-Qué mirar en la demo: que abra al precio y con el lote que dice, que el
-breakeven entre (distancia mínima de stops de Bullwaves), cuántas rechaza el
-filtro de 0.05 comparado con FxPro, y `tct informe --env-file .env.bullwaves`.
-
-**La lista para el día que fondee, vigente** (reemplaza la del 27/09; va
-DESPUÉS de la demo de Bullwaves):
+**La lista para el día que fondee, vigente** (reemplaza la del 27/09):
 
 0. Que los arreglos lleguen a `main` (necesitan su OK), y en su PC `git pull`
    y reiniciar las dos demos: el código se carga al arrancar.
