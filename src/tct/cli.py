@@ -592,6 +592,11 @@ def cmd_mt5(args: argparse.Namespace) -> int:
             print(f"  Apalanc.   : 1:{apalancamiento}")
         tipo = "DEMO" if es_demo else "REAL" if es_demo is False else "desconocido"
         print(f"  Tipo       : {tipo}")
+        from tct.brokers.mt5_native import modo_de_la_cuenta
+
+        modo = modo_de_la_cuenta(mt5, cuenta)
+        if modo:
+            print(f"  Posiciones : {modo.upper()}")
 
         _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos, lote, max_abiertas)
 
@@ -641,6 +646,13 @@ def cmd_mt5(args: argparse.Namespace) -> int:
                 "El boton 'Algo Trading' esta APAGADO. Ninguna orden va a entrar.\n"
                 "     Apretalo en la barra de arriba de MetaTrader (tiene que quedar\n"
                 "     verde) o presiona Ctrl+E."
+            )
+        if modo == "netting":
+            problemas.append(
+                "La cuenta es NETTING: MetaTrader junta todo lo de un simbolo en\n"
+                "     UNA posicion, y el bot necesita HEDGING (cada operacion la suya).\n"
+                "     En netting una senal SELL cerraria el BUY de otra senal. El bot\n"
+                "     NO opera esta cuenta. Abri una HEDGING: se elige al crearla."
             )
         if getattr(cuenta, "trade_allowed", True) is False:
             problemas.append(

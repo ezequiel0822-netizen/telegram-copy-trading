@@ -92,6 +92,27 @@ def elegir_nombre_de_simbolo(canonico: str, nombres: Iterable[str]) -> str | Non
     return None
 
 
+def modo_de_la_cuenta(mt5, account) -> str | None:
+    """"hedging", "netting", o None si la terminal no lo informa.
+
+    El bot da por hecho HEDGING: cada operacion es su propia posicion, con su
+    ticket, su stop y su breakeven. En NETTING, MetaTrader junta todo lo de un
+    simbolo en UNA posicion: una senal SELL con un BUY abierto CIERRA ese BUY
+    en vez de vender, y mover el stop de una senal mueve el de la otra. FxPro
+    es hedging y por eso nunca aparecio; al cambiar de broker, hay que mirarlo.
+    Es puro a proposito: lo usan el bot al conectar y `tct mt5`.
+    """
+    modo = getattr(account, "margin_mode", None)
+    if modo is None:
+        return None
+    if modo == getattr(mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2):
+        return "hedging"
+    if modo in (getattr(mt5, "ACCOUNT_MARGIN_MODE_RETAIL_NETTING", 0),
+                getattr(mt5, "ACCOUNT_MARGIN_MODE_EXCHANGE", 1)):
+        return "netting"
+    return None
+
+
 def _volumen_confirmado(result: Any, pedido: float) -> float:
     """El volumen que el broker dice haber ejecutado, o el pedido si no lo dice.
 
@@ -322,6 +343,22 @@ class MT5NativeBroker(Broker):
                     account.server,
                 )
                 return False
+
+        # Una cuenta NETTING rompe la idea de "una senal, una posicion" (ver
+        # `modo_de_la_cuenta`). No se opera: una SELL cerraria el BUY de otra
+        # senal. Si la terminal no lo informa, no se inventa un motivo.
+        if modo_de_la_cuenta(mt5, account) == "netting":
+            logger.error(
+                "La cuenta %s es NETTING: MetaTrader junta todo lo de un simbolo\n"
+                "        en UNA sola posicion. El bot necesita una cuenta HEDGING, donde\n"
+                "        cada operacion es su propia posicion.\n"
+                "        En netting, una senal SELL con un BUY abierto CIERRA ese BUY en\n"
+                "        vez de vender, y el stop de una senal pisa el de la otra.\n"
+                "        No se opera nada. El tipo se elige al abrir la cuenta: abri una\n"
+                "        HEDGING (si no aparece la opcion, preguntale al broker).",
+                account.login,
+            )
+            return False
 
         ok, reason = self._ensure_demo(account._asdict())
         if not ok:

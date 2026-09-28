@@ -27,6 +27,9 @@ _BROKER_SUFFIXES: dict[str, str] = {
     "roboforex": ".r",   # XAUUSD.r
     "icmarkets_raw": ".raw",
     "fxpro": "",
+    # Sin sufijo porque no se sabe: el nombre de verdad lo da la terminal
+    # (`tct mt5` lo muestra: "XAUUSD -> ..."). Esto es solo el respaldo.
+    "bullwaves": "",
     "tickmill": "",
 }
 

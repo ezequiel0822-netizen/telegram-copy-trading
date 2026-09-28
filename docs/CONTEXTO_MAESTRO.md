@@ -5,12 +5,14 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-27 · v2.7.0 · 1007 tests · el último commit que describe
-es `7f39c81`, más este mismo cambio
+Actualizado: 2026-09-28 · v2.7.0 · 1043 tests · el último commit que describe
+es `596a891`, más este mismo cambio
 
-**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-27"**, al
-principio de §2: es dónde quedó parado el usuario, qué le falta a `.env.real` y
-cuál es el próximo paso. Después "Estado al 2026-09-22", que tiene la
+**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
+principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
+lista vigente para el día de fondear. Después "Estado al 2026-09-27" (qué le
+falta a `.env.real`; su lista de fondeo con FxPro quedó reemplazada) y
+"Estado al 2026-09-22", que tiene la
 configuración de las tres instancias, y §5 y §9, que son las que evitan romper
 algo que costó caro.
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
@@ -38,7 +40,100 @@ Eso viene del pedido original y sigue vigente.
 
 ## 2. Dónde está el usuario ahora mismo
 
-### Estado al 2026-09-27 — leer esto primero
+### Estado al 2026-09-28 — leer esto primero
+
+**La cuenta real va en BULLWAVES, no en FxPro.** Lo decidió el 28/09 (*"si voy
+a usar bullwaves para la cuenta real, prepara todo"*). La cuenta real de FxPro
+(#516648640) queda sin usar. Las dos demos siguen igual: MetaQuotes y FxPro.
+
+**Qué cambió en el código por eso, y qué no.** Nada del bot dependía de FxPro:
+el nombre del oro se le pregunta a la terminal (`elegir_nombre_de_simbolo`), el
+modo de llenado se negocia solo y la cuenta se verifica contra el `.env`. Lo
+que sí apareció al mirarlo con otro bróker:
+
+- **Cuenta NETTING, sin cubrir.** El bot da por hecho HEDGING (cada señal su
+  posición, su ticket, su stop). En netting una SELL con un BUY abierto de
+  otra señal **cierra** ese BUY, y el stop de una pisa el de la otra; con la
+  real en 2 posiciones de oro a la vez, es plata. FxPro es hedging y por eso
+  nunca apareció. Ahora `modo_de_la_cuenta` lee `margin_mode`: con netting el
+  bot no conecta (tampoco al reconectar solo), y `tct mt5` lo muestra
+  (`Posiciones : HEDGING`) y lo marca como problema. Si la terminal no lo
+  informa, no se frena: no se inventa un motivo.
+- Perfil `bullwaves` en `symbol_map.py`, sin sufijo: es solo el respaldo, el
+  nombre real lo da la terminal.
+- `.env.real.example` y `iniciar_real.bat` escritos para Bullwaves: su propio
+  MetaTrader, así que **la real corre al lado de las dos demos** y ya no hace
+  falta cerrar el bot de FxPro para fondear. `INSTANCE_NAMES=demo,fxpro,real`.
+
+**Lo que NO está probado con Bullwaves:** la demo de FxPro ensayó la
+estrategia con los precios, el spread y la ejecución de FxPro. El filtro de
+0.05 (unos 2 puntos) se eligió ahí; si el precio del oro de Bullwaves difiere,
+filtra otras señales. Se le recomendó una demo de Bullwaves unos días antes
+de fondear. **No se evaluó al bróker** (regulación, retiros): eso lo revisa él.
+
+**En su PC, `.env.real` tiene `MT5_PATH` apuntando al MetaTrader de FxPro.**
+Por eso el orden de abajo empieza por la ruta: `tct mt5 --env-file .env.real`
+se conecta a la terminal de ese `MT5_PATH`, y con la ruta vieja leería FxPro.
+
+**La lista para el día que fondee, vigente** (reemplaza la del 27/09):
+
+0. Que los arreglos lleguen a `main` (necesitan su OK), y en su PC `git pull`
+   y reiniciar las dos demos: el código se carga al arrancar.
+1. Abrir la cuenta real de Bullwaves: MetaTrader 5, **HEDGING**.
+2. Instalar el MetaTrader de Bullwaves desde su web, loguear la cuenta real
+   tildando "Guardar contraseña", y Algo Trading en verde.
+3. La ruta: clic derecho en su acceso directo → Propiedades → copiar
+   "Destino", y pegarlo tal cual (con sus comillas) detrás del `=`:
+   `tct cambiar --env-file .env.real MT5_PATH=`
+4. `tct mt5 --env-file .env.real`: tiene que decir `Tipo : REAL`,
+   `Posiciones : HEDGING`, `XAUUSD -> <nombre>` y cuántas entran. Si dice
+   NETTING o `NO ENTRA NINGUNA`, se para acá. El margen se puede ver sin
+   fondear.
+5. `tct cambiar --env-file .env.real MT5_LOGIN=<login> "MT5_SERVER=<servidor>" MT5_BROKER_PROFILE=bullwaves MT5_PASSWORD`
+   (la password al final, sin `=`: la pide aparte).
+6. Fondear.
+7. `tct chats --env-file .env.real` (sesión de Telegram nueva: pide el código).
+8. `tct check --env-file .env.real`.
+9. `tct probar --operar --env-file .env.real` (pide la clave; abre y cierra
+   0.01 de verdad en Bullwaves).
+10. `iniciar_real.bat`. Las demos siguen abiertas.
+
+**Los arreglos de `596a891`** (primera mitad de la auditoría del 27/09:
+latencia, ejecución en MT5 y paridad con la demo), cada uno reproducido antes
+de arreglarlo:
+
+- **La IA local ya no frena señales.** Se consultaba con el turno del motor
+  tomado: una señal detrás de un mensaje no entendido esperaba 15 a 90 s, y el
+  filtro de entrada tarde llegó a rechazarla. Sin `OLLAMA_AUTO_EXECUTE`
+  (como en la real) ahora corre de fondo.
+- **MetaTrader reiniciado se reconecta solo**: en la guarda de cuenta antes de
+  cada orden y con un vigilante cada 30 s en `tct run`.
+- **Una orden sin respuesta no se reenvía**: se busca en la cuenta por la marca
+  del bot (antes podía abrir una segunda posición real). Igual los cierres.
+- Con la terminal en otra cuenta, una posición ya no se da por cerrada: la
+  respuesta es "no se sabe", y no se borran del registro posiciones vivas.
+- Llenado parcial (10010) se toma como abierta; recotizaciones se reintentan
+  con el precio nuevo, hasta 2; una lista de símbolos vacía ya no deja el oro
+  marcado como inexistente toda la sesión.
+- **Una edición abre solo dentro de los 10 minutos del mensaje original**: con
+  topes chicos, la real abría horas después una señal ya terminada.
+- **Un clic en la consola ya no congela el bot** (modo "Seleccionar" de
+  Windows): se apaga la selección rápida y los logs van por una cola.
+- El cupo diario de señales cuenta el día de la PC, no el UTC.
+- `tct mt5` avisa si entran menos posiciones que `MAX_OPEN_TRADES`.
+
+**La segunda mitad de esa auditoría NO corrió** (caminos solo LIVE, señales y
+estado, multi-instancia, calidad, y un ataque a los arreglos): los cinco
+revisores murieron por el límite de uso sin dejar nada. Es lo pendiente antes
+de fondear. **Lección, por segunda vez:** subir cada avance a una rama antes de
+lanzar revisores largos; los arreglos de `596a891` estuvieron un día enteros
+sin commit, solo en su PC.
+
+**Sobre su pregunta de sacar el bot de MetaQuotes para ganar velocidad:** no
+hace falta. Medido, le quita ~0 ms a la real; lo que costaba segundos era la
+IA, y quedó arreglado arriba.
+
+### Estado al 2026-09-27
 
 **Dónde quedó:** `.env.real` **completo salvo las credenciales de MT5**, que
 se ponen el día que fondee con la cuenta real abierta. Todavía **sin fondear**.
@@ -114,7 +209,8 @@ que falta confirmar es que reinició los dos bots demo después del `git pull`
 de `7f39c81`**: el código se carga al arrancar, y una ventana abierta desde
 antes sigue con el viejo. Dijo que hizo el pull; el reinicio no lo confirmó.
 
-**La lista para el día que fondee**, completa:
+**La lista para el día que fondee**, con FxPro. **REEMPLAZADA el 28/09** por
+la de Bullwaves, arriba; queda como historia:
 
 1. Fondear.
 2. Cerrar el bot de FxPro demo (`iniciar_segunda.bat`).
@@ -418,8 +514,8 @@ que encontrara. Salió de la plantilla VIEJA; los números ya se corrigieron
 con `tct cambiar` (lo vigente, en la tabla de arriba), y el 27/09 apareció que
 tampoco tenía el bloque de Telegram ("Estado al 2026-09-27").
 
-**El plan para pasar a real, tal como lo entendió el usuario** (la versión
-vigente, con el paso de Telegram, está en "Estado al 2026-09-27"): hoy
+**El plan para pasar a real, tal como lo entendió el usuario** (con FxPro;
+**la versión vigente, con Bullwaves, está en "Estado al 2026-09-28"**): hoy
 MetaQuotes demo + FxPro demo. Cuando fondee:
 
 1. Cerrar el bot de FxPro demo (`iniciar_segunda.bat`).

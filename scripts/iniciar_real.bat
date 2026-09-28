@@ -2,10 +2,10 @@
 REM ---------------------------------------------------------------------------
 REM  ARRANCA EL BOT CONTRA LA CUENTA REAL.
 REM
-REM  Usa .env.real, que es un archivo APARTE del .env de la demo. Puede correr
-REM  al mismo tiempo que la demo de MetaQuotes: cada uno tiene su carpeta de
-REM  datos y su sesion de Telegram. NO con la demo de FxPro, que usa la misma
-REM  terminal: primero se cierra ese bot, despues se loguea la cuenta real.
+REM  Usa .env.real, que es un archivo APARTE del .env de la demo. La cuenta real
+REM  es de BULLWAVES y tiene su propio MetaTrader (MT5_PATH en .env.real), asi
+REM  que puede correr al mismo tiempo que las dos demos: cada bot tiene su
+REM  terminal, su carpeta de datos y su sesion de Telegram.
 REM
 REM  Con ENABLE_TELEGRAM_CONTROL=false (como esta), NO hay pausa desde el
 REM  telefono: se frena cerrando esta ventana.
