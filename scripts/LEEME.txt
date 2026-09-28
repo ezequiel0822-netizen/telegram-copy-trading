@@ -26,6 +26,11 @@
       Arranca el SEGUNDO bot, con .env.segunda. Solo si montaste dos
       cuentas.
 
+  iniciar_bullwaves.bat
+      Arranca la DEMO DE BULLWAVES, con .env.bullwaves: el ensayo de la
+      cuenta real, con sus mismos numeros. Es temporal: cuando pases a la
+      real, se deja de usar (ver arriba de .env.bullwaves).
+
   autoarranque.bat
       Prende o apaga que los bots arranquen solos al encender la PC.
       Te muestra como esta ahora y te deja cambiarlo.
