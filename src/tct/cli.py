@@ -463,6 +463,16 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float,
         if margen.sin_margen:
             print(f"  {como:<22} no pide margen (apalancamiento ilimitado)")
             continue
+        # Cuanto vale cada punto con ESTE lote. Los numeros de riesgo del
+        # .env.real ("0.05 = 5 dolares por punto") suponen 100 onzas por lote;
+        # en la real de Bullwaves el oro es "XAUUSD!" y pedia la mitad de
+        # margen que eso, que puede ser un contrato de 50 (29/09).
+        info = mt5.symbol_info(real)
+        contrato = float(getattr(info, "trade_contract_size", 0) or 0) if info else 0.0
+        if contrato and moneda == "USD" and canonico.endswith("USD"):
+            valor = contrato * lote
+            print(f"  {'':<22} 1 lote = {contrato:g}; con {lote:g}, cada 1.00 de precio "
+                  f"vale {valor:g} USD")
         entran = int(capacidad // margen.pide)
         if entran and max_abiertas and entran < max_abiertas:
             pocas.append((canonico, entran))

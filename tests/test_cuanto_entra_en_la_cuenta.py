@@ -466,3 +466,15 @@ def test_sin_la_contrasena_guardada_lo_dice(tmp_path, monkeypatch, capsys, en_wi
 
     salida = capsys.readouterr().out
     assert "Guardar contrasena" in salida
+
+
+def test_dice_cuanto_vale_cada_punto_con_el_lote(tmp_path, monkeypatch, capsys, en_windows):
+    """La real de Bullwaves llama al oro XAUUSD! y pedia la mitad del margen de
+    un contrato de 100: el valor del punto no se puede suponer, se muestra."""
+    falso = MT5Falso()
+    falso.cuenta.currency = "USD"
+
+    correr(monkeypatch, falso, str(env(tmp_path)))
+
+    salida = capsys.readouterr().out
+    assert "1 lote = 100; con 0.01, cada 1.00 de precio vale 1 USD" in salida
