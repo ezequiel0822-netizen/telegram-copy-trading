@@ -171,7 +171,9 @@ def test_sin_respuesta_y_no_entro_no_se_reenvia():
 
     assert len(aperturas(terminal)) == 1
     assert not resultado.ok
-    assert "no esta en la cuenta" in resultado.reason
+    # Nunca "no entro": se sigue buscando (el motor la adopta si aparece).
+    assert resultado.raw.get("sin_confirmar")
+    assert "sigue buscando" in resultado.reason
 
 
 def test_sin_respuesta_y_sin_poder_mirar_la_cuenta_lo_dice():
@@ -184,7 +186,7 @@ def test_sin_respuesta_y_sin_poder_mirar_la_cuenta_lo_dice():
 
     assert len(aperturas(terminal)) == 1
     assert not resultado.ok
-    assert "mira MetaTrader" in resultado.reason
+    assert resultado.raw.get("sin_confirmar"), "tiene que quedar para buscarla despues"
 
 
 def test_una_posicion_que_ya_estaba_no_se_confunde_con_la_nueva():
@@ -218,31 +220,18 @@ def test_un_cierre_sin_respuesta_no_se_reenvia():
 # --------------------------------------------------------------------------
 
 
-def test_una_recotizacion_se_reintenta_con_el_precio_nuevo():
-    broker, terminal = armar()
-    terminal.recotizar = 1
-    terminal.simbolos["GOLD"]["ask"] = 4432.0
-
-    def mover_el_precio(nombre):
-        terminal.simbolos["GOLD"]["ask"] = 4432.4
-        return FakeMT5.symbol_info_tick(terminal, nombre)
-    terminal.symbol_info_tick = mover_el_precio
-
-    resultado = abrir(broker)
-
-    assert resultado.ok
-    assert len(aperturas(terminal)) == 2
-    assert aperturas(terminal)[-1]["price"] == 4432.4
-
-
-def test_las_recotizaciones_tienen_un_limite():
+def test_una_recotizacion_no_se_reintenta_en_el_broker():
+    """El broker no conoce la senal: reintentar con el precio nuevo se salteaba
+    el filtro de entrada tarde. Devuelve la recotizacion y decide el motor
+    (tests/test_auditoria_ejecucion.py)."""
     broker, terminal = armar()
     terminal.recotizar = 10
 
     resultado = abrir(broker)
 
     assert not resultado.ok
-    assert len(aperturas(terminal)) == 3
+    assert resultado.raw.get("recotizacion")
+    assert len(aperturas(terminal)) == 1
     assert terminal.posiciones_abiertas() == []
 
 

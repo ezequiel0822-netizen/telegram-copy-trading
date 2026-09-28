@@ -206,6 +206,18 @@ def _market_distance_reasons(
     ]
 
 
+def motivos_por_distancia(
+    settings: Settings, event: SignalEvent, market_price: float | None
+) -> list[str]:
+    """El filtro de entrada tarde, para quien tiene que volver a mirarlo.
+
+    Lo usa el motor antes de reintentar una orden que el broker rechazo por
+    precio: el reintento sale con la cotizacion NUEVA, y tiene que pasar el
+    mismo filtro que paso la primera.
+    """
+    return _market_distance_reasons(settings, event, market_price)
+
+
 # Cuanto mas lejos puede estar el mercado cuando se movio A FAVOR. Es un
 # FACTOR sobre MAX_SPREAD_FROM_ENTRY_PCT, no un porcentaje aparte.
 #

@@ -38,11 +38,10 @@ MAGIA = 20260829
 _SIN_TERMINAL = frozenset({-10001, -10002, -10004, -10005})
 
 # Rechazos por precio: el broker contesta que la orden NO se ejecuto porque el
-# precio se movio. Reintentar con la cotizacion nueva es seguro -no entro nada-
-# y es lo mismo que hacen las funciones Buy/Sell del propio paquete. Cualquier
-# otro rechazo no se reintenta.
+# precio se movio. No entro nada, asi que reintentar es seguro, pero lo decide
+# el motor, que es el que puede volver a pasar el precio nuevo por el filtro de
+# entrada tarde (ver `_open_sync`).
 _RECOTIZACION = frozenset({10004, 10020, 10021})
-_REINTENTOS_POR_PRECIO = 2
 
 logger = logging.getLogger(__name__)
 
@@ -810,7 +809,6 @@ class MT5NativeBroker(Broker):
         last_result = None
         modos = self._filling_modes(info)
         cual = 0
-        por_precio = 0
         while cual < len(modos):
             request["type_filling"] = modos[cual]
             result = mt5.order_send(request)
@@ -822,7 +820,7 @@ class MT5NativeBroker(Broker):
                 # y eso podia abrir una SEGUNDA posicion real que el bot no
                 # gestionaba. Ahora nunca se reenvia: se mira la cuenta.
                 return self._orden_sin_respuesta(broker_symbol, symbol, pendiente, antes,
-                                                 volume, result)
+                                                 volume, result, tipo=mt5_type)
             if (result.retcode == hecho
                     or (result.retcode == parcial and not pendiente)
                     or (result.retcode == colocada and pendiente)):
@@ -843,18 +841,19 @@ class MT5NativeBroker(Broker):
                     symbol=symbol,
                     raw={"retcode": result.retcode, "comment": result.comment},
                 )
-            if (result.retcode in _RECOTIZACION and not pendiente
-                    and por_precio < _REINTENTOS_POR_PRECIO):
-                # El precio se movio y el broker no ejecuto: se reintenta con la
-                # cotizacion nueva y el mismo modo de llenado.
-                tick = mt5.symbol_info_tick(broker_symbol)
-                if tick is None:
-                    break
-                por_precio += 1
-                request["price"] = float(tick.ask if is_buy else tick.bid)
-                logger.info("El broker pidio otro precio (retcode %s): reintento %s con %s.",
-                            result.retcode, por_precio, request["price"])
-                continue
+            if result.retcode in _RECOTIZACION and not pendiente:
+                # El precio se movio y el broker no ejecuto: no entro nada. NO
+                # se reintenta aca. El broker no conoce la senal, y reintentar
+                # con la cotizacion nueva se salteaba el filtro de entrada
+                # tarde: una entrada 4432 abrio a 4440.5, con el tope en 0.05%.
+                # El motor vuelve a pasar el precio por el filtro y recien ahi
+                # reintenta (`Engine._send_open`).
+                return OrderResult(
+                    False, "open",
+                    f"El broker pidio otro precio (retcode {result.retcode}): no entro nada",
+                    symbol=symbol, lot=volume,
+                    raw={"retcode": result.retcode, "recotizacion": True},
+                )
             if result.retcode != getattr(mt5, "TRADE_RETCODE_INVALID_FILL", 10030):
                 break  # el rechazo no es por filling mode: no tiene sentido reintentar
             cual += 1
@@ -873,43 +872,65 @@ class MT5NativeBroker(Broker):
         )
 
     def _tickets_propios(self, broker_symbol: str, pendiente: bool) -> set[int] | None:
-        """Los tickets de este bot en el simbolo (posiciones, u ordenes si es
-        pendiente). None si no se pudo preguntar."""
-        consulta = self._mt5.orders_get if pendiente else self._mt5.positions_get
+        """Los tickets de este bot en el simbolo: posiciones Y ordenes. None si
+        no se pudo preguntar.
+
+        Las dos listas, siempre. Una pendiente del bot que se dispara mientras
+        se espera la respuesta pasa de ordenes a posiciones CON EL MISMO
+        ticket; si `antes` no la tenia, se la tomaba por la orden nueva y dos
+        senales quedaban registradas sobre una sola posicion.
+        """
         try:
-            items = consulta(symbol=broker_symbol)
+            posiciones = self._mt5.positions_get(symbol=broker_symbol)
+            ordenes = self._mt5.orders_get(symbol=broker_symbol)
         except Exception:
             return None
-        if items is None:
+        if posiciones is None or ordenes is None:
             return None
-        return {int(p.ticket) for p in items if getattr(p, "magic", None) == MAGIA}
+        return {int(p.ticket) for p in (*posiciones, *ordenes)
+                if getattr(p, "magic", None) == MAGIA}
 
     def _orden_sin_respuesta(self, broker_symbol: str, symbol: str, pendiente: bool,
-                             antes: set[int] | None, volume: float, result: Any) -> OrderResult:
+                             antes: set[int] | None, volume: float, result: Any,
+                             tipo: int | None = None) -> OrderResult:
         """order_send no confirmo: se busca en la cuenta si la orden entro.
 
-        Se pregunta unas veces durante ~1,5 segundos, porque la posicion puede
-        tardar en aparecer. Lo que se encuentra se devuelve como abierto, para
-        que el motor la gestione; lo que no, como fallido. Y si ni siquiera se
-        puede preguntar, se dice que no se sabe: es el unico caso en que puede
-        quedar una posicion real sin registrar, y tiene que verse.
+        Se pregunta unas veces durante ~1,5 segundos, y hasta ~5 si hay una
+        orden propia en curso (aceptada y todavia ejecutandose: vive un rato en
+        las ordenes antes de ser posicion). Si el canal con la terminal se
+        corto -el caso tipico de un order_send sin respuesta es que MetaTrader
+        se reinicio- se reconecta para poder mirar.
+
+        Lo que se encuentra se devuelve como abierto, para que el motor lo
+        gestione. Lo que no, NUNCA se afirma que "no entro": vuelve como
+        `sin_confirmar`, y el motor lo sigue buscando (`buscar_sin_registrar`).
         """
         detalle = (f"retcode={result.retcode}" if result is not None
                    else f"devolvio None: {self._mt5.last_error()}")
-        for intento in range(4):
+        reconecto = False
+        despues = None
+        intento = 0
+        limite = 4
+        while intento < limite:
             if intento:
                 time.sleep(0.5)
+            intento += 1
             despues = self._tickets_propios(broker_symbol, pendiente)
+            if despues is None and not reconecto and self._se_corto_la_terminal():
+                reconecto = True
+                self._reconectar_sync()
+                limite += 1
+                continue
             if antes is None or despues is None:
                 continue
-            nuevos = sorted(despues - antes)
-            if nuevos:
-                ticket = nuevos[-1]
-                consulta = self._mt5.orders_get if pendiente else self._mt5.positions_get
-                try:
-                    encontrada = (consulta(ticket=ticket) or [None])[0]
-                except Exception:
-                    encontrada = None
+            for ticket in sorted(despues - antes, reverse=True):
+                encontrada = self._propia(ticket, pendiente)
+                if encontrada is None:
+                    # Todavia es una orden en curso (a mercado): esperar.
+                    limite = 10
+                    continue
+                if tipo is not None and getattr(encontrada, "type", tipo) != tipo:
+                    continue
                 logger.warning("order_send no confirmo (%s), pero la orden SI entro: "
                                "ticket %s.", detalle, ticket)
                 return OrderResult(
@@ -921,17 +942,55 @@ class MT5NativeBroker(Broker):
                                       getattr(encontrada, "volume", volume)) or volume),
                     symbol=symbol, raw={"sin_respuesta": True},
                 )
-        if antes is None or despues is None:
-            logger.error(
-                "order_send no confirmo (%s) y NO se pudo revisar la cuenta. Puede haber\n"
-                "        entrado una posicion que el bot no gestiona: mira MetaTrader.", detalle)
-            return OrderResult(False, "open",
-                               f"order_send no confirmo ({detalle}) y no se pudo revisar la "
-                               "cuenta: mira MetaTrader por si entro",
-                               symbol=symbol, lot=volume, raw={"sin_respuesta": True})
+        logger.error(
+            "order_send no confirmo (%s) y la orden no aparecio en la cuenta todavia.\n"
+            "        El bot la sigue buscando y, si aparece, la toma bajo su gestion.\n"
+            "        Si no aparece en unos minutos, no entro.", detalle)
         return OrderResult(False, "open",
-                           f"order_send no confirmo ({detalle}) y la orden no esta en la cuenta",
-                           symbol=symbol, lot=volume, raw={"sin_respuesta": True})
+                           f"order_send no confirmo ({detalle}) y la orden no aparecio "
+                           "todavia en la cuenta: el bot la sigue buscando",
+                           symbol=symbol, lot=volume,
+                           raw={"sin_respuesta": True, "sin_confirmar": True})
+
+    def _propia(self, ticket: int, pendiente: bool):
+        """La posicion (o, si es pendiente, la orden) con ese ticket, o None."""
+        consulta = self._mt5.orders_get if pendiente else self._mt5.positions_get
+        try:
+            return (consulta(ticket=ticket) or [None])[0]
+        except Exception:
+            return None
+
+    async def buscar_sin_registrar(self, *, symbol: str, side: Side,
+                                   conocidos: set[int]) -> OrderResult | None:
+        """Una posicion de ESTE bot en el simbolo y el lado pedidos que el motor
+        no tiene registrada, o None. Es como aparece despues una orden que
+        order_send no confirmo."""
+        if not await self.is_ready():
+            return None
+        return await asyncio.to_thread(self._buscar_sin_registrar_sync, symbol, side,
+                                       conocidos)
+
+    def _buscar_sin_registrar_sync(self, symbol: str, side: Side,
+                                   conocidos: set[int]) -> OrderResult | None:
+        broker_symbol = self._resolver_contra_broker(symbol) or to_broker_symbol(
+            symbol, self.settings.mt5_broker_profile)
+        try:
+            posiciones = self._mt5.positions_get(symbol=broker_symbol)
+        except Exception:
+            return None
+        tipo = (self._mt5.POSITION_TYPE_BUY if side is Side.BUY
+                else self._mt5.POSITION_TYPE_SELL)
+        for p in posiciones or ():
+            if (getattr(p, "magic", None) == MAGIA and getattr(p, "type", None) == tipo
+                    and int(p.ticket) not in conocidos):
+                return OrderResult(
+                    True, "open", "orden sin confirmar: aparecio en la cuenta",
+                    ticket=int(p.ticket),
+                    price=float(getattr(p, "price_open", 0) or 0) or None,
+                    lot=float(getattr(p, "volume", 0) or 0) or None,
+                    symbol=symbol, raw={"sin_respuesta": True},
+                )
+        return None
 
     async def close_position(
         self, *, ticket: int | None, symbol: str, fraction: float = 1.0
@@ -1013,6 +1072,15 @@ class MT5NativeBroker(Broker):
                 return self._cierre_sin_respuesta(ticket, symbol, action, volumen_antes)
             if result.retcode in (mt5.TRADE_RETCODE_DONE,
                                   getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)):
+                cerrado = _volumen_confirmado(result, volume)
+                if fraction >= 1.0 and (
+                        result.retcode != mt5.TRADE_RETCODE_DONE
+                        or cerrado < volumen_antes - 1e-9):
+                    # Se pidio cerrar TODO y el broker cerro una parte. Darla
+                    # por cerrada sacaba la posicion del registro y dejaba el
+                    # resto corriendo sin breakeven y fuera de los topes.
+                    return self._cierre_total_incompleto(ticket, symbol,
+                                                         volumen_antes, cerrado)
                 return OrderResult(
                     ok=True, action=action, reason="cierre ejecutado", ticket=ticket,
                     price=float(result.price or 0) or None,
@@ -1031,6 +1099,32 @@ class MT5NativeBroker(Broker):
         )
         return OrderResult(False, action, reason, ticket=ticket, symbol=symbol)
 
+    def _cierre_total_incompleto(self, ticket: int, symbol: str, volumen_antes: float,
+                                 cerrado: float) -> OrderResult:
+        """Se pidio cerrar todo y el broker informo menos: se mira la cuenta.
+
+        Solo es un cierre si la posicion ya no existe. Si queda algo, no es ok
+        y `raw["restante"]` dice cuanto, para que el motor la siga gestionando
+        con el lote que de verdad quedo.
+        """
+        try:
+            posiciones = self._mt5.positions_get(ticket=ticket)
+        except Exception:
+            posiciones = None
+        if posiciones is None:
+            restante = max(0.0, round(volumen_antes - cerrado, 8))
+        else:
+            restante = float(getattr(posiciones[0], "volume", 0.0)) if posiciones else 0.0
+        if restante <= 1e-9:
+            return OrderResult(True, "close", "cierre ejecutado", ticket=ticket,
+                               lot=volumen_antes, symbol=symbol)
+        logger.error("Se pidio cerrar %s y el broker cerro solo una parte: quedan %s "
+                     "lotes abiertos.", ticket, restante)
+        return OrderResult(False, "close",
+                           f"el broker cerro solo una parte: quedan {restante:g} lotes abiertos",
+                           ticket=ticket, lot=round(volumen_antes - restante, 8),
+                           symbol=symbol, raw={"restante": restante})
+
     def _cierre_sin_respuesta(self, ticket: int, symbol: str, action: str,
                               volumen_antes: float) -> OrderResult:
         """order_send no confirmo el cierre: se mira como quedo la posicion."""
@@ -1045,6 +1139,10 @@ class MT5NativeBroker(Broker):
             if posiciones is None:
                 continue
             restante = float(getattr(posiciones[0], "volume", 0.0)) if posiciones else 0.0
+            if action == "close" and 1e-9 < restante < volumen_antes - 1e-9:
+                # Cierre TOTAL que entro a medias: igual que con respuesta.
+                return self._cierre_total_incompleto(ticket, symbol, volumen_antes,
+                                                     volumen_antes - restante)
             if restante < volumen_antes - 1e-9:
                 logger.warning("order_send no confirmo el cierre de %s, pero SE cerro "
                                "(quedan %s lotes).", ticket, restante)

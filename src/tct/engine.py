@@ -25,15 +25,25 @@ from tct.config import Settings
 from tct.risk import (
     evaluate_management,
     evaluate_open,
+    motivos_por_distancia,
     stop_agranda_el_riesgo,
     stop_fuera_de_escala,
     usable_take_profits,
 )
-from tct.signals.models import EventType, SignalEvent, Side
+from tct.signals.models import EventType, OrderType, SignalEvent, Side
 from tct.signals.parser import es_descarte_deliberado, parse_signal, pide_mover_tp
 from tct.store import OpenPosition, Store, utc_now_iso
 
 logger = logging.getLogger(__name__)
+
+# Cuantas veces se reintenta una orden a mercado que el broker rechazo porque
+# el precio se movio (recotizacion). Cada reintento vuelve a pasar el precio
+# nuevo por el filtro de entrada tarde: ver `Engine._send_open`.
+REINTENTOS_POR_PRECIO = 2
+
+# Cuanto se sigue buscando una orden que order_send no confirmo. Si entro,
+# aparece en segundos; esto cubre un MetaTrader que tarda en volver.
+BUSCAR_SIN_CONFIRMAR = timedelta(minutes=10)
 
 
 def _vale_preguntarle_a_la_ia(event: SignalEvent | None, text: str) -> bool:
@@ -241,6 +251,8 @@ class Engine:
         # forma simple de que la foto que ve el riesgo siga siendo cierta
         # cuando se escribe el resultado.
         self._turno = asyncio.Lock()
+        # Ordenes que order_send no confirmo y todavia no aparecieron.
+        self._sin_confirmar: list[dict[str, Any]] = []
         # Las consultas a la IA que corren de fondo (ver `_ia_de_fondo`).
         self._tareas_ia: set[asyncio.Task] = set()
 
@@ -420,6 +432,9 @@ class Engine:
         # esto, la regla de "ya hay una posicion abierta en X" rechaza la
         # senal que viene ahora por culpa de una que dejo de existir.
         await self._sincronizar_posiciones()
+        # Y lo contrario: una orden que no se confirmo y SI entro tiene que
+        # estar registrada antes de mirar los topes, o se abre una de mas.
+        await self._confirmar_sin_respuesta()
 
         await self._actualizar_equity()
 
@@ -513,6 +528,16 @@ class Engine:
             # MAX_OPEN_TRADES, para siempre. El paper trade de arriba ya quedo
             # escrito, asi que la senal no se pierde.
             if order is not None and not order.ok:
+                if order.raw.get("sin_confirmar"):
+                    # order_send no contesto y la orden no aparecio todavia:
+                    # pudo haber entrado. Se la sigue buscando; si aparece, se
+                    # registra como esta posicion (`_confirmar_sin_respuesta`).
+                    self._sin_confirmar.append({
+                        "event": event, "trade_id": trade_id, "lot": lot,
+                        "take_profits": take_profits, "indice": indice,
+                        "objetivo": objetivo,
+                        "hasta": datetime.now(timezone.utc) + BUSCAR_SIN_CONFIRMAR,
+                    })
                 fallidas.append(f"{etiqueta}: {order.reason}")
                 ordenes_fallidas.append(order.to_dict())
                 logger.error("El broker rechazo la apertura de %s (%s): %s",
@@ -528,28 +553,8 @@ class Engine:
             # a los avisos y sobre todo a la matematica de los cierres parciales
             # trabajando sobre un lote que en MT5 no existe.
             lot_abierto = order.lot if (order is not None and order.lot) else lot
-            position = OpenPosition(
-                trade_id=trade_id,
-                symbol=(event.symbol or "").upper(),
-                side=event.side.value if event.side else "",
-                lot=lot_abierto,
-                entry=event.entry,
-                stop_loss=event.stop_loss,
-                take_profits=take_profits,
-                opened_at=utc_now_iso(),
-                signal_message_id=event.telegram_message_id,
-                broker_ticket=order.ticket if order else None,
-                mode=self.settings.trading_mode,
-                # El precio al que el broker lleno DE VERDAD. Es lo que despues
-                # convierte un "MOVER SL A <la entrada>" en un breakeven real y
-                # no en una perdida del tamano del spread.
-                entry_real=order.price if order else None,
-                # Que TP de la senal persigue esta posicion y el que tiene
-                # puesto. Hace falta para "mover TP": se mueve solo la del TP1,
-                # y sin este dato no hay forma de saber cual es.
-                tp_indice=indice if objetivo is not None else None,
-                tp_objetivo=objetivo,
-            )
+            position = self._nueva_posicion(event, trade_id, order, lot_abierto,
+                                            take_profits, indice, objetivo)
             self.store.add_position(position)
             aperturas.append({
                 "trade_id": trade_id,
@@ -574,9 +579,14 @@ class Engine:
                 "orders": ordenes_fallidas,
             })
             motivo = fallidas[0].split(": ", 1)[-1] if fallidas else "sin motivo"
+            sin_confirmar = any(o.get("raw", {}).get("sin_confirmar")
+                                for o in ordenes_fallidas)
             await self._avisar(
                 f"NO se pudo abrir {event.symbol}: {motivo}\n"
-                "La senal quedo registrada, pero no hay ninguna posicion.",
+                + ("MetaTrader no confirmo: puede haber entrado. El bot la sigue\n"
+                   "buscando y, si aparece, la toma bajo su gestion."
+                   if sin_confirmar else
+                   "La senal quedo registrada, pero no hay ninguna posicion."),
                 problema=True,
             )
             return {
@@ -714,15 +724,41 @@ class Engine:
             )
         # MT5 admite un solo TP por posicion: se manda el mas cercano y los
         # demas quedan para gestionarse con los cierres parciales del grupo.
-        return await self.broker.open_order(
-            symbol=event.symbol or "",
-            side=event.side or Side.BUY,
-            order_type=event.order_type,
-            lot=lot,
-            entry=event.entry,
-            stop_loss=event.stop_loss,
-            take_profit=take_profits[0] if take_profits else None,
-        )
+        async def mandar() -> OrderResult:
+            return await self.broker.open_order(
+                symbol=event.symbol or "",
+                side=event.side or Side.BUY,
+                order_type=event.order_type,
+                lot=lot,
+                entry=event.entry,
+                stop_loss=event.stop_loss,
+                take_profit=take_profits[0] if take_profits else None,
+            )
+
+        orden = await mandar()
+        # Recotizacion: el precio se movio y el broker no ejecuto nada. Se
+        # reintenta, pero solo si el precio NUEVO sigue pasando el filtro de
+        # entrada tarde. Reintentar a ciegas (como se hacia dentro del broker)
+        # abrio una entrada 4432 a 4440.5, con el tope en 0.05%: justo el caso
+        # para el que el filtro existe, el precio moviendose rapido.
+        for intento in range(1, REINTENTOS_POR_PRECIO + 1):
+            if (orden is None or orden.ok or not orden.raw.get("recotizacion")
+                    or event.order_type is not OrderType.MARKET):
+                break
+            precio = await self._precio_de_mercado(event.symbol)
+            if precio is None:
+                break  # sin precio no se puede volver a mirar el filtro
+            motivos = motivos_por_distancia(self.settings, event, precio)
+            if motivos:
+                return OrderResult(
+                    False, "open", f"El precio se movio mientras se abria: {motivos[0]}",
+                    symbol=event.symbol, lot=orden.lot,
+                    raw={"retcode": orden.raw.get("retcode"), "recotizacion": True},
+                )
+            logger.info("El broker pidio otro precio: reintento %s de %s con %s.",
+                        intento, REINTENTOS_POR_PRECIO, precio)
+            orden = await mandar()
+        return orden
 
     # -- Gestion -----------------------------------------------------------
 
@@ -760,6 +796,11 @@ class Engine:
             elif self._reconciliar_ausente(position, order):
                 ausentes.append(position.symbol)
             else:
+                # Un cierre total que el broker lleno a medias: la posicion
+                # sigue, con menos lote. Se registra lo que quedo de verdad.
+                restante = order.raw.get("restante")
+                if restante is not None and position.lot:
+                    position.remaining_fraction = round(float(restante) / position.lot, 4)
                 fallidas.append(f"{position.symbol}: {order.reason}")
             results.append(order.to_dict())
 
@@ -1402,10 +1443,87 @@ class Engine:
         orden: el paquete MetaTrader5 es un solo canal.
         """
         revisar = getattr(self.broker, "revisar_conexion", None)
-        if revisar is None:
+        if revisar is None and not self._sin_confirmar:
             return
         async with self._turno:
-            await revisar()
+            if revisar is not None:
+                await revisar()
+            if self._sin_confirmar:
+                await self._confirmar_sin_respuesta()
+                self.store.save_state()
+
+    async def _confirmar_sin_respuesta(self) -> None:
+        """Busca en la cuenta las ordenes que order_send no confirmo.
+
+        POR QUE
+        -------
+        El caso tipico de un order_send sin respuesta es que MetaTrader se
+        reinicio justo al mandar. La orden pudo haber entrado, y sin esto
+        quedaba una posicion real que el bot no gestionaba (sin breakeven, sin
+        cierre) y que no contaba para MAX_OPEN_TRADES: con tope 2 llegaron a
+        quedar 3 abiertas. Se busca antes de cada senal y en cada vuelta del
+        vigilante (30 s), durante `BUSCAR_SIN_CONFIRMAR`.
+        """
+        buscar = getattr(self.broker, "buscar_sin_registrar", None)
+        if buscar is None or not self._sin_confirmar:
+            return
+        ahora = datetime.now(timezone.utc)
+        for pendiente in list(self._sin_confirmar):
+            event = pendiente["event"]
+            conocidos = {p.broker_ticket for p in self.store.open_positions()
+                         if p.broker_ticket is not None}
+            try:
+                order = await buscar(symbol=event.symbol or "",
+                                     side=event.side or Side.BUY, conocidos=conocidos)
+            except Exception:
+                logger.warning("No se pudo buscar la orden sin confirmar", exc_info=True)
+                continue
+            if order is None:
+                if ahora > pendiente["hasta"]:
+                    self._sin_confirmar.remove(pendiente)
+                    logger.info("La orden de %s que no se confirmo no aparecio: no entro.",
+                                event.symbol)
+                continue
+            self._sin_confirmar.remove(pendiente)
+            position = self._nueva_posicion(
+                event, pendiente["trade_id"], order, order.lot or pendiente["lot"],
+                pendiente["take_profits"], pendiente["indice"], pendiente["objetivo"])
+            self.store.add_position(position)
+            self.store.append_event("apertura_confirmada_tarde", {
+                "signal": event.to_dict(), "order": order.to_dict(),
+                "trade_id": pendiente["trade_id"],
+            })
+            await self._avisar(
+                f"La orden de {event.symbol} que MetaTrader no confirmo SI entro "
+                f"(ticket {order.ticket}). Ahora la gestiona el bot.",
+                problema=True,
+            )
+
+    def _nueva_posicion(self, event: SignalEvent, trade_id: str, order: OrderResult | None,
+                        lot: float, take_profits: list[float], indice: int,
+                        objetivo: float | None) -> OpenPosition:
+        return OpenPosition(
+            trade_id=trade_id,
+            symbol=(event.symbol or "").upper(),
+            side=event.side.value if event.side else "",
+            lot=lot,
+            entry=event.entry,
+            stop_loss=event.stop_loss,
+            take_profits=take_profits,
+            opened_at=utc_now_iso(),
+            signal_message_id=event.telegram_message_id,
+            broker_ticket=order.ticket if order else None,
+            mode=self.settings.trading_mode,
+            # El precio al que el broker lleno DE VERDAD. Es lo que despues
+            # convierte un "MOVER SL A <la entrada>" en un breakeven real y
+            # no en una perdida del tamano del spread.
+            entry_real=order.price if order else None,
+            # Que TP de la senal persigue esta posicion y el que tiene
+            # puesto. Hace falta para "mover TP": se mueve solo la del TP1,
+            # y sin este dato no hay forma de saber cual es.
+            tp_indice=indice if objetivo is not None else None,
+            tp_objetivo=objetivo,
+        )
 
     async def esperar_la_ia(self) -> None:
         """Espera las consultas a la IA que quedaron de fondo (tests, cierre)."""

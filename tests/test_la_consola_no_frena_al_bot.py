@@ -70,6 +70,7 @@ def test_el_vigilante_revisa_con_el_turno_tomado():
     motor = Engine.__new__(Engine)
     motor.broker = Broker()
     motor._turno = asyncio.Lock()
+    motor._sin_confirmar = []
 
     asyncio.run(motor.revisar_el_broker())
 
