@@ -934,6 +934,162 @@ _MERCADO_CERRADO = 10018
 
 
 # --------------------------------------------------------------------------
+# volumen
+# --------------------------------------------------------------------------
+
+
+def cmd_volumen(args: argparse.Namespace) -> int:
+    """Abre una compra y una venta del mismo tamano, las deja un rato y las cierra.
+
+    POR QUE EXISTE
+    --------------
+    El canal le pidio (29/09), para entrar a su grupo "PRO", operar 1 lote en
+    la cuenta: 0.50 de compra y 0.50 de venta de EURUSD a la vez, 30 minutos, y
+    mandar capturas. Lo decidio el, sabiendo lo que cuesta (el spread de las
+    dos, unos 15-20 USD) y que conviene mirar si las condiciones del bono lo
+    permiten. Pidio hacerlo con un comando.
+
+    NO es parte del bot y no opera senales. Por eso: pide la clave (es la cuenta
+    real), toma el candado del bot (no corre con el bot andando, y el bot no
+    arranca mientras corre), muestra el costo y espera un SI, y si una de las
+    dos no entra cierra la otra en el acto: nunca queda 0.50 sin su pareja. Las
+    posiciones no entran en el registro del bot.
+    """
+    if sys.platform != "win32":
+        print("Este comando opera MetaTrader 5, que solo existe en Windows.")
+        return 1
+
+    settings = load_settings(args.env_file)
+    setup_logging(verbose=args.verbose)
+    if not _exigir_clave(settings, args.env_file, "abrir estas posiciones"):
+        return 1
+
+    from tct.lockfile import CarpetaOcupada, lock_para
+
+    lock = lock_para(settings)
+    try:
+        lock.tomar()
+    except CarpetaOcupada:
+        print("\nEl bot de esta cuenta esta ANDANDO. Cerra su ventana primero: con las")
+        print("dos posiciones abiertas le ocuparian el margen a una senal de oro.")
+        return 1
+    try:
+        return asyncio.run(_volumen_async(
+            settings, simbolo=args.simbolo, lote=args.lote, minutos=args.minutos,
+            confirmar=lambda: input("\n  Escribi SI para abrirlas: ").strip().upper() == "SI",
+        ))
+    finally:
+        lock.soltar()
+
+
+async def _volumen_async(settings: Settings, *, simbolo: str, lote: float, minutos: float,
+                         confirmar, esperar=None) -> int:
+    import dataclasses
+
+    from tct.brokers.mt5_native import MT5NativeBroker
+    from tct.signals.models import OrderType, Side
+
+    esperar = esperar or asyncio.sleep
+    # MAX_LOT es el techo de las SENALES (0.05). Esto no es una senal: se abre
+    # a pedido, con el lote que se pidio, y en ningun otro camino se levanta.
+    broker = MT5NativeBroker(dataclasses.replace(settings, max_lot=lote))
+    print(f"\nConectando con {settings.mt5_path or 'la terminal abierta'}...")
+    if not await broker.connect():
+        print("No conecto: el motivo esta arriba.")
+        return 1
+    mt5 = broker._mt5
+    try:
+        real = broker._resolver_contra_broker(simbolo)
+        tick = mt5.symbol_info_tick(real) if real else None
+        info = mt5.symbol_info(real) if real else None
+        if not real or tick is None or info is None:
+            print(f"{simbolo}: no aparece en este broker o no cotiza ahora (mercado cerrado?).")
+            return 1
+        contrato = float(getattr(info, "trade_contract_size", 0) or 0)
+        spread = float(tick.ask) - float(tick.bid)
+        costo = spread * contrato * lote * 2
+        margen = sum(float(mt5.order_calc_margin(tipo, real, lote, precio) or 0)
+                     for tipo, precio in ((mt5.ORDER_TYPE_BUY, tick.ask),
+                                          (mt5.ORDER_TYPE_SELL, tick.bid)))
+        cuenta = mt5.account_info()
+        balance_antes = float(getattr(cuenta, "balance", 0) or 0)
+        libre = float(getattr(cuenta, "margin_free", 0) or 0)
+
+        print("\n" + "=" * 62)
+        print(f"  COMPRA {lote:g} + VENTA {lote:g} de {real}, {minutos:g} minutos")
+        print("=" * 62)
+        print(f"  Cuenta       : {broker.cuenta}")
+        print(f"  Spread ahora : {spread:.5f}")
+        print(f"  Costo        : ~{costo:.2f} USD (el spread de las dos; mas swap si")
+        print("                 quedan abiertas pasado el cambio de dia del broker)")
+        print(f"  Margen       : ~{margen:.2f} USD de {libre:.2f} libres")
+        print("  Si cerras esta ventana antes de tiempo, las dos quedan abiertas:")
+        print("  cerralas a mano en MetaTrader.")
+        if margen and margen > libre:
+            print("\n  NO ENTRAN: no alcanza el margen. No se abrio nada.")
+            return 1
+        if not confirmar():
+            print("  No se abrio nada.")
+            return 1
+
+        async def abrir(lado):
+            orden = None
+            for _ in range(3):  # la recotizacion no abre nada: se reintenta
+                orden = await broker.open_order(symbol=simbolo, side=lado,
+                                                order_type=OrderType.MARKET, lot=lote,
+                                                entry=None, stop_loss=None, take_profit=None)
+                if orden.ok or not orden.raw.get("recotizacion"):
+                    break
+            return orden
+
+        compra = await abrir(Side.BUY)
+        if not compra.ok:
+            print(f"\n  La COMPRA no entro: {compra.reason}. No se abrio nada.")
+            return 1
+        venta = await abrir(Side.SELL)
+        if not venta.ok:
+            print(f"\n  La VENTA no entro: {venta.reason}")
+            print("  Cerrando la compra para que no quede sola...")
+            cierre = await broker.close_position(ticket=compra.ticket, symbol=simbolo)
+            print("  Cerrada." if cierre.ok else
+                  f"  NO SE PUDO CERRAR ({cierre.reason}): cerrala a mano, ticket {compra.ticket}.")
+            return 1
+
+        print(f"\n  ABIERTAS: compra {compra.lot:g} (ticket {compra.ticket}) y venta "
+              f"{venta.lot:g} (ticket {venta.ticket}).")
+        print("  >>> SACA LA PRIMERA CAPTURA DE METATRADER AHORA <<<")
+        print("  (Ctrl+C las cierra antes de tiempo.)\n")
+
+        tickets = (compra.ticket, venta.ticket)
+        try:
+            for falta in range(int(round(minutos)), 0, -1):
+                resultado = sum(float(getattr(p, "profit", 0) or 0)
+                                for t in tickets for p in (mt5.positions_get(ticket=t) or ()))
+                print(f"  faltan {falta:>2} min | las dos juntas: {resultado:+.2f} USD")
+                await esperar(60)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            print("\n  Cortado: se cierran ahora.")
+        finally:
+            fallidas = []
+            for ticket in tickets:
+                cierre = await broker.close_position(ticket=ticket, symbol=simbolo)
+                if not cierre.ok and not cierre.raw.get("ausente"):
+                    fallidas.append(f"ticket {ticket}: {cierre.reason}")
+        if fallidas:
+            print("\n  NO SE PUDIERON CERRAR, cerralas a mano en MetaTrader:")
+            for fallida in fallidas:
+                print(f"    {fallida}")
+            return 1
+        balance = float(getattr(mt5.account_info(), "balance", 0) or 0)
+        print("\n  CERRADAS LAS DOS.")
+        print("  >>> SACA LA SEGUNDA CAPTURA AHORA <<<")
+        print(f"  Costo real: {balance - balance_antes:+.2f} USD (balance {balance:.2f})")
+        return 0
+    finally:
+        await broker.disconnect()
+
+
+# --------------------------------------------------------------------------
 # ensayo
 # --------------------------------------------------------------------------
 
@@ -2747,6 +2903,13 @@ def build_parser() -> argparse.ArgumentParser:
         "ensayo", parents=[comunes],
         help="Un minuto de la real contra una cuenta DEMO: abre, mueve el SL y cierra")
 
+    volumen = sub.add_parser(
+        "volumen", parents=[comunes],
+        help="Abre una compra y una venta iguales, las deja un rato y las cierra")
+    volumen.add_argument("--simbolo", default="EURUSD")
+    volumen.add_argument("--lote", type=float, default=0.5)
+    volumen.add_argument("--minutos", type=float, default=30)
+
     chats = sub.add_parser("chats", parents=[comunes], help="Lista tus chats de Telegram con sus IDs")
     chats.add_argument("--limit", type=int, default=60)
 
@@ -2815,6 +2978,7 @@ def main(argv: list[str] | None = None) -> int:
         "simular": cmd_simular,
         "probar": cmd_probar,
         "ensayo": cmd_ensayo,
+        "volumen": cmd_volumen,
         "chats": cmd_chats,
         "test": cmd_test,
         "status": cmd_status,
