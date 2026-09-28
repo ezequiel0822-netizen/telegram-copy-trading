@@ -453,3 +453,16 @@ def test_el_bot_y_el_diagnostico_resuelven_igual(tmp_path):
         "XAUUSD", [getattr(s, "name", "") for s in fake.symbols_get()])
 
     assert del_bot == del_diagnostico == "GOLD"
+
+
+def test_sin_la_contrasena_guardada_lo_dice(tmp_path, monkeypatch, capsys, en_windows):
+    """-6 con MetaTrader abierto y logueado: la contrasena no quedo guardada
+    (29/09, al pasar a la cuenta real). Antes salian tres causas genericas."""
+    falso = MT5Falso()
+    falso.initialize = lambda **_k: False
+    falso.last_error = lambda: (-6, "Terminal: Authorization failed")
+
+    assert correr(monkeypatch, falso, str(env(tmp_path))) == 1
+
+    salida = capsys.readouterr().out
+    assert "Guardar contrasena" in salida

@@ -560,11 +560,13 @@ def cmd_mt5(args: argparse.Namespace) -> int:
     if not conectado:
         codigo, mensaje = mt5.last_error()
         print(f"[ERROR] No se pudo conectar: {mensaje} (codigo {codigo})\n")
-        print("Casi siempre es una de estas tres:")
-        print("  1. MetaTrader 5 no esta abierto. Abrilo.")
-        print("  2. Esta abierto pero sin loguear en ninguna cuenta.")
-        print("  3. Se abrio 'como administrador' y este comando no. Los dos")
-        print("     tienen que correr con el mismo nivel de permisos.")
+        # Las mismas pistas que da el bot, segun el codigo. Con -6 (cuenta
+        # abierta pero sin la contrasena guardada) este comando mostraba las
+        # tres causas genericas, y ninguna era (29/09, al pasar a la real).
+        from tct.brokers.mt5_native import _pistas_de_initialize
+
+        for linea in _pistas_de_initialize(codigo, ruta_terminal):
+            print(linea)
         return 1
 
     try:
