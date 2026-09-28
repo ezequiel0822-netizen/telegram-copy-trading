@@ -172,7 +172,10 @@ Tests en `tests/test_auditoria_{ejecucion,senales,instancias,calidad}.py`.
 - Una excepción a mitad de una apertura cuenta como esa posición fallida (y
   "sin confirmar"); la señal se marca operada con la primera que entra.
 - Nuevo `MAX_STOP_DISTANCE_PCT` (0 = apagado): tope de distancia del SL al
-  abrir. **Pendiente de su decisión** para la real (se le propuso 0.5).
+  abrir. Se le propuso 0.5 para la real y **dijo que no** (28/09): *"haz lo
+  que haga en el canal, pon el mismo stop loss"*. Queda en 0 en las tres; no
+  volver a proponerlo. La red contra un SL mal tipeado es la corrección del
+  canal (edición dentro de los 10 min), que ahora sí se aplica.
 
 **Tres bots a la vez y el camino de la real**
 - Sin `MT5_LOGIN`, la cuenta se compara contra la que se conectó antes de cada
