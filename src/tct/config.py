@@ -392,8 +392,14 @@ class Settings:
         return "\n".join(lines)
 
 
-def load_settings(env_file: str | Path | None = None) -> Settings:
-    """Lee el .env indicado (o ./.env), valida y devuelve la configuracion."""
+def load_settings(env_file: str | Path | None = None,
+                  sobrescribir: dict[str, str] | None = None) -> Settings:
+    """Lee el .env indicado (o ./.env), valida y devuelve la configuracion.
+
+    `sobrescribir` pisa valores del archivo (y del entorno) sin tocar el
+    archivo. Lo usa `tct ensayo`: los numeros de .env.real, pero en modo demo,
+    sin credenciales y con su propia carpeta de datos.
+    """
     path = Path(env_file) if env_file else Path(".env")
     # Un --env-file que no existe se ignoraba en silencio: con un error de
     # tipeo (.env.reall), `tct status` e `informe` mostraban los datos de la
@@ -410,6 +416,8 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         values.update({k: v for k, v in dotenv_values(path).items() if v is not None})
     # Las variables reales del entorno tienen la ultima palabra.
     values.update(os.environ)
+    if sobrescribir:
+        values.update(sobrescribir)
 
     env = _Env(values)
     warnings: list[str] = []

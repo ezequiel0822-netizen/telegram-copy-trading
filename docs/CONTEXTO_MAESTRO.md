@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-28 · v2.7.0 · 1108 tests · el último commit que describe
-es `e001701`, más este mismo cambio
+Actualizado: 2026-09-28 · v2.7.0 · 1113 tests · el último commit que describe
+es `d43ea9e`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
 principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
@@ -75,28 +75,47 @@ de fondear. **No se evaluó al bróker** (regulación, retiros): eso lo revisa �
 Por eso el orden de abajo empieza por la ruta: `tct mt5 --env-file .env.real`
 se conecta a la terminal de ese `MT5_PATH`, y con la ruta vieja leería FxPro.
 
+**Sin cuarto bot (28/09).** Se le armó una demo de Bullwaves corriendo días y
+dijo que no: *"no quiero un 4 bot... no quiero tardarme días ya que para eso
+estuvieron los otros"*. Se revirtió (`d43ea9e`). En su lugar, **`tct ensayo`**:
+un minuto, antes de poner las credenciales de la real. Usa los números de
+`.env.real` y la terminal de su `MT5_PATH`, pero en modo demo y sin
+credenciales, contra la cuenta DEMO que la terminal tenga abierta (si es REAL,
+se niega: el chequeo de demo de `connect`). Manda una señal como las del canal
+por el mismo camino que el bot —abre 0.05 con SL/TP, "MOVER SL A", "cerrar la
+mitad", "cerrar"— y dice en qué paso falla y cuántos ms tardó. Datos en
+`data/ensayo/<fecha>`, nunca en los de la real. No volver a proponer otra
+instancia para esto.
+
+Sobre su miedo de que más bots demoren la real: cada bot es un proceso aparte
+que recibe el mensaje a la vez que los otros; no hacen fila. Medido en la
+auditoría: con la IA de los tres ocupada, la señal entró en 0,01 s.
+
 **La lista para el día que fondee, vigente** (reemplaza la del 27/09):
 
-0. Que los arreglos lleguen a `main` (necesitan su OK), y en su PC `git pull`
-   y reiniciar las dos demos: el código se carga al arrancar.
-1. Abrir la cuenta real de Bullwaves: MetaTrader 5, **HEDGING**.
-2. Instalar el MetaTrader de Bullwaves desde su web, loguear la cuenta real
-   tildando "Guardar contraseña", y Algo Trading en verde.
-3. La ruta: clic derecho en su acceso directo → Propiedades → copiar
+0. En su PC `git pull` y reiniciar las dos demos: el código se carga al arrancar.
+1. En el MetaTrader de Bullwaves (ya instalado el 28/09), abrir una cuenta
+   **DEMO** (Archivo → Abrir una cuenta), HEDGING, y dejarla logueada con Algo
+   Trading en verde.
+2. La ruta: clic derecho en su acceso directo → Propiedades → copiar
    "Destino", y pegarlo tal cual (con sus comillas) detrás del `=`:
    `tct cambiar --env-file .env.real MT5_PATH=`
-4. `tct mt5 --env-file .env.real`: tiene que decir `Tipo : REAL`,
+3. **`tct ensayo --env-file .env.real`**: tiene que terminar en
+   `TODO ENTRA BIEN`. Si no, se para acá y se mira el paso que falló.
+4. Abrir la cuenta real de Bullwaves (HEDGING) y loguearla en ese MetaTrader
+   tildando "Guardar contraseña".
+5. `tct mt5 --env-file .env.real`: tiene que decir `Tipo : REAL`,
    `Posiciones : HEDGING`, `XAUUSD -> <nombre>` y cuántas entran. Si dice
    NETTING o `NO ENTRA NINGUNA`, se para acá. El margen se puede ver sin
    fondear.
-5. `tct cambiar --env-file .env.real MT5_LOGIN=<login> "MT5_SERVER=<servidor>" MT5_BROKER_PROFILE=bullwaves MT5_PASSWORD`
+6. `tct cambiar --env-file .env.real MT5_LOGIN=<login> "MT5_SERVER=<servidor>" MT5_BROKER_PROFILE=bullwaves MT5_PASSWORD`
    (la password al final, sin `=`: la pide aparte).
-6. Fondear.
-7. `tct chats --env-file .env.real` (sesión de Telegram nueva: pide el código).
-8. `tct check --env-file .env.real`.
-9. `tct probar --operar --env-file .env.real` (pide la clave; abre y cierra
-   0.01 de verdad en Bullwaves).
-10. `iniciar_real.bat`. Las demos siguen abiertas.
+7. Fondear.
+8. `tct chats --env-file .env.real` (sesión de Telegram nueva: pide el código).
+9. `tct check --env-file .env.real`.
+10. `tct probar --operar --env-file .env.real` (pide la clave; abre y cierra el
+    mínimo de verdad, con stop). Opcional después del ensayo: cuesta el spread.
+11. `iniciar_real.bat`. Las demos siguen abiertas.
 
 **Los arreglos de `596a891`** (primera mitad de la auditoría del 27/09:
 latencia, ejecución en MT5 y paridad con la demo), cada uno reproducido antes

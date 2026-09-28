@@ -908,6 +908,202 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
 _MERCADO_CERRADO = 10018
 
 
+# --------------------------------------------------------------------------
+# ensayo
+# --------------------------------------------------------------------------
+
+
+def cmd_ensayo(args: argparse.Namespace) -> int:
+    """Un minuto de la cuenta real, contra una cuenta DEMO del mismo broker.
+
+    POR QUE EXISTE
+    --------------
+    La estrategia ya la ensayaron dias las demos de MetaQuotes y FxPro. Lo que
+    NO se probo es el broker de la real (Bullwaves): su nombre del oro, su modo
+    de llenado, su distancia minima de stops, su lote. El usuario no quiere
+    otro bot corriendo dias para eso (28/09): quiere ver que "todo entre bien"
+    antes de poner las credenciales de la real, y listo.
+
+    Esto usa los numeros de .env.real (lote, SL/TP, filtro) y la terminal de su
+    MT5_PATH, pero en modo DEMO y sin credenciales: se engancha a la cuenta que
+    la terminal tenga abierta, y si es una cuenta REAL se niega (el chequeo de
+    demo de `connect`). Manda una senal como las del canal por el MISMO camino
+    que el bot -parser, riesgo, broker-: abre, mueve el SL, cierra la mitad y
+    cierra el resto. Sus datos van a data/ensayo, nunca a los de la real.
+    """
+    if sys.platform != "win32":
+        print("Este comando prueba MetaTrader 5 nativo, que solo existe en Windows.")
+        return 1
+
+    ruta_env = Path(args.env_file or ".env.real")
+    if not ruta_env.exists():
+        print(f"No existe {ruta_env.resolve()}. El ensayo usa los numeros de tu .env.real:")
+        print("    tct ensayo --env-file .env.real")
+        return 1
+
+    carpeta = (ruta_env.resolve().parent / "data" / "ensayo"
+               / datetime.now().strftime("%Y%m%d-%H%M%S"))
+    settings = load_settings(ruta_env, sobrescribir={
+        "TRADING_MODE": PAPER_AND_MT5_DEMO,
+        "ALLOW_LIVE_TRADING": "false",
+        # Sin credenciales: no se loguea nada, se usa la cuenta que la terminal
+        # tenga abierta. Tiene que ser una DEMO: si no, `connect` se niega.
+        "MT5_LOGIN": "", "MT5_PASSWORD": "", "MT5_SERVER": "",
+        "CLAVE_DE_ARRANQUE": "",
+        "ENABLE_OLLAMA": "false",
+        "DRY_RUN": "false",
+        "DATA_DIR": str(carpeta),
+        "PAPER_TRADES_PATH": str(carpeta / "paper_trades.jsonl"),
+        "EVENTS_PATH": str(carpeta / "events.jsonl"),
+        "STATE_PATH": str(carpeta / "state.json"),
+        "LOG_PATH": str(carpeta / "ensayo.log"),
+    })
+    if not settings.mt5_path:
+        print("Falta la ruta del MetaTrader de Bullwaves en .env.real. Clic derecho en su")
+        print("acceso directo -> Propiedades -> copiar 'Destino', y pegalo pegado al '=':")
+        print(f"    tct cambiar --env-file {args.env_file or '.env.real'} MT5_PATH=")
+        return 1
+    choques = _choques_con_otras_instancias(settings, str(ruta_env))
+    if choques:
+        for choque in choques:
+            print(f"[ERROR] {choque}")
+        print("\nEl ensayo no se conecta a la terminal de otro bot. En .env.real va la ruta")
+        print("del MetaTrader de BULLWAVES.")
+        return 1
+
+    setup_logging(settings, verbose=args.verbose)
+    return asyncio.run(_ensayo_async(settings))
+
+
+async def _ensayo_async(settings: Settings) -> int:
+    import time as reloj
+
+    from tct.brokers.mt5_native import MAGIA, MT5NativeBroker, modo_de_la_cuenta
+    from tct.engine import Engine
+    from tct.store import Store
+
+    fallos: list[str] = []
+    print("\n" + "=" * 62)
+    print("  ENSAYO DE LA CUENTA REAL, CONTRA UNA CUENTA DEMO")
+    print("=" * 62)
+    print(f"  Numeros de la real: lote {settings.default_lot}, filtro "
+          f"{settings.max_spread_from_entry_pct}%, simbolos {', '.join(sorted(settings.allowed_symbols))}")
+    print(f"  Terminal: {settings.mt5_path}")
+
+    broker = MT5NativeBroker(settings)
+    print("\n[1/5] Conectando...")
+    if not await broker.connect():
+        print("      NO CONECTO. El motivo esta arriba. Si dice que la cuenta no es")
+        print("      demo: en el MetaTrader de Bullwaves entra a tu cuenta DEMO. El ensayo")
+        print("      nunca opera una cuenta real.")
+        return 1
+    mt5 = broker._mt5
+    cuenta = mt5.account_info()
+    print(f"      OK: {getattr(cuenta, 'company', '?')} | {broker.cuenta} | DEMO | "
+          f"{(modo_de_la_cuenta(mt5, cuenta) or 'modo no informado').upper()} | "
+          f"1:{getattr(cuenta, 'leverage', '?')} | saldo {getattr(cuenta, 'balance', '?')}")
+
+    store = Store(settings.events_path, settings.paper_trades_path, settings.state_path)
+    engine = Engine(settings, store, broker)
+    numero = iter(range(900001, 900100))
+
+    async def canal(texto: str) -> tuple[dict, int]:
+        """Un mensaje del canal, por el mismo camino que usa el bot."""
+        meta = {"message_id": next(numero), "chat_id": 0,
+                "date": datetime.now(timezone.utc).isoformat()}
+        inicio = reloj.perf_counter()
+        resultado = await engine.handle_message(texto, meta)
+        return resultado, int((reloj.perf_counter() - inicio) * 1000)
+
+    def en_la_cuenta(ticket):
+        return (mt5.positions_get(ticket=ticket) or [None])[0]
+
+    try:
+        print("\n[2/5] El oro en este broker...")
+        simbolo = next(iter(sorted(settings.allowed_symbols)), "XAUUSD")
+        real = broker._resolver_contra_broker(simbolo)
+        precio = await broker.market_price(simbolo)
+        if real is None or precio is None:
+            print(f"      FALLO: {'no aparece ' + simbolo if real is None else 'sin cotizacion (mercado cerrado?)'}")
+            return 1
+        info = mt5.symbol_info(real)
+        digitos = int(getattr(info, "digits", 2) or 2)
+        punto = float(getattr(info, "point", 0) or 10 ** -digitos)
+        minima = int(getattr(info, "trade_stops_level", 0) or 0) * punto
+        print(f"      OK: {simbolo} -> {real} | precio {precio} | lote min "
+              f"{getattr(info, 'volume_min', '?')} paso {getattr(info, 'volume_step', '?')} | "
+              f"distancia minima del stop {minima:g}")
+
+        entrada = round(precio, digitos)
+        sl = round(entrada - 8, digitos)
+        tp = round(entrada + 8, digitos)
+        print(f"\n[3/5] Senal como las del canal: BUY {entrada}, SL {sl}, TP {tp}...")
+        resultado, ms = await canal(f"{simbolo} BUY\nEntry {entrada}\nSL {sl}\nTP {tp}")
+        abiertas = store.open_positions()
+        if resultado.get("status") != "aceptada" or not abiertas:
+            motivo = resultado.get("reason") or "; ".join(resultado.get("reasons", [])) or resultado
+            print(f"      FALLO: no abrio. {motivo}")
+            return 1
+        posicion = abiertas[0]
+        viva = en_la_cuenta(posicion.broker_ticket)
+        print(f"      OK: abrio {posicion.lot:g} a {posicion.entry_real} en {ms} ms "
+              f"(ticket {posicion.broker_ticket})")
+        if viva is None:
+            fallos.append("La posicion no aparece en MetaTrader")
+        else:
+            if abs(float(viva.sl) - sl) > punto * 2 or abs(float(viva.tp) - tp) > punto * 2:
+                fallos.append(f"SL/TP en MetaTrader {viva.sl}/{viva.tp}, se mandaron {sl}/{tp}")
+            else:
+                print(f"      OK: en MetaTrader tiene SL {viva.sl} y TP {viva.tp}")
+            if abs(float(viva.volume) - settings.default_lot) > 1e-9:
+                fallos.append(f"Lote {viva.volume} en MetaTrader, el .env dice {settings.default_lot}")
+
+        nuevo_sl = round(entrada - 4, digitos)
+        print(f"\n[4/5] MOVER SL A {nuevo_sl}...")
+        resultado, ms = await canal(f"MOVER SL A {nuevo_sl}")
+        viva = en_la_cuenta(posicion.broker_ticket)
+        if viva is not None and abs(float(viva.sl) - nuevo_sl) <= punto * 2:
+            print(f"      OK: el stop quedo en {viva.sl} ({ms} ms)")
+        else:
+            fallos.append(f"No se movio el stop: {resultado.get('fallidas') or resultado}")
+
+        print("\n[5/5] Cerrar la mitad, y despues el resto...")
+        resultado, ms = await canal("cerrar la mitad")
+        viva = en_la_cuenta(posicion.broker_ticket)
+        if resultado.get("status") == "cierre_parcial" and viva is not None:
+            print(f"      OK: quedan {viva.volume:g} lotes ({ms} ms)")
+        else:
+            fallos.append(f"El cierre de la mitad no salio: {resultado.get('status')}")
+        resultado, ms = await canal(f"cerrar {simbolo}")
+        if resultado.get("status") == "cerrada" and en_la_cuenta(posicion.broker_ticket) is None:
+            print(f"      OK: cerrada ({ms} ms)")
+        else:
+            fallos.append(f"El cierre no salio: {resultado.get('status')}")
+    finally:
+        # Nada del ensayo queda abierto, pase lo que pase.
+        for resto in store.open_positions():
+            await broker.close_position(ticket=resto.broker_ticket, symbol=resto.symbol)
+        quedaron = [p for p in (mt5.positions_get() or ())
+                    if getattr(p, "magic", None) == MAGIA]
+        if quedaron:
+            fallos.append(f"Quedaron abiertas en la demo: {[p.ticket for p in quedaron]}. "
+                          "Cerralas a mano.")
+        store.save_state()
+        await broker.disconnect()
+
+    print("\n" + "=" * 62)
+    if fallos:
+        print("  HAY PROBLEMAS: NO pongas todavia las credenciales de la real")
+        print("=" * 62)
+        for i, fallo in enumerate(fallos, 1):
+            print(f"  {i}. {fallo}")
+        print(f"\n  El detalle quedo en {settings.log_path}")
+        return 1
+    print("  TODO ENTRA BIEN: ya podes poner las credenciales de la real")
+    print("=" * 62)
+    return 0
+
+
 async def _probar_mover_stop(broker, canonico, real, apertura, precio, fallos) -> None:
     """Mueve el stop dos veces al MISMO precio y verifica las dos respuestas.
 
@@ -2522,6 +2718,10 @@ def build_parser() -> argparse.ArgumentParser:
     probar.add_argument("--simbolo", default="XAUUSD",
                         help="Simbolo para la prueba de orden (por defecto XAUUSD)")
 
+    sub.add_parser(
+        "ensayo", parents=[comunes],
+        help="Un minuto de la real contra una cuenta DEMO: abre, mueve el SL y cierra")
+
     chats = sub.add_parser("chats", parents=[comunes], help="Lista tus chats de Telegram con sus IDs")
     chats.add_argument("--limit", type=int, default=60)
 
@@ -2589,6 +2789,7 @@ def main(argv: list[str] | None = None) -> int:
         "cambiar": cmd_cambiar,
         "simular": cmd_simular,
         "probar": cmd_probar,
+        "ensayo": cmd_ensayo,
         "chats": cmd_chats,
         "test": cmd_test,
         "status": cmd_status,
