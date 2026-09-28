@@ -105,6 +105,7 @@ VARIABLES_DEL_ENV: dict[str, str] = {
     "REQUIRE_STOP_LOSS": "bool",
     "REQUIRE_TAKE_PROFIT": "bool",
     "MAX_SPREAD_FROM_ENTRY_PCT": "float",
+    "MAX_STOP_DISTANCE_PCT": "float",
     "MAX_PENDING_DISTANCE_PCT": "float",
     "MAX_DAILY_LOSS_PCT": "float",
     "BREAKEVEN_USES_REAL_ENTRY": "bool",

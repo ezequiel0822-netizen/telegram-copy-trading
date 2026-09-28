@@ -354,6 +354,11 @@ class Store:
         try:
             with os.fdopen(handle, "w", encoding="utf-8") as file:
                 json.dump(self.state.to_dict(), file, ensure_ascii=False, indent=2)
+                # Al disco ANTES de reemplazar: sin esto, un corte de luz justo
+                # despues del replace podia dejar el state.json vacio, y el bot
+                # arrancaba limpio con posiciones reales abiertas.
+                file.flush()
+                os.fsync(file.fileno())
             os.replace(tmp_path, self.state_path)
         except BaseException:
             Path(tmp_path).unlink(missing_ok=True)

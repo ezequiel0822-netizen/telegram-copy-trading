@@ -339,6 +339,17 @@ class ControlTelegram:
         )
 
     async def _cerrar_todo(self) -> str:
+        # Con el turno del motor: si no, una senal a medio abrir terminaba de
+        # abrir DESPUES de "Cerradas 1 de 1", y quedaba una posicion real
+        # abierta con el bot ya pausado. Y el paquete MetaTrader5 es un solo
+        # canal: dos hilos hablandole a la vez es lo que el turno evita.
+        turno = getattr(self.engine, "_turno", None)
+        if turno is None:
+            return await self._cerrar_todo_ya()
+        async with turno:
+            return await self._cerrar_todo_ya()
+
+    async def _cerrar_todo_ya(self) -> str:
         abiertas = self.store.open_positions()
         if not abiertas:
             return f"{self._cabecera()}\nYa no habia nada abierto."
@@ -350,6 +361,10 @@ class ControlTelegram:
                     ticket=posicion.broker_ticket, symbol=posicion.symbol, fraction=1.0
                 )
                 if resultado.ok:
+                    self.store.remove_position(posicion.trade_id)
+                    cerradas += 1
+                elif resultado.raw.get("ausente"):
+                    # Ya la habia cerrado el broker (TP, SL): no es un fallo.
                     self.store.remove_position(posicion.trade_id)
                     cerradas += 1
                 else:

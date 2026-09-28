@@ -855,7 +855,9 @@ async def _simular_async(settings: Settings, args: argparse.Namespace) -> int:
     conteo: dict[str, int] = {}
     try:
         for texto, meta in con_texto:
-            resultado = await engine.handle_message(texto, meta)
+            # Reproducir mensajes viejos es el punto de simular: la regla de
+            # "nada de hace mas de 10 minutos ejecuta" no aplica aca.
+            resultado = await engine.handle_message(texto, {**meta, "reproduccion": True})
             estado = resultado.get("status", "?")
             conteo[estado] = conteo.get(estado, 0) + 1
             if estado in {"ignorado", "duplicado"}:
@@ -2195,6 +2197,11 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
     # 486 antes de la primera senal, el freno tomaba 486 de referencia y un dia
     # que perdio 5.6% no lo frenaba ningun tope del 5%.
     await engine.fijar_referencia_del_dia()
+
+    # Lo que el bot tiene abierto en MetaTrader y el registro no conoce (el
+    # state.json se perdio o quedo atras) se toma bajo gestion ANTES de
+    # escuchar: si no, no recibia breakeven y no contaba para los topes.
+    await engine.reconciliar_al_arrancar()
 
     reader = TelegramReader(settings, engine.handle_message)
 

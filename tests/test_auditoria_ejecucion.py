@@ -268,3 +268,23 @@ def test_una_pendiente_propia_que_se_dispara_no_se_toma_por_la_orden_nueva(tmp_p
 
     assert not resultado.ok, "tomo la pendiente disparada como la orden nueva"
     assert resultado.raw.get("sin_confirmar")
+
+
+def test_la_orden_que_aparecio_cuenta_aunque_el_vigilante_no_haya_pasado(tmp_path):
+    """La senal siguiente puede llegar antes que la vuelta del vigilante (30 s):
+    la orden que aparecio tiene que estar registrada antes de mirar el tope."""
+    engine, store, terminal = armar(tmp_path, max_open_trades=1,
+                                    max_positions_per_symbol=1)
+    terminal.sin_ejecutar = True
+    send(engine, SENAL, message_id=1)
+    terminal.sin_ejecutar = False
+    FakeMT5.order_send(terminal, {
+        "action": terminal.TRADE_ACTION_DEAL, "symbol": "XAUUSD", "volume": 0.01,
+        "type": terminal.ORDER_TYPE_BUY, "price": 4432.5, "magic": MAGIA,
+        "sl": 4424.0, "tp": 4436.0,
+    })
+
+    resultado = send(engine, SENAL.replace("4432", "4433"), message_id=2)
+
+    assert resultado["status"] == "rechazada", "abrio una de mas"
+    assert len(terminal.posiciones_abiertas()) == 1

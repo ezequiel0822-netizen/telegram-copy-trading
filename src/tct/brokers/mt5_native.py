@@ -960,6 +960,51 @@ class MT5NativeBroker(Broker):
         except Exception:
             return None
 
+    async def posiciones_propias(self) -> list[dict[str, Any]] | None:
+        """Las posiciones y pendientes con la marca del bot, con el simbolo
+        canonico (XAUUSD, no GOLD). None si no se pudo preguntar."""
+        if not await self.is_ready():
+            return None
+        return await asyncio.to_thread(self._posiciones_propias_sync)
+
+    def _posiciones_propias_sync(self) -> list[dict[str, Any]] | None:
+        mt5 = self._mt5
+        try:
+            posiciones = mt5.positions_get()
+            ordenes = mt5.orders_get()
+        except Exception:
+            return None
+        if posiciones is None or ordenes is None:
+            return None
+        canonico: dict[str, str] = {}
+        for nombre in sorted(getattr(self.settings, "allowed_symbols", ()) or ()):
+            real = self._resolver_contra_broker(nombre) or to_broker_symbol(
+                nombre, self.settings.mt5_broker_profile)
+            canonico[real.upper()] = nombre
+        propias = []
+        for item, pendiente in ([(p, False) for p in posiciones]
+                                + [(o, True) for o in ordenes]):
+            if getattr(item, "magic", None) != MAGIA:
+                continue
+            simbolo = canonico.get(str(getattr(item, "symbol", "")).upper())
+            if simbolo is None:
+                logger.warning("Posicion del bot en %s, fuera de ALLOWED_SYMBOLS: no se "
+                               "toma bajo gestion.", getattr(item, "symbol", "?"))
+                continue
+            volumen = getattr(item, "volume_current", None) or getattr(item, "volume", 0)
+            propias.append({
+                "ticket": int(item.ticket),
+                "symbol": simbolo,
+                # En MT5 los tipos de compra son pares: BUY, BUY_LIMIT, BUY_STOP...
+                "side": "BUY" if int(getattr(item, "type", 0)) % 2 == 0 else "SELL",
+                "lot": float(volumen or 0),
+                "price": float(getattr(item, "price_open", 0) or 0) or None,
+                "sl": float(getattr(item, "sl", 0) or 0) or None,
+                "tp": float(getattr(item, "tp", 0) or 0) or None,
+                "pendiente": pendiente,
+            })
+        return propias
+
     async def buscar_sin_registrar(self, *, symbol: str, side: Side,
                                    conocidos: set[int]) -> OrderResult | None:
         """Una posicion de ESTE bot en el simbolo y el lado pedidos que el motor
@@ -1025,6 +1070,10 @@ class MT5NativeBroker(Broker):
                 f"No se pudo consultar la posicion {ticket}: {mt5.last_error()}",
                 ticket=ticket, symbol=symbol,
             )
+        if not positions and self._es_pendiente_viva(ticket):
+            if action != "close":
+                return self._pendiente_no_se_toca(ticket, symbol, action)
+            return self._cancelar_pendiente(ticket, symbol)
         if not positions:
             return OrderResult(
                 False, action,
@@ -1098,6 +1147,44 @@ class MT5NativeBroker(Broker):
             else f"order_send devolvio None: {mt5.last_error()}"
         )
         return OrderResult(False, action, reason, ticket=ticket, symbol=symbol)
+
+    # -- Pendientes vivas -------------------------------------------------
+    #
+    # Una orden pendiente (LIMIT/STOP) que todavia no se disparo NO aparece en
+    # positions_get: vive en orders_get. Los handlers de gestion miraban solo
+    # posiciones, la daban por "ya no existe" y el motor la soltaba del
+    # registro. Cuando se disparaba despues, quedaba una posicion real sin
+    # gestionar y fuera del tope (3 abiertas con MAX_OPEN_TRADES=2).
+
+    def _es_pendiente_viva(self, ticket: int) -> bool:
+        try:
+            return bool(self._mt5.orders_get(ticket=ticket))
+        except Exception:
+            return False
+
+    def _pendiente_no_se_toca(self, ticket: int, symbol: str, action: str) -> OrderResult:
+        return OrderResult(
+            False, action,
+            f"La orden {ticket} todavia es PENDIENTE (no se disparo): no se puede "
+            "mover ni cerrar en parte. Sigue registrada.",
+            ticket=ticket, symbol=symbol, raw={"pendiente": True},
+        )
+
+    def _cancelar_pendiente(self, ticket: int, symbol: str) -> OrderResult:
+        """Cerrar una pendiente es cancelarla."""
+        result = self._mt5.order_send({
+            "action": getattr(self._mt5, "TRADE_ACTION_REMOVE", 8),
+            "order": ticket,
+        })
+        if result is not None and result.retcode == getattr(
+                self._mt5, "TRADE_RETCODE_DONE", 10009):
+            return OrderResult(True, "close", "orden pendiente cancelada",
+                               ticket=ticket, lot=0.0, symbol=symbol,
+                               raw={"pendiente_cancelada": True})
+        motivo = (f"retcode={result.retcode} {result.comment}" if result is not None
+                  else f"sin respuesta: {self._mt5.last_error()}")
+        return OrderResult(False, "close", f"No se pudo cancelar la pendiente {ticket}: {motivo}",
+                           ticket=ticket, symbol=symbol, raw={"pendiente": True})
 
     def _cierre_total_incompleto(self, ticket: int, symbol: str, volumen_antes: float,
                                  cerrado: float) -> OrderResult:
@@ -1179,6 +1266,8 @@ class MT5NativeBroker(Broker):
                 f"No se pudo consultar la posicion {ticket}: {mt5.last_error()}",
                 ticket=ticket, symbol=symbol,
             )
+        if not positions and self._es_pendiente_viva(ticket):
+            return self._pendiente_no_se_toca(ticket, symbol, "modify_sl")
         if not positions:
             return OrderResult(
                 False, "modify_sl",
@@ -1259,6 +1348,8 @@ class MT5NativeBroker(Broker):
                 f"No se pudo consultar la posicion {ticket}: {mt5.last_error()}",
                 ticket=ticket, symbol=symbol,
             )
+        if not positions and self._es_pendiente_viva(ticket):
+            return self._pendiente_no_se_toca(ticket, symbol, "modify_tp")
         if not positions:
             return OrderResult(
                 False, "modify_tp",

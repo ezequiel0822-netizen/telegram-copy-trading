@@ -296,8 +296,10 @@ def test_una_posicion_cerrada_a_mano_se_saca_del_estado(tmp_path):
     resultado = send(engine, "Close XAUUSD now", message_id=2)
 
     assert store.open_positions() == [], "quedo una fantasma imposible de limpiar"
-    assert resultado["status"] == "cerrada"
-    assert resultado["ausentes"] == ["XAUUSD"]
+    # Desde la auditoria del 28/09 la gestion sincroniza con el broker ANTES
+    # de actuar: la fantasma se saca ahi, y el cierre ya no encuentra nada.
+    assert resultado["status"] == "rechazada"
+    assert "cerrada_en_el_broker" in [e["kind"] for e in store.read_events()]
 
 
 def test_y_el_simbolo_queda_libre_para_la_proxima_senal(tmp_path):

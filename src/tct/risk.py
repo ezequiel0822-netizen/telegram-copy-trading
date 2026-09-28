@@ -78,6 +78,36 @@ def evaluate_open(
     # coherente de uno correcto.
     reasons.extend(_market_distance_reasons(settings, event, market_price))
 
+    # --- Un SL demasiado lejos -------------------------------------------
+    # La geometria no ataja un SL mal tipeado del lado correcto: 4324 en vez
+    # de 4424 son 108 puntos de riesgo (542 dolares a 0.05) con los stops del
+    # canal en 4 a 8. En 0 esta apagado.
+    tope_sl = getattr(settings, "max_stop_distance_pct", 0) or 0
+    referencia = market_price or event.entry
+    if tope_sl and referencia and event.stop_loss is not None:
+        distancia_sl = abs(referencia - event.stop_loss) / referencia * 100
+        if distancia_sl > tope_sl:
+            reasons.append(
+                f"El SL {_num(event.stop_loss)} esta a {distancia_sl:.2f}% del precio "
+                f"({_num(referencia)}), y el limite es {tope_sl}% (MAX_STOP_DISTANCE_PCT). "
+                "Casi siempre es un numero mal tipeado."
+            )
+
+    # --- La misma senal otra vez -----------------------------------------
+    # Reenviada o re-posteada con otro numero de mensaje, pasaba el
+    # deduplicado (que es por mensaje) y abria una segunda posicion: doble
+    # exposicion en una sola senal, y los dos lugares de la real ocupados.
+    for abierta in store.find_positions(symbol):
+        if (abierta.side == (event.side.value if event.side else "")
+                and abierta.entry == event.entry
+                and abierta.stop_loss == event.stop_loss
+                and list(abierta.take_profits or [])[:1] == list(event.take_profits)[:1]):
+            reasons.append(
+                "Es la misma senal que ya esta abierta (mismo simbolo, lado, entrada, "
+                "SL y TP): reenviada o repetida, no se abre dos veces."
+            )
+            break
+
     # --- Exposicion ------------------------------------------------------
     open_count = len(store.open_positions())
     if open_count >= settings.max_open_trades:
@@ -471,6 +501,21 @@ def evaluate_management(
     solo a ese instrumento.
     """
     targets = store.find_positions(event.symbol)
+
+    # Si RESPONDE a una senal, aplica solo a esa senal. Con dos posiciones de
+    # oro a la vez (la real: 2), un "cerrar" o un "mover a breakeven" que el
+    # canal manda como respuesta a la senal A cerraba o movia tambien B. Y si
+    # A ya cerro sola (en su TP o SL), el unico destino que quedaba era B.
+    respuesta = event.reply_to_message_id
+    if respuesta is not None:
+        de_esa = [p for p in store.open_positions() if p.signal_message_id == respuesta]
+        if de_esa:
+            targets = de_esa
+        elif store.ya_opero(event.telegram_chat_id, respuesta):
+            return RiskDecision(False, [
+                "Responde a una senal que ya no tiene posiciones abiertas (cerro en su "
+                "TP o su SL): no se toca a las otras."
+            ]), []
 
     if not targets:
         detail = f" en {event.symbol}" if event.symbol else ""

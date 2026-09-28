@@ -87,6 +87,7 @@ class FakeMT5:
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_SLTP = 2
     TRADE_ACTION_PENDING = 5
+    TRADE_ACTION_REMOVE = 8
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
     ORDER_TYPE_BUY_LIMIT = 2
@@ -213,6 +214,12 @@ class FakeMT5:
 
     def order_send(self, request):
         self.enviados.append(dict(request))
+
+        if request["action"] == self.TRADE_ACTION_REMOVE:
+            # Cancelar una pendiente: existe solo si sigue en la lista.
+            if self._pendientes.pop(request["order"], None) is None:
+                return FakeResult(TRADE_RETCODE_INVALID_STOPS, comment="orden inexistente")
+            return FakeResult(TRADE_RETCODE_DONE)
 
         if self.rechazar_con is not None:
             return FakeResult(self.rechazar_con, comment="rechazo forzado por el test")

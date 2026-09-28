@@ -162,22 +162,31 @@ def _interpretacion_utilizable(event: SignalEvent) -> bool:
 VENTANA_DE_CORRECCION = timedelta(minutes=10)
 
 
-def _edicion_tardia(metadata: dict[str, Any]) -> bool:
-    """Si una edicion llega mucho despues del mensaje que edita.
-
-    Telegram manda en `date` la hora del mensaje ORIGINAL. Sin ese dato no se
-    opina: se hace lo de siempre.
-    """
+def _antiguedad(metadata: dict[str, Any]) -> timedelta | None:
+    """Cuanto hace que se escribio el mensaje (el ORIGINAL, si es una edicion:
+    Telegram manda en `date` esa hora). None si no se sabe."""
     fecha = metadata.get("date")
     if not fecha:
-        return False
+        return None
     try:
         original = datetime.fromisoformat(fecha)
     except (TypeError, ValueError):
-        return False
+        return None
     if original.tzinfo is None:
         original = original.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - original > VENTANA_DE_CORRECCION
+    return datetime.now(timezone.utc) - original
+
+
+def _mensaje_viejo(metadata: dict[str, Any]) -> bool:
+    """Si el mensaje se escribio hace mas que la ventana de una correccion.
+    Sin fecha no se opina: se hace lo de siempre."""
+    edad = _antiguedad(metadata)
+    return edad is not None and edad > VENTANA_DE_CORRECCION
+
+
+def _minutos_de_antiguedad(metadata: dict[str, Any]) -> int | None:
+    edad = _antiguedad(metadata)
+    return int(edad.total_seconds() // 60) if edad is not None else None
 
 
 def _parser_no_entendio(event: SignalEvent | None) -> bool:
@@ -294,12 +303,22 @@ class Engine:
         # operacion, la edicion no puede abrir otra: los canales editan el
         # mensaje viejo para marcar el resultado, y eso mandaba una orden
         # nueva horas despues, a precio de mercado y con el SL original.
+        #
+        # Lo que SI hace, dentro de la ventana de una correccion: si cambio el
+        # SL, se lo aplica a las posiciones de esa senal. Antes se ignoraba en
+        # silencio, y un SL tipeado 4324 en vez de 4424 quedaba con 108 puntos
+        # de riesgo (542 dolares a 0.05) aunque el canal lo corrigiera al minuto.
         if (
             is_edit
             and event is not None
             and event.event_type is EventType.OPEN
             and self.store.ya_opero(chat_id, message_id)
         ):
+            if not _mensaje_viejo(metadata) and event.stop_loss is not None:
+                corregido = await self._corregir_sl(event, message_id)
+                if corregido is not None:
+                    self.store.save_state()
+                    return corregido
             self.store.append_event("edicion_ignorada", {"signal": event.to_dict()})
             self.store.save_state()
             logger.info(
@@ -307,27 +326,38 @@ class Engine:
             )
             return {"status": "edicion_ignorada", "signal": event.to_dict()}
 
-        # Y si NO opero, la edicion tampoco puede abrirlo horas despues. Con
-        # topes chicos (la real: 2 abiertas) una senal se rechaza, el canal la
-        # edita mas tarde para anotarle el resultado, y esa edicion la abria a
-        # precio de mercado, sobre una senal que el canal ya dio por
-        # terminada; la demo, que la habia tomado a tiempo, la ignoraba. Lo
-        # mismo con un mensaje de antes de que el bot arrancara. Una edicion
-        # abre solo dentro de la ventana de una correccion.
+        # NADA de hace mas de 10 minutos ejecuta: ni una edicion (el canal
+        # edita horas despues para anotar el resultado, y "MOVER SL A 4432 ✅"
+        # se seguia leyendo como mover el stop, sobre la posicion de OTRA
+        # senal), ni un mensaje nuevo entregado tarde (al volver internet,
+        # Telegram entrega lo que se perdio con su hora original: una senal de
+        # hace 40 minutos se abria, y un MOVER SL atrasado alejo 48 puntos el
+        # stop de la unica posicion abierta). Telegram manda en `date` la hora
+        # del mensaje original. `tct simular` reproduce mensajes viejos a
+        # proposito, y ahi no aplica.
         if (
-            is_edit
-            and event is not None
-            and event.event_type is EventType.OPEN
-            and _edicion_tardia(metadata)
+            event is not None
+            and not metadata.get("reproduccion")
+            and _mensaje_viejo(metadata)
         ):
-            self.store.append_event("edicion_ignorada",
-                                    {"signal": event.to_dict(), "motivo": "tardia"})
-            self.store.save_state()
-            logger.info(
-                "Edicion de un mensaje de hace mas de %d minutos (%s) que no opero: "
-                "no se abre tarde.", VENTANA_DE_CORRECCION.seconds // 60, message_id,
+            minutos = _minutos_de_antiguedad(metadata)
+            self.store.append_event(
+                "edicion_ignorada" if is_edit else "ignorado_por_viejo",
+                {"signal": event.to_dict(), "motivo": "tardia", "minutos": minutos},
             )
-            return {"status": "edicion_ignorada", "signal": event.to_dict()}
+            self.store.save_state()
+            if is_edit:
+                logger.info("Edicion de un mensaje de hace %s minutos (%s): no se ejecuta "
+                            "tarde.", minutos, message_id)
+                return {"status": "edicion_ignorada", "signal": event.to_dict()}
+            await self._avisar(
+                f"Llego TARDE un mensaje de hace {minutos} minutos (se habia cortado "
+                f"la conexion?). NO se ejecuto:\n{text[:300]}\n"
+                "Si la hora de esta PC esta mal, todos los mensajes van a parecer "
+                "viejos: corregila.",
+                problema=True,
+            )
+            return {"status": "ignorado_por_viejo", "signal": event.to_dict()}
 
         # La IA solo entra donde el parser de reglas fallo. Si el parser
         # entendio, no se la consulta: es mas rapida, gratis y determinista.
@@ -356,9 +386,14 @@ class Engine:
             return {"status": "ignorado", "reason": "No parece un mensaje de trading"}
 
         # Pausa manual desde Telegram. Se sigue leyendo, parseando y
-        # registrando: lo unico que se corta es abrir o cerrar. Asi, cuando
-        # reanudes, podes mirar en events.jsonl que te perdiste.
-        if self.store.is_paused:
+        # registrando: lo unico que se corta es ABRIR. Asi, cuando reanudes,
+        # podes mirar en events.jsonl que te perdiste.
+        #
+        # La gestion de lo que ya esta abierto sigue: antes la pausa cortaba
+        # todo, y un "MOVER SL A <entrada>" llegado en pausa dejaba la posicion
+        # con el stop original, sin aviso y sin forma de recuperarlo al
+        # reanudar (el mensaje ya quedaba procesado).
+        if self.store.is_paused and event.event_type is EventType.OPEN:
             self.store.append_event("pausado", {"signal": event.to_dict()})
             self.store.save_state()
             logger.info(
@@ -763,6 +798,9 @@ class Engine:
     # -- Gestion -----------------------------------------------------------
 
     async def _handle_close(self, event: SignalEvent) -> dict[str, Any]:
+        # Lo que el broker ya cerro solo (TP, SL) no puede seguir contando: una
+        # posicion fantasma volvia ambiguo el "mover TP" de la que sigue viva.
+        await self._sincronizar_posiciones()
         decision, targets = evaluate_management(self.settings, self.store, event)
         if not decision.ok:
             self.store.append_event(
@@ -836,6 +874,9 @@ class Engine:
         return {"status": "cerrada", "count": cerradas, "orders": results}
 
     async def _handle_partial_close(self, event: SignalEvent) -> dict[str, Any]:
+        # Lo que el broker ya cerro solo (TP, SL) no puede seguir contando: una
+        # posicion fantasma volvia ambiguo el "mover TP" de la que sigue viva.
+        await self._sincronizar_posiciones()
         decision, targets = evaluate_management(self.settings, self.store, event)
         if not decision.ok:
             self.store.append_event(
@@ -902,6 +943,9 @@ class Engine:
         return {"status": "cierre_parcial", "fraction": fraction, "orders": results}
 
     async def _handle_move_sl(self, event: SignalEvent) -> dict[str, Any]:
+        # Lo que el broker ya cerro solo (TP, SL) no puede seguir contando: una
+        # posicion fantasma volvia ambiguo el "mover TP" de la que sigue viva.
+        await self._sincronizar_posiciones()
         decision, targets = evaluate_management(self.settings, self.store, event)
         if not decision.ok:
             self.store.append_event(
@@ -1053,6 +1097,9 @@ class Engine:
         - Un TP que no da la escala del instrumento, como con el stop: un
           "mover TP a 4450" sin simbolo le llegaria tambien a un EURUSD.
         """
+        # Lo que el broker ya cerro solo (TP, SL) no puede seguir contando: una
+        # posicion fantasma volvia ambiguo el "mover TP" de la que sigue viva.
+        await self._sincronizar_posiciones()
         decision, targets = evaluate_management(self.settings, self.store, event)
         if not decision.ok:
             self.store.append_event(
@@ -1451,6 +1498,116 @@ class Engine:
             if self._sin_confirmar:
                 await self._confirmar_sin_respuesta()
                 self.store.save_state()
+
+    async def reconciliar_al_arrancar(self) -> None:
+        """Toma bajo gestion las posiciones del bot que el registro no conoce.
+
+        POR QUE
+        -------
+        Al arrancar nunca se comparaba el registro con MetaTrader. Si el
+        state.json se perdia (corte de luz, archivo ilegible) o quedo atras
+        (el bot murio entre la orden y el guardado), las posiciones vivas del
+        bot quedaban huerfanas: sin breakeven, sin cierre, y fuera de los
+        topes (llegaron a quedar 4 de 0.05 con MAX_OPEN_TRADES=2). Se
+        reconocen por la marca del bot (MAGIA); lo que abriste a mano no.
+        """
+        listar = getattr(self.broker, "posiciones_propias", None)
+        if listar is None:
+            return
+        async with self._turno:
+            await self._sincronizar_posiciones()
+            try:
+                vivas = await listar()
+            except Exception:
+                logger.warning("No se pudo revisar la cuenta al arrancar", exc_info=True)
+                return
+            if not vivas:
+                return
+            conocidos = {p.broker_ticket for p in self.store.open_positions()
+                         if p.broker_ticket is not None}
+            nuevas = [v for v in vivas if v["ticket"] not in conocidos]
+            for viva in nuevas:
+                tp = viva.get("tp") or None
+                self.store.add_position(OpenPosition(
+                    trade_id=uuid.uuid4().hex[:12],
+                    symbol=viva["symbol"],
+                    side=viva["side"],
+                    lot=viva["lot"],
+                    entry=viva.get("price"),
+                    stop_loss=viva.get("sl") or None,
+                    take_profits=[tp] if tp else [],
+                    opened_at=utc_now_iso(),
+                    signal_message_id=None,
+                    broker_ticket=viva["ticket"],
+                    mode=self.settings.trading_mode,
+                    entry_real=viva.get("price"),
+                    tp_indice=1 if tp else None,
+                    tp_objetivo=tp,
+                ))
+            if not nuevas:
+                return
+            self.store.append_event("adoptadas_al_arrancar", {"posiciones": nuevas})
+            self.store.save_state()
+        await self._avisar(
+            "Al arrancar habia posiciones del bot que el registro no tenia (se perdio "
+            "o quedo atras el estado). Ahora las gestiona el bot:\n"
+            + "\n".join(f"  {v['symbol']} {v['side']} {v['lot']} ticket {v['ticket']}"
+                         + (" (pendiente)" if v.get("pendiente") else "")
+                         for v in nuevas),
+            problema=True,
+        )
+
+    async def _corregir_sl(self, event: SignalEvent, message_id: Any) -> dict[str, Any] | None:
+        """El canal edito una senal que ya abrio y cambio el SL: se aplica.
+
+        Solo a las posiciones de ESA senal, solo si el lado y el simbolo son
+        los mismos (si no, no es una correccion del SL sino otra cosa), y solo
+        si el SL nuevo queda del lado correcto de la entrada. None si no hay
+        nada que corregir: el que llama sigue como antes (edicion ignorada).
+        """
+        propias = [p for p in self.store.open_positions()
+                   if p.signal_message_id == message_id]
+        nuevo = event.stop_loss
+        if (not propias or nuevo is None
+                or any(p.symbol != (event.symbol or "").upper()
+                       or p.side != (event.side.value if event.side else "")
+                       for p in propias)):
+            return None
+        a_corregir = [p for p in propias
+                      if p.stop_loss is None or abs(p.stop_loss - nuevo) > 1e-9]
+        if not a_corregir:
+            return None
+        entrada = propias[0].entry_real or propias[0].entry
+        del_lado_correcto = entrada is None or (
+            nuevo < entrada if event.side is Side.BUY else nuevo > entrada)
+        if not del_lado_correcto:
+            await self._avisar(
+                f"El canal corrigio el SL de {event.symbol} a {nuevo}, pero queda del lado "
+                f"equivocado de la entrada ({entrada}). NO se aplico: revisalo a mano.",
+                problema=True,
+            )
+            return {"status": "correccion_rechazada", "signal": event.to_dict()}
+        hechas, fallidas = [], []
+        for position in a_corregir:
+            antes = position.stop_loss
+            order = await self.broker.modify_stop_loss(
+                ticket=position.broker_ticket, symbol=position.symbol, stop_loss=nuevo)
+            if order.ok or order.raw.get("retcode") == 10025:
+                position.stop_loss = nuevo
+                hechas.append(f"{position.symbol} {antes} -> {nuevo}")
+            else:
+                fallidas.append(f"{position.symbol}: {order.reason}")
+        self.store.append_event("sl_corregido", {
+            "signal": event.to_dict(), "hechas": hechas, "fallidas": fallidas})
+        await self._avisar(
+            "El canal CORRIGIO el SL de una senal ya abierta:\n"
+            + "\n".join(f"  {h}" for h in hechas)
+            + ("\nNO se pudo en:\n" + "\n".join(f"  {f}" for f in fallidas)
+               if fallidas else ""),
+            problema=bool(fallidas),
+        )
+        return {"status": "sl_corregido", "hechas": hechas, "fallidas": fallidas,
+                "signal": event.to_dict()}
 
     async def _confirmar_sin_respuesta(self) -> None:
         """Busca en la cuenta las ordenes que order_send no confirmo.

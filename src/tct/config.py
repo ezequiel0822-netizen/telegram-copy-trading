@@ -228,6 +228,11 @@ class Settings:
     # 0 = apagado. Para dinero real conviene ponerlo.
     max_daily_loss_pct: float = 0.0
 
+    # Tope de distancia del SL al abrir, en % del precio. 0 = apagado. Ataja
+    # un SL mal tipeado del lado correcto (4324 en vez de 4424), que la
+    # geometria no ve. Ver risk.evaluate_open.
+    max_stop_distance_pct: float = 0.0
+
     # --- IA local opcional (Ollama) ---
     # Respaldo para mensajes que el parser de reglas no entiende. Nunca es el
     # camino principal: si el parser entendio, la IA ni se entera.
@@ -533,6 +538,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         require_take_profit=env.bool("REQUIRE_TAKE_PROFIT", True),
         max_spread_from_entry_pct=env.float("MAX_SPREAD_FROM_ENTRY_PCT", 0.5),
         max_pending_distance_pct=env.float("MAX_PENDING_DISTANCE_PCT", 3.0),
+        max_stop_distance_pct=max(0.0, env.float("MAX_STOP_DISTANCE_PCT", 0.0)),
         breakeven_uses_real_entry=env.bool("BREAKEVEN_USES_REAL_ENTRY", True),
         allow_live_trading=allow_live,
         enable_ocr=env.bool("ENABLE_OCR", False),
