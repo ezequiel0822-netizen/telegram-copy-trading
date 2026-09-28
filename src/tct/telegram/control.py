@@ -76,21 +76,27 @@ AYUDA = """Comandos disponibles:
 /cerrar todo      Cierra TODAS las posiciones (pide confirmar)
 /ayuda            Esto
 
-Con dos bots corriendo, agrega el nombre para dirigirte a uno solo:
-    /pausa real       solo el de la cuenta real
+Con varios bots corriendo, agrega el nombre para dirigirte a uno solo:
     /pausa demo       solo el de la demo
-    /pausa            los dos
+    /pausa            todos los que escuchan comandos
+Un bot con ENABLE_TELEGRAM_CONTROL=false (la real) NO escucha: se frena
+cerrando su ventana en la PC.
 """
 
 
 class ControlTelegram:
     """Atiende los comandos que llegan al chat de control."""
 
-    def __init__(self, settings, store, engine) -> None:
+    def __init__(self, settings, store, engine, sin_control=()) -> None:
         self.settings = settings
         self.store = store
         self.engine = engine
         self.nombre = settings.instance_name.lower()
+        # Las OTRAS instancias que no escuchan comandos (la real). Sin esto,
+        # "/pausa todos" contestaba PAUSADO desde las demos, nadie decia que la
+        # real seguia operando, y "/pausa real" no tenia ninguna respuesta.
+        self.sin_control = frozenset(n.lower() for n in sin_control
+                                     if n and n.lower() != self.nombre)
         # El roster de TODAS las instancias, no solo la mia. Sin los nombres de
         # las otras, esta instancia no puede distinguir "/pausa fxpro" (no es
         # para mi) de "/pausa mercado feo" (es para mi, con motivo).
@@ -202,17 +208,35 @@ class ControlTelegram:
                 "Si querias cerrar, mandame /cerrar todo de nuevo.\n\n"
             )
 
+        destinatario = self._partir_destinatario(resto)[0] if accion is not None else ""
+        if destinatario in self.sin_control:
+            if not self._contesto_por_las_que_no_escuchan():
+                return aviso or None
+            return (f"{aviso}{self._cabecera()}\n{destinatario.upper()} NO escucha comandos "
+                    "(ENABLE_TELEGRAM_CONTROL=false). No se hizo nada ahi: se frena "
+                    "cerrando su ventana en la PC.")
+
         if not es_mio:
             return aviso or None
 
         try:
-            return aviso + await accion(resto)
+            respuesta = aviso + await accion(resto)
+            if self.sin_control and comando not in {"ayuda", "help"} and (
+                    not destinatario or destinatario in _TODOS):
+                respuesta += ("\n(" + ", ".join(sorted(n.upper() for n in self.sin_control))
+                              + " NO escucha comandos: se frena cerrando su ventana.)")
+            return respuesta
         except Exception:
             logger.exception("Fallo el comando /%s", comando)
             return (
                 f"{aviso}[{self.nombre}] El comando /{comando} fallo. "
                 "El bot sigue vivo."
             )
+
+    def _contesto_por_las_que_no_escuchan(self) -> bool:
+        """Contesta UNA sola de las que escuchan: la primera por nombre."""
+        escuchan = sorted(n for n in self.nombres if n not in self.sin_control)
+        return not escuchan or escuchan[0] == self.nombre
 
     async def _resolver_confirmacion(self, texto: str) -> str | None:
         """Atiende un mensaje suelto cuando hay un cierre esperando confirmacion.

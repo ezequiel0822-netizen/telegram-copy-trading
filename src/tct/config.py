@@ -395,6 +395,15 @@ class Settings:
 def load_settings(env_file: str | Path | None = None) -> Settings:
     """Lee el .env indicado (o ./.env), valida y devuelve la configuracion."""
     path = Path(env_file) if env_file else Path(".env")
+    # Un --env-file que no existe se ignoraba en silencio: con un error de
+    # tipeo (.env.reall), `tct status` e `informe` mostraban los datos de la
+    # demo de MetaQuotes y terminaban bien. El .env por defecto sigue siendo
+    # opcional; el que se nombra, no.
+    if env_file and not path.exists():
+        raise ConfigError(
+            f"No existe el archivo {path.resolve()}\n"
+            f"    (estas en {Path.cwd()}). Revisa el nombre: por ejemplo .env.real"
+        )
 
     values: dict[str, str] = {}
     if path.exists():
@@ -485,7 +494,18 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
             "ALLOW_LIVE_TRADING=true: la proteccion de cuenta demo esta DESACTIVADA."
         )
 
-    data_dir = Path(env.str("DATA_DIR", "data"))
+    # Las rutas relativas son relativas al .env, no a la carpeta desde donde
+    # se corre `tct`. Antes, el mismo .env.real usado desde otra carpeta
+    # tenia otro state.json, otro candado y otra sesion: `tct status` decia
+    # "0 posiciones" con una real abierta. Los .bat se paran en la carpeta
+    # del repo, que es donde estan los .env: ahi no cambia nada.
+    base = path.resolve().parent
+
+    def junto_al_env(valor: str) -> Path:
+        ruta = Path(valor)
+        return ruta if ruta.is_absolute() else base / ruta
+
+    data_dir = junto_al_env(env.str("DATA_DIR", "data"))
     default_lot = env.float("DEFAULT_LOT", 0.01)
     max_lot = env.float("MAX_LOT", 0.01)
     if default_lot <= 0:
@@ -517,7 +537,8 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         trading_mode=mode,
         telegram_api_id=api_id,
         telegram_api_hash=env.str("TELEGRAM_API_HASH"),
-        telegram_session_name=env.str("TELEGRAM_SESSION_NAME", "telegram_copy_trading"),
+        telegram_session_name=str(junto_al_env(
+            env.str("TELEGRAM_SESSION_NAME", "telegram_copy_trading"))),
         telegram_source_chats=source_chats,
         metaapi_token=env.str("METAAPI_TOKEN"),
         metaapi_account_id=env.str("METAAPI_ACCOUNT_ID"),
@@ -545,10 +566,11 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         dry_run=env.bool("DRY_RUN", False),
         poll_interval_seconds=env.int("POLL_INTERVAL_SECONDS", 5),
         data_dir=data_dir,
-        paper_trades_path=Path(env.str("PAPER_TRADES_PATH", str(data_dir / "paper_trades.jsonl"))),
-        events_path=Path(env.str("EVENTS_PATH", str(data_dir / "events.jsonl"))),
-        state_path=Path(env.str("STATE_PATH", str(data_dir / "state.json"))),
-        log_path=Path(env.str("LOG_PATH", "logs/tct.log")),
+        paper_trades_path=junto_al_env(env.str("PAPER_TRADES_PATH",
+                                               str(data_dir / "paper_trades.jsonl"))),
+        events_path=junto_al_env(env.str("EVENTS_PATH", str(data_dir / "events.jsonl"))),
+        state_path=junto_al_env(env.str("STATE_PATH", str(data_dir / "state.json"))),
+        log_path=junto_al_env(env.str("LOG_PATH", "logs/tct.log")),
         instance_name=instance_name,
         instance_names=instance_names,
         enable_telegram_control=env.bool("ENABLE_TELEGRAM_CONTROL", True),
@@ -746,4 +768,18 @@ def _validate_mode_requirements(settings: Settings) -> None:
                 "    de inversor.\n"
                 "    Sin las tres, el bot NO se loguea: opera la cuenta que la\n"
                 "    terminal tenga cargada en ese momento, sea cual sea."
+            )
+        # Con varias instancias, MT5_PATH vacio es "la terminal que encuentre":
+        # la real le hacia login() a la terminal de una DEMO en marcha, y esa
+        # demo quedaba bloqueada (o peor, ver `_cuenta_sigue_siendo_la_del_env`).
+        if (settings.roster_declarado and len(settings.instance_names) >= 2
+                and not settings.mt5_path):
+            raise ConfigError(
+                "TRADING_MODE=LIVE con varias instancias (INSTANCE_NAMES="
+                + ",".join(settings.instance_names)
+                + ") necesita MT5_PATH: la ruta del MetaTrader de ESTA cuenta.\n"
+                "    Vacio se engancha a la primera terminal que encuentre, que puede\n"
+                "    ser la de una demo. Clic derecho en el acceso directo de su\n"
+                "    MetaTrader -> Propiedades -> copiar 'Destino', y:\n"
+                "        tct cambiar --env-file .env.real MT5_PATH=<pegalo aca>"
             )

@@ -45,6 +45,10 @@ REINTENTOS_POR_PRECIO = 2
 # aparece en segundos; esto cubre un MetaTrader que tarda en volver.
 BUSCAR_SIN_CONFIRMAR = timedelta(minutes=10)
 
+# Retcode de MT5 cuando el stop esta mas cerca del precio de lo que el broker
+# permite (TRADE_RETCODE_INVALID_STOPS).
+STOPS_INVALIDOS = 10016
+
 
 def _vale_preguntarle_a_la_ia(event: SignalEvent | None, text: str) -> bool:
     """Si conviene molestar a la IA local con este mensaje.
@@ -262,6 +266,8 @@ class Engine:
         self._turno = asyncio.Lock()
         # Ordenes que order_send no confirmo y todavia no aparecieron.
         self._sin_confirmar: list[dict[str, Any]] = []
+        # Stops que el broker rechazo por distancia minima (10016): trade_id -> SL.
+        self._sl_pendientes: dict[str, float] = {}
         # Las consultas a la IA que corren de fondo (ver `_ia_de_fondo`).
         self._tareas_ia: set[asyncio.Task] = set()
 
@@ -1024,9 +1030,21 @@ class Engine:
                     continue
                 logger.error("No se pudo mover el SL de %s: %s",
                              position.symbol, order.reason)
+                if order.raw.get("retcode") == STOPS_INVALIDOS:
+                    # El broker exige una distancia minima entre el precio y el
+                    # stop: un breakeven con el precio todavia cerca de la
+                    # entrada se rechaza, y despues nadie lo volvia a pedir. La
+                    # posicion quedaba con el stop original (a 0.05, unos 50
+                    # dolares por stop de 10 puntos). El vigilante lo reintenta
+                    # cada 30 s, hasta que entre o la posicion cierre.
+                    self._sl_pendientes[position.trade_id] = new_sl
+                    fallidas.append(f"{position.symbol}: {order.reason} (se reintenta solo "
+                                    "cada 30 s, cuando el precio se aleje)")
+                    continue
                 fallidas.append(f"{position.symbol}: {order.reason}")
                 continue
             movidas += 1
+            self._sl_pendientes.pop(position.trade_id, None)
             position.stop_loss = new_sl
             self.store.append_paper_trade({
                 "trade_id": position.trade_id,
@@ -1490,7 +1508,7 @@ class Engine:
         orden: el paquete MetaTrader5 es un solo canal.
         """
         revisar = getattr(self.broker, "revisar_conexion", None)
-        if revisar is None and not self._sin_confirmar:
+        if revisar is None and not self._sin_confirmar and not self._sl_pendientes:
             return
         async with self._turno:
             if revisar is not None:
@@ -1498,6 +1516,33 @@ class Engine:
             if self._sin_confirmar:
                 await self._confirmar_sin_respuesta()
                 self.store.save_state()
+            if self._sl_pendientes:
+                await self._reintentar_stops()
+                self.store.save_state()
+
+    async def _reintentar_stops(self) -> None:
+        """Vuelve a pedir los stops que el broker rechazo por distancia minima."""
+        abiertas = {p.trade_id: p for p in self.store.open_positions()}
+        for trade_id, nuevo in list(self._sl_pendientes.items()):
+            position = abiertas.get(trade_id)
+            if position is None:
+                self._sl_pendientes.pop(trade_id, None)  # ya cerro
+                continue
+            order = await self.broker.modify_stop_loss(
+                ticket=position.broker_ticket, symbol=position.symbol, stop_loss=nuevo)
+            if order.ok:
+                self._sl_pendientes.pop(trade_id, None)
+                antes, position.stop_loss = position.stop_loss, nuevo
+                self.store.append_event("sl_movido_al_reintentar", {
+                    "trade_id": trade_id, "antes": antes, "despues": nuevo})
+                await self._avisar(f"El SL de {position.symbol} que el broker habia rechazado "
+                                   f"por distancia minima ya entro: {antes} -> {nuevo}.")
+            elif order.raw.get("ausente"):
+                self._sl_pendientes.pop(trade_id, None)
+            elif order.raw.get("retcode") != STOPS_INVALIDOS:
+                # Otro motivo: no se insiste para siempre con algo que no es
+                # la distancia. Ya se aviso cuando fallo la primera vez.
+                self._sl_pendientes.pop(trade_id, None)
 
     async def reconciliar_al_arrancar(self) -> None:
         """Toma bajo gestion las posiciones del bot que el registro no conoce.

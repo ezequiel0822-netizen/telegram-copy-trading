@@ -77,18 +77,29 @@ def elegir_nombre_de_simbolo(canonico: str, nombres: Iterable[str]) -> str | Non
     canonico = canonico.strip().upper()
     nombres = list(nombres)
     candidatos = [canonico, *_ALIAS_DE_BROKER.get(canonico, ())]
+    # Algunos brokers anteponen "#" (#XAUUSD): no es parte del instrumento.
     for candidato in candidatos:
         for nombre in nombres:
-            if nombre.upper() == candidato:
+            if nombre.upper().lstrip("#") == candidato:
                 return nombre
     for candidato in candidatos:
         for nombre in nombres:
-            arriba = nombre.upper()
-            if arriba.startswith(candidato) and len(arriba) - len(candidato) <= 4:
-                resto = arriba[len(candidato):]
-                if resto == "" or not resto[0].isalnum() or len(resto) <= 2:
-                    return nombre
+            arriba = nombre.upper().lstrip("#")
+            if not arriba.startswith(candidato):
+                continue
+            resto = arriba[len(candidato):]
+            corto = len(resto) <= 4 and (resto == "" or not resto[0].isalnum()
+                                         or len(resto) <= 2)
+            if corto or resto in _SUFIJOS_DE_BROKER:
+                return nombre
     return None
+
+
+# Sufijos de tipo de cuenta que los brokers pegan al nombre sin separador
+# (XAUUSDpro, XAUUSDecn). Van en lista CERRADA a proposito: una regla general
+# de "cualquier sufijo de letras" confundiria EURUSD con EURUSDT (la cripto).
+_SUFIJOS_DE_BROKER = frozenset({"PRO", "ECN", "RAW", "STD", "STP", "CASH", "MICRO",
+                                "MINI", "PLUS", "VIP", "ZERO", "PRIME"})
 
 
 def modo_de_la_cuenta(mt5, account) -> str | None:
@@ -307,6 +318,18 @@ class MT5NativeBroker(Broker):
             )
             return False
 
+        # "Deshabilitar el trading automatico a traves de API externas" es una
+        # opcion de MetaTrader (Herramientas -> Opciones -> Asesores Expertos).
+        # Prendida, la terminal rechaza toda orden de Python aunque el boton
+        # Algo Trading este verde; una instalacion nueva puede traerla asi.
+        if terminal is not None and getattr(terminal, "tradeapi_disabled", False) is True:
+            logger.error(
+                "MetaTrader tiene DESHABILITADO el trading por API: ninguna orden va a\n"
+                "        entrar. En MetaTrader: Herramientas -> Opciones -> Asesores\n"
+                "        Expertos, y destilda 'Deshabilitar el trading automatico a traves\n"
+                "        de API externas'.")
+            return False
+
         account = mt5.account_info()
         if account is None:
             logger.error("No se pudo leer account_info() de MT5")
@@ -365,6 +388,9 @@ class MT5NativeBroker(Broker):
             return False
 
         self._ready = True
+        # La cuenta a la que se LLEGO, para compararla antes de cada orden
+        # aunque el .env no tenga MT5_LOGIN (ver `_cuenta_sigue_siendo_la_del_env`).
+        self._login_conectado = account.login
         # Se guarda para poder decirlo despues. Con DOS bots corriendo, "contra
         # que cuenta esta este" es la pregunta que mas importa y la unica que
         # no se puede contestar desde el telefono: /estado decia "Broker: mt5"
@@ -460,12 +486,19 @@ class MT5NativeBroker(Broker):
         la nombra) y no se opina: engancharse a la terminal que haya abierta es
         lo documentado para ese caso.
         """
-        if not self.settings.mt5_login:
-            return ""
-        try:
-            esperado = int(self.settings.mt5_login)
-        except ValueError:
-            return "MT5_LOGIN no es numerico"
+        # Sin MT5_LOGIN se compara contra la cuenta a la que se conecto. Antes
+        # no se comparaba nada, y una demo sin MT5_LOGIN que compartia
+        # terminal con la real mandaba sus ordenes (sin topes) a la cuenta REAL
+        # en cuanto la real le logueaba la terminal: ok=True, "orden ejecutada".
+        if self.settings.mt5_login:
+            try:
+                esperado = int(self.settings.mt5_login)
+            except ValueError:
+                return "MT5_LOGIN no es numerico"
+        else:
+            esperado = getattr(self, "_login_conectado", None)
+            if esperado is None:
+                return ""
         try:
             cuenta = self._mt5.account_info()
         except Exception:
@@ -491,10 +524,14 @@ class MT5NativeBroker(Broker):
         # segunda, y con TRADING_MODE=AUTO una cuenta real pasaba como demo.
         # `config.py` ya rechaza esa combinacion al cargar; esto es la segunda
         # red, para Settings armados sin pasar por `load_settings`.
+        # Primero, y tambien en LIVE: con la password de INVERSOR la cuenta
+        # conecta pero no puede operar, y la real arrancaba diciendo "BOT REAL
+        # arrancado" para despues ver rechazada cada senal.
+        if account.get("trade_allowed") is False:
+            return False, ("La cuenta tiene trade_allowed=false: no puede operar. Casi "
+                           "siempre es la password de INVERSOR; hace falta la MASTER.")
         if getattr(self.settings, "is_live", False):
             return True, "TRADING_MODE=LIVE y ALLOW_LIVE_TRADING=true, chequeo de demo omitido"
-        if account.get("trade_allowed") is False:
-            return False, "La cuenta tiene trade_allowed=false"
 
         demo_const = getattr(self._mt5, "ACCOUNT_TRADE_MODE_DEMO", None)
         if demo_const is not None and account.get("trade_mode") == demo_const:
@@ -824,6 +861,7 @@ class MT5NativeBroker(Broker):
             if (result.retcode == hecho
                     or (result.retcode == parcial and not pendiente)
                     or (result.retcode == colocada and pendiente)):
+                self._recordar_llenado(info, request.get("type_filling"))
                 if result.retcode == parcial:
                     logger.warning("El broker lleno solo una parte: %s de %s lotes.",
                                    getattr(result, "volume", "?"), volume)
@@ -1121,6 +1159,7 @@ class MT5NativeBroker(Broker):
                 return self._cierre_sin_respuesta(ticket, symbol, action, volumen_antes)
             if result.retcode in (mt5.TRADE_RETCODE_DONE,
                                   getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)):
+                self._recordar_llenado(info, request.get("type_filling"))
                 cerrado = _volumen_confirmado(result, volume)
                 if fraction >= 1.0 and (
                         result.retcode != mt5.TRADE_RETCODE_DONE
@@ -1488,6 +1527,9 @@ class MT5NativeBroker(Broker):
         """
         mt5 = self._mt5
         mode = getattr(info, "filling_mode", None)
+        # El que ya funciono con este simbolo va primero: un broker que solo
+        # acepta RETURN gastaba dos rechazos (10030) en CADA orden.
+        recordado = getattr(self, "_llenado_ok", {}).get(getattr(info, "name", None))
         order_fok = getattr(mt5, "ORDER_FILLING_FOK", 0)
         order_ioc = getattr(mt5, "ORDER_FILLING_IOC", 1)
         order_return = getattr(mt5, "ORDER_FILLING_RETURN", 2)
@@ -1503,4 +1545,14 @@ class MT5NativeBroker(Broker):
         for fallback in (order_ioc, order_fok, order_return):
             if fallback not in modes:
                 modes.append(fallback)
+        if recordado in modes:
+            modes.remove(recordado)
+            modes.insert(0, recordado)
         return modes
+
+    def _recordar_llenado(self, info: Any, modo: Any) -> None:
+        nombre = getattr(info, "name", None)
+        if nombre is not None and modo is not None:
+            if not hasattr(self, "_llenado_ok"):
+                self._llenado_ok = {}
+            self._llenado_ok[nombre] = modo

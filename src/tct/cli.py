@@ -21,6 +21,7 @@ import asyncio
 import logging
 import logging.handlers
 import math
+import os
 import platform
 import queue
 import re
@@ -418,6 +419,10 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float,
     if libre is None:
         libre = getattr(cuenta, "equity", None) or getattr(cuenta, "balance", 0.0)
     libre = float(libre)
+    # Cuantas entran EN TOTAL: el margen libre ya descuenta lo que ocupan las
+    # abiertas, y comparar eso contra MAX_OPEN_TRADES pedia bajar el tope a 1
+    # en una cuenta donde entran 2 con una ya abierta.
+    capacidad = libre + float(getattr(cuenta, "margin", 0) or 0)
     moneda = getattr(cuenta, "currency", "")
     apalancamiento = getattr(cuenta, "leverage", None)
 
@@ -458,7 +463,7 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float,
         if margen.sin_margen:
             print(f"  {como:<22} no pide margen (apalancamiento ilimitado)")
             continue
-        entran = int(libre // margen.pide)
+        entran = int(capacidad // margen.pide)
         if entran and max_abiertas and entran < max_abiertas:
             pocas.append((canonico, entran))
         if entran:
@@ -513,6 +518,8 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float,
                     break
         print("          Hace falta mas apalancamiento, mas saldo, o un lote mas")
         print("          chico si el broker lo permite.")
+
+    return no_estan
 
 
 def cmd_mt5(args: argparse.Namespace) -> int:
@@ -598,7 +605,7 @@ def cmd_mt5(args: argparse.Namespace) -> int:
         if modo:
             print(f"  Posiciones : {modo.upper()}")
 
-        _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos, lote, max_abiertas)
+        no_estan = _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos, lote, max_abiertas) or []
 
         print("\n" + "=" * 58)
         print("  QUE PONER EN EL .env")
@@ -646,6 +653,16 @@ def cmd_mt5(args: argparse.Namespace) -> int:
                 "El boton 'Algo Trading' esta APAGADO. Ninguna orden va a entrar.\n"
                 "     Apretalo en la barra de arriba de MetaTrader (tiene que quedar\n"
                 "     verde) o presiona Ctrl+E."
+            )
+        if simbolos and len(no_estan) == len(simbolos):
+            # La real opera solo XAUUSD: si el broker lo llama de una forma que
+            # el bot no reconoce, arrancaba y perdia cada senal ("no expone el
+            # simbolo"), y este comando decia "Todo en orden".
+            problemas.append(
+                f"Este broker no tiene ninguno de los simbolos del .env "
+                f"({', '.join(simbolos)}) con un nombre que el bot reconozca.\n"
+                "     Mira en MetaTrader (Ver -> Simbolos) como se llama el oro y\n"
+                "     avisa: el bot no va a poder operar nada."
             )
         if modo == "netting":
             problemas.append(
@@ -983,6 +1000,96 @@ def _avisar_rosters_desparejos(settings: Settings, env_file: str | None) -> None
             )
     except Exception:  # pragma: no cover - es un aviso, no una validacion
         logger.debug("No se pudieron comparar los rosters", exc_info=True)
+
+
+def _instancias_sin_control(env_file: str | None) -> list[str]:
+    """Los nombres de las OTRAS instancias de la carpeta que no escuchan
+    comandos (ENABLE_TELEGRAM_CONTROL=false), para que el control lo diga."""
+    try:
+        from dotenv import dotenv_values
+
+        from tct.archivo_env import es_env_de_un_bot
+
+        actual = Path(env_file or ".env").resolve()
+        nombres = []
+        for otro in sorted(actual.parent.glob(".env*")):
+            if not es_env_de_un_bot(otro.name) or otro.resolve() == actual:
+                continue
+            crudo = dotenv_values(otro) or {}
+            if str(crudo.get("ENABLE_TELEGRAM_CONTROL", "true")).strip().lower() in {
+                    "false", "0", "no", "off"}:
+                nombres.append(str(crudo.get("INSTANCE_NAME") or "demo").strip().lower())
+        return nombres
+    except Exception:  # pragma: no cover - es un aviso, no una validacion
+        return []
+
+
+def _choques_con_otras_instancias(settings: Settings, env_file: str | None) -> list[str]:
+    """Lo que ESTE bot comparte con otro .env de la carpeta y no puede compartir.
+
+    Un .env copiado de otro (el .env.real sacado de .env.segunda) arrancaba
+    sin un aviso: la misma terminal de MetaTrader (el que arranca despues le
+    hace login y deja al otro operando una cuenta ajena o sordo), la misma
+    sesion de Telegram (dos procesos sobre un archivo), la misma cuenta, o el
+    mismo nombre. Se compara contra los otros .env antes de conectar nada.
+    Solo lectura: un archivo raro en la carpeta no rompe el arranque.
+    """
+    try:
+        from dotenv import dotenv_values
+
+        from tct.archivo_env import es_env_de_un_bot
+    except Exception:  # pragma: no cover
+        return []
+
+    def normal(valor) -> str:
+        return os.path.normcase(os.path.normpath(str(valor).strip().strip('"'))) if valor else ""
+
+    actual = Path(env_file or ".env").resolve()
+    carpeta = actual.parent
+    mio = {
+        "MT5_PATH (la misma terminal de MetaTrader)": normal(settings.mt5_path),
+        "MT5_LOGIN (la misma cuenta)": str(settings.mt5_login or "").strip(),
+        "TELEGRAM_SESSION_NAME (la misma sesion de Telegram)":
+            normal(Path(settings.telegram_session_name)),
+        "STATE_PATH (la misma carpeta de datos)": normal(settings.state_path),
+        "INSTANCE_NAME (el mismo nombre)": settings.instance_name.lower(),
+    }
+    choques = []
+    try:
+        otros = sorted(carpeta.glob(".env*"))
+    except OSError:
+        return []
+    for otro in otros:
+        try:
+            if not es_env_de_un_bot(otro.name) or otro.resolve() == actual:
+                continue
+            crudo = {k: v for k, v in (dotenv_values(otro) or {}).items() if v}
+        except Exception:
+            continue
+
+        def junto(valor: str) -> str:
+            ruta = Path(valor)
+            return normal(ruta if ruta.is_absolute() else carpeta / ruta)
+
+        datos = crudo.get("DATA_DIR", "data")
+        suyo = {
+            "MT5_PATH (la misma terminal de MetaTrader)": normal(crudo.get("MT5_PATH", "")),
+            "MT5_LOGIN (la misma cuenta)": crudo.get("MT5_LOGIN", "").strip(),
+            "TELEGRAM_SESSION_NAME (la misma sesion de Telegram)":
+                junto(crudo.get("TELEGRAM_SESSION_NAME", "telegram_copy_trading")),
+            "STATE_PATH (la misma carpeta de datos)":
+                junto(crudo.get("STATE_PATH", str(Path(datos) / "state.json"))),
+            "INSTANCE_NAME (el mismo nombre)": crudo.get("INSTANCE_NAME", "demo").lower(),
+        }
+        iguales = [que for que, valor in mio.items() if valor and valor == suyo[que]]
+        if iguales:
+            choques.append(
+                f"Este bot y {otro.name} tienen el mismo "
+                + ", el mismo ".join(iguales)
+                + ".\n        Cada instancia necesita lo suyo. Si copiaste un .env de otro,"
+                "\n        cambialo con 'tct cambiar'."
+            )
+    return choques
 
 
 async def _avisar_simbolos_que_el_broker_no_opera(settings: Settings, broker) -> None:
@@ -1350,6 +1457,13 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
             if volumen is None:
                 print(f"      FALLA {canonico}: DEFAULT_LOT={settings.default_lot} fuera de rango")
                 fallos.append(f"DEFAULT_LOT invalido para {canonico}")
+            elif settings.max_lot and volumen > settings.max_lot + 1e-9:
+                # El broker lo sube a su minimo y queda por encima del techo:
+                # el bot rechaza TODAS las senales de este simbolo.
+                print(f"      FALLA {canonico}: lote {settings.default_lot} se ajusta a {volumen}, "
+                      f"mas que MAX_LOT={settings.max_lot}")
+                fallos.append(f"En {canonico} el lote minimo ({volumen}) supera MAX_LOT: "
+                              "el bot no va a poder operarlo")
             else:
                 aviso = "" if volumen == settings.default_lot else f"  (se ajusta a {volumen})"
                 print(f"      OK    {canonico:<8} lote {settings.default_lot}{aviso} "
@@ -1370,11 +1484,20 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
             canonico, real, precio = next(
                 ((c, r, p) for c, r, p in con_precio if c == args.simbolo), con_precio[0]
             )
-            print(f"      Abriendo {canonico} ({real}) al minimo, para cerrarla enseguida...")
+            # Al MINIMO del broker, como dice la pantalla (antes mandaba
+            # DEFAULT_LOT: 0.05 en la real), y con un stop puesto: si la prueba
+            # se corta entre abrir y cerrar (Ctrl+C, la luz), la posicion no
+            # queda abierta sin proteccion en la cuenta real.
+            info = await asyncio.to_thread(broker._ensure_symbol, real)
+            minimo = float(getattr(info, "volume_min", 0) or 0.01)
+            digitos = int(getattr(info, "digits", 2) or 2)
+            stop_de_prueba = round(precio * 0.98, digitos)
+            print(f"      Abriendo {canonico} ({real}) al minimo ({minimo:g}), con stop en "
+                  f"{stop_de_prueba}, para cerrarla enseguida...")
 
             apertura = await broker.open_order(
                 symbol=canonico, side=Side.BUY, order_type=OrderType.MARKET,
-                lot=settings.default_lot, entry=None, stop_loss=None, take_profit=None,
+                lot=minimo, entry=None, stop_loss=stop_de_prueba, take_profit=None,
             )
             if apertura.raw.get("retcode") == _MERCADO_CERRADO:
                 # No es un defecto del sistema: es el fin de semana. Contarlo
@@ -1441,7 +1564,8 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
         print()
     if args.operar:
         print("  La cadena completa funciona: conexion, simbolos, cotizaciones,")
-        print("  y una orden real que se abrio y se cerro contra tu cuenta demo.")
+        cuenta = "tu cuenta REAL" if settings.is_live else "tu cuenta demo"
+        print(f"  y una orden real que se abrio y se cerro contra {cuenta}.")
     else:
         print("  Todo lo que se puede verificar sin operar esta bien.")
         print("  Falta la prueba de fuego:  python -m tct probar --operar")
@@ -2057,6 +2181,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     logger.info("Arrancando\n%s", settings.describe())
     _avisar_rosters_desparejos(settings, args.env_file)
+    choques = _choques_con_otras_instancias(settings, args.env_file)
+    for choque in choques:
+        (logger.error if settings.is_live else logger.warning)("%s", choque)
+    if choques and settings.is_live:
+        logger.error("La cuenta REAL no arranca compartiendo eso con otra instancia.")
+        return 1
     if settings.dry_run:
         logger.warning("DRY_RUN=true: se va a observar y registrar, sin operar ni siquiera en papel.")
 
@@ -2077,14 +2207,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         logger.error("%s", exc)
         return 1
 
+    codigo = 0
     try:
         with _logs_sin_frenar_al_bot():
-            asyncio.run(_run_async(settings, getattr(args, 'esperar_mt5', 0)))
+            codigo = asyncio.run(_run_async(settings, getattr(args, 'esperar_mt5', 0),
+                                            env_file=args.env_file)) or 0
     except KeyboardInterrupt:
         logger.info("Detenido por el usuario")
     finally:
         lock.soltar()
-    return 0
+    return codigo
 
 
 async def _conectar_broker(broker, esperar_segundos: int) -> bool:
@@ -2152,7 +2284,8 @@ async def _vigilar_metatrader(engine) -> None:
             logger.exception("Fallo la revision de la conexion con MetaTrader")
 
 
-async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
+async def _run_async(settings: Settings, esperar_segundos: int = 0,
+                     env_file: str | None = None) -> int:
     from tct.brokers.base import build_broker
     from tct.engine import Engine
     from tct.store import Store
@@ -2168,7 +2301,10 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
             # En un modo que ejecuta, un broker caido significa senales
             # aceptadas que no llegan a ningun lado: mejor no arrancar.
             logger.error("No se pudo conectar el broker '%s'. Abortando.", broker.name)
-            return
+            # 1: no se reintenta. Ya se espero a MetaTrader (--esperar-mt5), y
+            # cada reintento volvia a pedir la clave y a hacerle login a la
+            # terminal. Cuenta equivocada o netting caen aca tambien.
+            return 1
         logger.warning("El broker '%s' no conecto, se sigue en modo papel.", broker.name)
 
     await _avisar_simbolos_que_el_broker_no_opera(settings, broker)
@@ -2208,7 +2344,7 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
     if not await reader.start():
         logger.error("No se pudo iniciar la lectura de Telegram. Abortando.")
         await broker.disconnect()
-        return
+        return 0  # un corte de internet: reintentar si sirve
 
     # Control remoto por Telegram. Se engancha al MISMO cliente que ya abrio
     # el lector: no hay segundo login ni otro archivo .session.
@@ -2216,7 +2352,8 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
     if settings.enable_telegram_control:
         from tct.telegram.control import ControlTelegram, escuchar_comandos
 
-        control = ControlTelegram(settings, store, engine)
+        control = ControlTelegram(settings, store, engine,
+                                  sin_control=_instancias_sin_control(env_file))
         if await escuchar_comandos(reader.client, settings, control) is None:
             # Sin control remoto, la unica forma de frenar el bot es la PC.
             # Con dinero real eso es demasiado poco, asi que no se arranca.
@@ -2228,7 +2365,7 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
                 )
                 await reader.stop()
                 await broker.disconnect()
-                return
+                return 1
             control = None
             logger.warning("Sin control por Telegram. Solo se puede frenar desde la PC.")
     else:
@@ -2281,6 +2418,7 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
             logger.info("Estado guardado. El bot NO esta escuchando.")
         else:
             logger.info("Cerrado limpio.")
+    return 0
 
 
 # --------------------------------------------------------------------------

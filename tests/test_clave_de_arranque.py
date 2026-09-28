@@ -190,7 +190,7 @@ def armar_run(monkeypatch, settings, escritas):
     """cmd_run con todo lo de afuera reemplazado. Devuelve lo que llego a pasar."""
     paso = {"arranco": False, "candado": False}
 
-    async def run_falso(_settings, _esperar=0):
+    async def run_falso(_settings, _esperar=0, env_file=None):
         paso["arranco"] = True
 
     class Candado:

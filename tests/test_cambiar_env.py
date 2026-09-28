@@ -1041,8 +1041,10 @@ def test_un_archivo_que_ya_no_arrancaba_se_puede_ir_completando(tmp_path):
     assert "MAX_SIGNALS_PER_DAY=10\nMAX_DAILY_LOSS_PCT=5\n" in ruta.read_text(encoding="utf-8")
 
 
+# Con MT5_PATH, como el .env.real de su PC: con varias instancias, LIVE lo exige.
 REAL_SIN_CREDENCIALES = ("TRADING_MODE=LIVE\r\nALLOW_LIVE_TRADING=true\r\nINSTANCE_NAME=real\r\n"
-                         "INSTANCE_NAMES=demo,fxpro,real\r\nMAX_LOT=0.01\r\n")
+                         "INSTANCE_NAMES=demo,fxpro,real\r\nMAX_LOT=0.01\r\n"
+                         "MT5_PATH=C:\\Program Files\\Bullwaves MT5\\terminal64.exe\r\n")
 
 
 def test_las_credenciales_de_la_real_se_pueden_poner_de_a_una(tmp_path):
