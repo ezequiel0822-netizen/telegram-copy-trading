@@ -478,3 +478,15 @@ def test_dice_cuanto_vale_cada_punto_con_el_lote(tmp_path, monkeypatch, capsys, 
 
     salida = capsys.readouterr().out
     assert "1 lote = 100; con 0.01, cada 1.00 de precio vale 1 USD" in salida
+
+
+def test_con_varios_bots_la_ruta_no_se_deja_vacia(tmp_path, monkeypatch, capsys, en_windows):
+    """Decia 'con una sola cuenta dejalo VACIO' a quien corre tres bots."""
+    (tmp_path / "terminal64.exe").write_text("x", encoding="utf-8")
+    falso = MT5Falso()
+    falso.terminal_info = lambda: TerminalFalsa(path=str(tmp_path))
+
+    correr(monkeypatch, falso, str(env(tmp_path)))  # INSTANCE_NAMES=demo,fxpro
+
+    salida = capsys.readouterr().out
+    assert "OBLIGATORIA" in salida and "dejalo VACIO" not in salida

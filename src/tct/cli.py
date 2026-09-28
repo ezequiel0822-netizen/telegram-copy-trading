@@ -469,10 +469,10 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float,
         # margen que eso, que puede ser un contrato de 50 (29/09).
         info = mt5.symbol_info(real)
         contrato = float(getattr(info, "trade_contract_size", 0) or 0) if info else 0.0
-        if contrato and moneda == "USD" and canonico.endswith("USD"):
-            valor = contrato * lote
-            print(f"  {'':<22} 1 lote = {contrato:g}; con {lote:g}, cada 1.00 de precio "
-                  f"vale {valor:g} USD")
+        valor_del_punto = (
+            f"  {'':<22} 1 lote = {contrato:g}; con {lote:g}, cada 1.00 de precio "
+            f"vale {contrato * lote:g} USD"
+            if contrato and moneda == "USD" and canonico.endswith("USD") else "")
         entran = int(capacidad // margen.pide)
         if entran and max_abiertas and entran < max_abiertas:
             pocas.append((canonico, entran))
@@ -482,6 +482,8 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float,
         else:
             print(f"  {como:<22} margen {margen.pide:>10.2f}{marca}   NO ENTRA NINGUNA")
             no_entran.append((canonico, margen.pide))
+        if valor_del_punto:
+            print(valor_del_punto)
 
     if no_estan:
         print(f"\n  Este broker no opera: {', '.join(no_estan)}")
@@ -641,7 +643,18 @@ def cmd_mt5(args: argparse.Namespace) -> int:
             print("  Y si vas a correr DOS cuentas a la vez, la ruta de ESTA:\n")
             print(f"      MT5_PATH={ruta}")
             print()
-            print("  (con una sola cuenta dejalo VACIO: es mas robusto)")
+            # Con varias instancias no es opcional: la real no arranca sin ella.
+            try:
+                from dotenv import dotenv_values
+
+                declaradas = (dotenv_values(args.env_file or ".env") or {}).get(
+                    "INSTANCE_NAMES") or ""
+            except Exception:
+                declaradas = ""
+            if len([n for n in declaradas.split(",") if n.strip()]) >= 2:
+                print("  (con varios bots es OBLIGATORIA: dejala en el .env)")
+            else:
+                print("  (con una sola cuenta dejalo VACIO: es mas robusto)")
 
         # Avisos que evitan un fallo silencioso mas adelante.
         problemas = []

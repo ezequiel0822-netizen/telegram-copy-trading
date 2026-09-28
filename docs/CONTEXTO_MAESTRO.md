@@ -105,6 +105,19 @@ sabe de Bullwaves desde ahí (cuenta demo #4049265):
 - La demo tenía apalancamiento 1:500 y saldo 1000; el de la real se ve con
   `tct mt5` al loguearla.
 
+**La cuenta REAL de Bullwaves (29/09):** #4049290, `BullWaves-LIVE`, STP
+(lo eligió por consejo del canal), HEDGING, 1:500, balance 500 más un bono de
+750 de crédito (equity 1250; el crédito no es suyo y `tct mt5` lo cuenta como
+margen libre). **En la real el oro es `XAUUSD!`** (en la demo era `XAUUSD`);
+el bot lo resuelve solo. Contrato de 100: con 0.05 cada punto vale 5 USD, como
+se planeó; pide 20.67 de margen porque Bullwaves cobra poco margen en el oro.
+El primer `tct mt5` dio -6: la contraseña de la real no estaba guardada.
+
+El canal le pidió, para entrar al "PRO", operar 1 lote de EURUSD (0.5 compra
++ 0.5 venta, 30 min). Se le dijo el costo (~15-20 USD de spread), que revise
+si el bono lo prohíbe, que lo haga a mano con el bot apagado, y que pregunte
+si el PRO es el mismo canal que copia el bot. El bot NO hace nada de eso.
+
 Sobre su miedo de que más bots demoren la real: cada bot es un proceso aparte
 que recibe el mensaje a la vez que los otros; no hacen fila. Medido en la
 auditoría: con la IA de los tres ocupada, la señal entró en 0,01 s.
