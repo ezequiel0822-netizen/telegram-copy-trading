@@ -168,13 +168,29 @@ def test_dice_cuantas_entran_cuando_entran(tmp_path, monkeypatch, capsys, en_win
     falso = MT5Falso(margenes={"GOLD": 217.0, "BITCOIN": 43.5, "EURUSD": 21.0},
                      cuenta=CuentaFalsa(leverage=20))
 
-    correr(monkeypatch, falso, str(env(tmp_path)))
+    correr(monkeypatch, falso, str(env(tmp_path, extra="MAX_OPEN_TRADES=2\n")))
 
     salida = capsys.readouterr().out
     assert "entran 2" in salida       # 500 libres / 217
     assert "entran 11" in salida      # 500 / 43.5
     assert "NO ENTRA NINGUNA" not in salida
     assert "No money" not in salida
+
+
+def test_avisa_si_entran_menos_de_las_que_permite_max_open_trades(tmp_path, monkeypatch,
+                                                                 capsys, en_windows):
+    """27/09: con el apalancamiento de la real entre 1:45 y 1:89, `tct mt5`
+    decia "entran 1" sin mas, y con MAX_OPEN_TRADES=2 la segunda senal
+    simultanea la rechazaba el broker. La demo, con ilimitado, abria las dos."""
+    falso = MT5Falso(margenes={"GOLD": 300.0, "BITCOIN": 43.5, "EURUSD": 21.0},
+                     cuenta=CuentaFalsa(leverage=50))
+
+    correr(monkeypatch, falso, str(env(tmp_path, extra="MAX_OPEN_TRADES=2\n")))
+
+    salida = capsys.readouterr().out
+    assert "entran 1" in salida
+    assert "De XAUUSD entran 1 a la vez, y MAX_OPEN_TRADES es 2" in salida
+    assert "BTCUSD entran" not in salida.split("[AVISO]")[-1]
 
 
 def test_dice_con_cuanto_apalancamiento_entraria(tmp_path, monkeypatch, capsys, en_windows):

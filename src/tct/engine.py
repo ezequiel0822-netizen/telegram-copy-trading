@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from tct.brokers.base import Broker, OrderResult
@@ -145,6 +146,30 @@ def _interpretacion_utilizable(event: SignalEvent) -> bool:
     return bool(event.symbol) and event.entry is not None
 
 
+# Cuanto despues del mensaje original una edicion todavia puede ABRIR. Es el
+# tiempo de una correccion ("perdon, el SL es 4424"); mas tarde, lo que el
+# canal hace es anotar el resultado.
+VENTANA_DE_CORRECCION = timedelta(minutes=10)
+
+
+def _edicion_tardia(metadata: dict[str, Any]) -> bool:
+    """Si una edicion llega mucho despues del mensaje que edita.
+
+    Telegram manda en `date` la hora del mensaje ORIGINAL. Sin ese dato no se
+    opina: se hace lo de siempre.
+    """
+    fecha = metadata.get("date")
+    if not fecha:
+        return False
+    try:
+        original = datetime.fromisoformat(fecha)
+    except (TypeError, ValueError):
+        return False
+    if original.tzinfo is None:
+        original = original.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - original > VENTANA_DE_CORRECCION
+
+
 def _parser_no_entendio(event: SignalEvent | None) -> bool:
     """True si vale la pena molestar a la IA local.
 
@@ -216,6 +241,8 @@ class Engine:
         # forma simple de que la foto que ve el riesgo siga siendo cierta
         # cuando se escribe el resultado.
         self._turno = asyncio.Lock()
+        # Las consultas a la IA que corren de fondo (ver `_ia_de_fondo`).
+        self._tareas_ia: set[asyncio.Task] = set()
 
     # -- Entrada principal -------------------------------------------------
 
@@ -268,12 +295,49 @@ class Engine:
             )
             return {"status": "edicion_ignorada", "signal": event.to_dict()}
 
+        # Y si NO opero, la edicion tampoco puede abrirlo horas despues. Con
+        # topes chicos (la real: 2 abiertas) una senal se rechaza, el canal la
+        # edita mas tarde para anotarle el resultado, y esa edicion la abria a
+        # precio de mercado, sobre una senal que el canal ya dio por
+        # terminada; la demo, que la habia tomado a tiempo, la ignoraba. Lo
+        # mismo con un mensaje de antes de que el bot arrancara. Una edicion
+        # abre solo dentro de la ventana de una correccion.
+        if (
+            is_edit
+            and event is not None
+            and event.event_type is EventType.OPEN
+            and _edicion_tardia(metadata)
+        ):
+            self.store.append_event("edicion_ignorada",
+                                    {"signal": event.to_dict(), "motivo": "tardia"})
+            self.store.save_state()
+            logger.info(
+                "Edicion de un mensaje de hace mas de %d minutos (%s) que no opero: "
+                "no se abre tarde.", VENTANA_DE_CORRECCION.seconds // 60, message_id,
+            )
+            return {"status": "edicion_ignorada", "signal": event.to_dict()}
+
         # La IA solo entra donde el parser de reglas fallo. Si el parser
         # entendio, no se la consulta: es mas rapida, gratis y determinista.
         if self.ollama is not None and _vale_preguntarle_a_la_ia(event, text):
-            interpretado = await self._consultar_ia(text, metadata)
-            if interpretado is not None and _interpretacion_utilizable(interpretado):
-                event = interpretado
+            if not self.settings.ollama_auto_execute:
+                # Lo que diga la IA solo se anota: nunca opera. Entonces no
+                # tiene por que hacer esperar a nadie. Antes se la consultaba
+                # con el turno tomado, y una senal que llegaba detras esperaba
+                # lo que tardara la IA: ~15 s en la PC del usuario (sin placa
+                # de video), 45 con el timeout, 90 con una edicion, y mas con
+                # tres bots haciendo cola en el mismo Ollama. Medido el 27/09:
+                # con el precio corriendo 2,7 puntos en esa espera, el filtro
+                # de entrada tarde RECHAZABA la senal. Ahora se consulta de
+                # fondo, fuera del turno.
+                self._ia_de_fondo(text, metadata)
+                if event is None:
+                    self.store.save_state()
+                    return {"status": "consultando_ia"}
+            else:
+                interpretado = await self._consultar_ia(text, metadata)
+                if interpretado is not None and _interpretacion_utilizable(interpretado):
+                    event = interpretado
 
         if event is None:
             self.store.save_state()
@@ -301,20 +365,11 @@ class Engine:
             return {"status": "dry_run", "signal": event.to_dict()}
 
         # Una senal que entendio la IA y no el parser NO se ejecuta, salvo que
-        # se active a mano OLLAMA_AUTO_EXECUTE. Ver la explicacion completa en
-        # intelligence/ollama.py: risk.py valida que un precio sea coherente,
-        # no que sea el correcto, asi que un numero inventado pero plausible
-        # pasaria todos los controles.
-        if event.source == "ollama" and not self.settings.ollama_auto_execute:
-            self.store.append_event("ia_sugerencia", {"signal": event.to_dict()})
-            self.store.save_state()
-            await self._avisar(self._format_sugerencia_ia(event), problema=True)
-            logger.info(
-                "La IA interpreto un mensaje que el parser no entendio (%s %s). "
-                "Solo se aviso, no se opero.",
-                event.event_type.value, event.symbol or "?",
-            )
-            return {"status": "sugerencia_ia", "signal": event.to_dict()}
+        # se active a mano OLLAMA_AUTO_EXECUTE: sin eso la IA corre de fondo
+        # (`_ia_de_fondo`) y nunca llega hasta aca. Ver la explicacion completa
+        # en intelligence/ollama.py: risk.py valida que un precio sea
+        # coherente, no que sea el correcto, asi que un numero inventado pero
+        # plausible pasaria todos los controles.
 
         handlers = {
             EventType.OPEN: self._handle_open,
@@ -1316,6 +1371,46 @@ class Engine:
         ):
             return None
         return await self._precio_de_mercado(event.symbol)
+
+    def _ia_de_fondo(self, text: str, metadata: dict[str, Any]) -> None:
+        """Consulta a la IA sin hacer esperar a las senales que vienen detras."""
+        tarea = asyncio.create_task(self._sugerencia_de_la_ia(text, dict(metadata)))
+        # Asyncio guarda las tareas con una referencia debil: sin esto, una
+        # puede desaparecer a mitad de camino.
+        self._tareas_ia.add(tarea)
+        tarea.add_done_callback(self._tareas_ia.discard)
+
+    async def _sugerencia_de_la_ia(self, text: str, metadata: dict[str, Any]) -> None:
+        interpretado = await self._consultar_ia(text, metadata)
+        if interpretado is None or not _interpretacion_utilizable(interpretado):
+            return
+        # Solo el registro toma el turno, y dura milisegundos.
+        async with self._turno:
+            self.store.append_event("ia_sugerencia", {"signal": interpretado.to_dict()})
+            self.store.save_state()
+        await self._avisar(self._format_sugerencia_ia(interpretado), problema=True)
+        logger.info(
+            "La IA interpreto un mensaje que el parser no entendio (%s %s). "
+            "Solo se aviso, no se opero.",
+            interpretado.event_type.value, interpretado.symbol or "?",
+        )
+
+    async def revisar_el_broker(self) -> None:
+        """Para el vigilante de `tct run`: si MetaTrader se reinicio, reconecta.
+
+        Con el turno tomado, para no hablarle a la terminal a la vez que una
+        orden: el paquete MetaTrader5 es un solo canal.
+        """
+        revisar = getattr(self.broker, "revisar_conexion", None)
+        if revisar is None:
+            return
+        async with self._turno:
+            await revisar()
+
+    async def esperar_la_ia(self) -> None:
+        """Espera las consultas a la IA que quedaron de fondo (tests, cierre)."""
+        while self._tareas_ia:
+            await asyncio.gather(*list(self._tareas_ia), return_exceptions=True)
 
     async def _consultar_ia(self, text: str, metadata: dict[str, Any]) -> SignalEvent | None:
         """Consulta al interprete local. Nunca lanza: es una capa opcional."""

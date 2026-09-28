@@ -19,10 +19,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import logging.handlers
 import math
 import platform
+import queue
 import re
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +55,64 @@ def setup_logging(settings: Settings | None = None, verbose: bool = False) -> No
     )
     # Telethon es muy verboso en INFO y tapa los logs propios.
     logging.getLogger("telethon").setLevel(logging.WARNING)
+
+
+# En la consola de Windows, un clic en la ventana la pone en modo
+# "Seleccionar", y desde ahi TODO lo que se escribe en ella queda frenado
+# hasta apretar Esc o Enter. Como el bot escribe sus logs desde el mismo hilo
+# que lee Telegram y manda las ordenes, la proxima linea de log congelaba el
+# bot entero, sin limite, y sin dejar rastro: lo frenado era el log. Pasa sin
+# querer al copiar lineas para pegarlas en un chat. Auditoria del 27/09.
+
+
+def _sin_seleccion_con_el_mouse() -> None:
+    """Apaga la seleccion rapida de la ventana del bot (solo Windows)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        entrada = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        modo = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(entrada, ctypes.byref(modo)):
+            return  # no es una consola: nada que apagar
+        # ENABLE_EXTENDED_FLAGS (0x80) hace falta para que se respete el
+        # cambio; ENABLE_QUICK_EDIT_MODE (0x40) es lo que se apaga.
+        kernel32.SetConsoleMode(entrada, (modo.value | 0x0080) & ~0x0040)
+    except Exception:
+        pass
+
+
+@contextmanager
+def _logs_sin_frenar_al_bot():
+    """Mientras el bot corre, los logs se escriben desde un hilo aparte: el
+    bot solo los encola.
+
+    Aunque la ventana quede en "Seleccionar" -por el menu, o en una consola
+    donde no se pudo apagar-, lo que se frena es ese hilo, no la lectura de
+    Telegram ni las ordenes. Al salir, por el camino que sea, se vacia la cola
+    y todo vuelve a como estaba.
+    """
+    raiz = logging.getLogger()
+    destinos = list(raiz.handlers)
+    if not destinos:
+        yield
+        return
+    cola: queue.SimpleQueue = queue.SimpleQueue()
+    encolador = logging.handlers.QueueHandler(cola)
+    for destino in destinos:
+        raiz.removeHandler(destino)
+    raiz.addHandler(encolador)
+    escucha = logging.handlers.QueueListener(cola, *destinos, respect_handler_level=True)
+    escucha.start()
+    try:
+        yield
+    finally:
+        escucha.stop()
+        raiz.removeHandler(encolador)
+        for destino in destinos:
+            raiz.addHandler(destino)
 
 
 # --------------------------------------------------------------------------
@@ -221,8 +282,9 @@ def _ruta_del_terminal(terminal) -> str | None:
     return str(exe) if exe.exists() else None
 
 
-def _lo_que_dice_el_env(env_file: str | None) -> tuple[str, list[str], float]:
-    """(ruta de la terminal, simbolos, lote) del .env, ande o no ande el archivo.
+def _lo_que_dice_el_env(env_file: str | None) -> tuple[str, list[str], float, int | None]:
+    """(ruta de la terminal, simbolos, lote, MAX_OPEN_TRADES) del .env, ande o
+    no ande el archivo.
 
     Con un `.env.real` a medio llenar `load_settings` se niega -bien: es dinero
     real-, y es JUSTO ahi donde hace falta este diagnostico. Asi que si no
@@ -230,13 +292,14 @@ def _lo_que_dice_el_env(env_file: str | None) -> tuple[str, list[str], float]:
     """
     try:
         ajustes = load_settings(env_file)
-        return ajustes.mt5_path, sorted(ajustes.allowed_symbols), ajustes.default_lot
+        return (ajustes.mt5_path, sorted(ajustes.allowed_symbols), ajustes.default_lot,
+                ajustes.max_open_trades)
     except Exception:  # noqa: BLE001 - un .env roto no puede romper el diagnostico
         pass
 
     ruta = Path(env_file or ".env")
     if not ruta.is_file():
-        return "", ["XAUUSD"], 0.01
+        return "", ["XAUUSD"], 0.01, None
     from tct.archivo_env import leer_archivo
 
     crudo = leer_archivo(ruta)
@@ -246,7 +309,11 @@ def _lo_que_dice_el_env(env_file: str | None) -> tuple[str, list[str], float]:
         lote = float((crudo.get("DEFAULT_LOT") or "0.01").replace(",", "."))
     except ValueError:
         lote = 0.01
-    return (crudo.get("MT5_PATH") or ""), simbolos, lote
+    try:
+        abiertas = int(crudo.get("MAX_OPEN_TRADES") or "")
+    except ValueError:
+        abiertas = None
+    return (crudo.get("MT5_PATH") or ""), simbolos, lote, abiertas
 
 
 # A partir de aca, el apalancamiento es "ilimitado": MetaTrader lo informa como
@@ -332,7 +399,8 @@ def _margen_de_una_posicion(mt5, simbolo: str, lote: float,
     return _Margen(problema="el broker no contesto el margen", lote_minimo=lote_minimo)
 
 
-def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float) -> None:
+def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float,
+                               max_abiertas: int | None = None) -> None:
     """Cuantas posiciones de `lote` entran, segun el margen que pide el broker.
 
     POR QUE EXISTE
@@ -370,6 +438,7 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float) ->
     hubo_estimados = False
     dudosos: list[tuple[str, float, float]] = []
     lotes_grandes: list[tuple[str, float]] = []
+    pocas: list[tuple[str, int]] = []
     for canonico in simbolos:
         real = elegir_nombre_de_simbolo(canonico, nombres)
         if real is None:
@@ -390,6 +459,8 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float) ->
             print(f"  {como:<22} no pide margen (apalancamiento ilimitado)")
             continue
         entran = int(libre // margen.pide)
+        if entran and max_abiertas and entran < max_abiertas:
+            pocas.append((canonico, entran))
         if entran:
             cuantas = "+99" if entran > 99 else str(entran)
             print(f"  {como:<22} margen {margen.pide:>10.2f}{marca}   entran {cuantas}")
@@ -416,6 +487,17 @@ def _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos: list[str], lote: float) ->
         print(f"          grande que el lote configurado ({lote:g}): el bot NO lo va a")
         print("          operar. Sacalo de ALLOWED_SYMBOLS o subi DEFAULT_LOT y MAX_LOT")
         print("          -que multiplica lo que arriesga cada operacion-.")
+
+    for canonico, entran in pocas:
+        # "Entran 1" con MAX_OPEN_TRADES=2 parecia estar bien, y la segunda
+        # senal simultanea la rechazaba el broker con No money. La demo, con
+        # apalancamiento ilimitado, abria las dos (auditoria del 27/09).
+        print(f"\n  [AVISO] De {canonico} entran {entran} a la vez, y MAX_OPEN_TRADES "
+              f"es {max_abiertas}:")
+        print(f"          la senal numero {entran + 1} con otras abiertas la va a "
+              "rechazar el broker")
+        print("          con 'No money'. Baja MAX_OPEN_TRADES y MAX_POSITIONS_PER_SYMBOL a")
+        print(f"          {entran}, o consegui mas apalancamiento.")
 
     if no_entran:
         print("\n  [AVISO] Con este lote no entra ninguna posicion de "
@@ -460,7 +542,7 @@ def cmd_mt5(args: argparse.Namespace) -> int:
     # Con DOS MetaTrader instalados, "la terminal que encuentre" no tiene
     # respuesta correcta: se usa la del .env que se pidio, asi el margen y el
     # login que salgan son de la cuenta de ESE bot y no de la del otro.
-    ruta_terminal, simbolos, lote = _lo_que_dice_el_env(args.env_file)
+    ruta_terminal, simbolos, lote, max_abiertas = _lo_que_dice_el_env(args.env_file)
     if ruta_terminal:
         print(f"Conectando con la terminal de {args.env_file or '.env'}:")
         print(f"  {ruta_terminal}\n")
@@ -511,7 +593,7 @@ def cmd_mt5(args: argparse.Namespace) -> int:
         tipo = "DEMO" if es_demo else "REAL" if es_demo is False else "desconocido"
         print(f"  Tipo       : {tipo}")
 
-        _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos, lote)
+        _cuanto_entra_en_la_cuenta(mt5, cuenta, simbolos, lote, max_abiertas)
 
         print("\n" + "=" * 58)
         print("  QUE PONER EN EL .env")
@@ -1953,6 +2035,7 @@ def cmd_cambiar(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     settings = load_settings(args.env_file)
     setup_logging(settings, verbose=args.verbose)
+    _sin_seleccion_con_el_mouse()
     logger = logging.getLogger("tct")
 
     for warning in settings.warnings:
@@ -1981,7 +2064,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        asyncio.run(_run_async(settings, getattr(args, 'esperar_mt5', 0)))
+        with _logs_sin_frenar_al_bot():
+            asyncio.run(_run_async(settings, getattr(args, 'esperar_mt5', 0)))
     except KeyboardInterrupt:
         logger.info("Detenido por el usuario")
     finally:
@@ -2033,6 +2117,25 @@ async def _conectar_broker(broker, esperar_segundos: int) -> bool:
         round(esperar_segundos / 60), broker.name,
     )
     return False
+
+
+SEGUNDOS_ENTRE_REVISIONES = 30
+
+
+async def _vigilar_metatrader(engine) -> None:
+    """Cada 30 segundos, si MetaTrader se reinicio, reconecta.
+
+    El paquete MetaTrader5 no se reengancha solo: antes, un MetaTrader que se
+    colgaba y volvia dejaba al bot sin operar -ni abrir, ni mover a
+    breakeven- hasta que alguien lo reiniciara a mano y escribiera la clave.
+    """
+    logger = logging.getLogger("tct")
+    while True:
+        await asyncio.sleep(SEGUNDOS_ENTRE_REVISIONES)
+        try:
+            await engine.revisar_el_broker()
+        except Exception:
+            logger.exception("Fallo la revision de la conexion con MetaTrader")
 
 
 async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
@@ -2129,6 +2232,8 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
         )
     logger.info("Escuchando mensajes. Ctrl+C para parar.")
 
+    vigilante = asyncio.create_task(_vigilar_metatrader(engine))
+
     corte_inesperado = False
     try:
         await reader.run_forever()
@@ -2149,6 +2254,7 @@ async def _run_async(settings: Settings, esperar_segundos: int = 0) -> None:
             "        Volve a arrancarlo cuando tengas internet de nuevo."
         )
     finally:
+        vigilante.cancel()
         await reader.stop()
         await broker.disconnect()
         store.save_state()

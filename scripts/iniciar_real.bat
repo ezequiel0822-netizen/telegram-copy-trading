@@ -2,12 +2,13 @@
 REM ---------------------------------------------------------------------------
 REM  ARRANCA EL BOT CONTRA LA CUENTA REAL.
 REM
-REM  Usa .env.real, que es un archivo APARTE del .env de la demo. Los dos
-REM  pueden correr al mismo tiempo: cada uno tiene su carpeta de datos y su
-REM  sesion de Telegram.
+REM  Usa .env.real, que es un archivo APARTE del .env de la demo. Puede correr
+REM  al mismo tiempo que la demo de MetaQuotes: cada uno tiene su carpeta de
+REM  datos y su sesion de Telegram. NO con la demo de FxPro, que usa la misma
+REM  terminal: primero se cierra ese bot, despues se loguea la cuenta real.
 REM
-REM  Para frenarlo desde el telefono, mandate a vos mismo en Telegram:
-REM      /pausa real
+REM  Con ENABLE_TELEGRAM_CONTROL=false (como esta), NO hay pausa desde el
+REM  telefono: se frena cerrando esta ventana.
 REM ---------------------------------------------------------------------------
 chcp 65001 >nul
 title BOT REAL - Bot de Trading
@@ -34,7 +35,8 @@ echo   ESTE BOT OPERA CON DINERO REAL
 echo ============================================================
 echo.
 echo   Para detenerlo: cerra esta ventana o apreta Ctrl+C.
-echo   Para pausarlo desde el telefono, en Telegram: /pausa real
+echo   Desde el telefono SOLO si ENABLE_TELEGRAM_CONTROL=true en .env.real
+echo   (hoy esta en false: la unica forma es cerrar esta ventana).
 echo.
 echo   Te va a pedir la CLAVE DE ARRANQUE. No se ve mientras la escribis.
 echo   Si todavia no pusiste una:  tct clave --env-file .env.real

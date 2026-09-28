@@ -66,13 +66,18 @@ class FakeResult:
 
 
 class FakePosition:
-    def __init__(self, ticket, symbol, volume, tipo, sl=0.0, tp=0.0):
+    def __init__(self, ticket, symbol, volume, tipo, sl=0.0, tp=0.0, magic=0,
+                 price_open=0.0):
         self.ticket = ticket
         self.symbol = symbol
         self.volume = volume
         self.type = tipo
         self.sl = sl
         self.tp = tp
+        # El numero con que el bot marca sus ordenes. Con el, despues de un
+        # order_send sin respuesta, se reconoce si la orden entro igual.
+        self.magic = magic
+        self.price_open = price_open
 
 
 class FakeMT5:
@@ -160,7 +165,7 @@ class FakeMT5:
             return None
         return FakeTick(datos.get("bid", 0.0), datos.get("ask", 0.0))
 
-    def orders_get(self, ticket=None):
+    def orders_get(self, ticket=None, symbol=None):
         """Las ORDENES PENDIENTES, que viven en una lista aparte de las posiciones.
 
         Una pendiente viva NO aparece en `positions_get`, y darla por cerrada
@@ -169,7 +174,8 @@ class FakeMT5:
         falso tiene las dos listas, como MT5.
         """
         if ticket is None:
-            return tuple(self._pendientes.values())
+            return tuple(o for o in self._pendientes.values()
+                         if symbol is None or o.symbol == symbol)
         orden = self._pendientes.get(ticket)
         return (orden,) if orden else ()
 
@@ -178,9 +184,10 @@ class FakeMT5:
         self._pendientes[ticket] = FakePosition(ticket, symbol, volume, self.ORDER_TYPE_BUY)
         return self._pendientes[ticket]
 
-    def positions_get(self, ticket=None):
+    def positions_get(self, ticket=None, symbol=None):
         if ticket is None:
-            return tuple(self._posiciones.values())
+            return tuple(p for p in self._posiciones.values()
+                         if symbol is None or p.symbol == symbol)
         posicion = self._posiciones.get(ticket)
         return (posicion,) if posicion else ()
 
@@ -261,6 +268,7 @@ class FakeMT5:
             ticket, request["symbol"], llenado,
             self.POSITION_TYPE_BUY if es_compra else self.POSITION_TYPE_SELL,
             sl=request.get("sl", 0.0), tp=request.get("tp", 0.0),
+            magic=request.get("magic", 0), price_open=request.get("price", 0.0),
         )
         return FakeResult(TRADE_RETCODE_DONE, order=ticket,
                           price=request.get("price", 0.0), volume=llenado)

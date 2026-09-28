@@ -12,6 +12,8 @@ No es un caso raro.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from tct.brokers.base import OrderResult
@@ -187,6 +189,30 @@ def test_una_edicion_de_un_mensaje_que_nunca_opero_si_se_procesa(tmp_path):
     resultado = send(engine, SENAL, message_id=777, is_edit=True)
 
     assert resultado["status"] == "aceptada", "la correccion tenia que poder operar"
+
+
+def test_una_correccion_dentro_de_la_ventana_si_opera(tmp_path):
+    _, store, engine = armar(tmp_path)
+    hace_un_rato = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+
+    resultado = send(engine, SENAL, message_id=778, is_edit=True, date=hace_un_rato)
+
+    assert resultado["status"] == "aceptada"
+
+
+def test_la_edicion_de_horas_despues_no_abre_una_senal_que_no_opero(tmp_path):
+    """27/09, auditoria antes de fondear: con topes de 2 la real rechaza la
+    tercera senal y la demo la toma. Horas despues el canal edita ese mensaje
+    para anotar el resultado, y la real la abria a mercado, sobre una senal
+    terminada; la demo ignoraba la misma edicion. Tambien pasaba con un
+    mensaje de antes de que el bot arrancara."""
+    _, store, engine = armar(tmp_path)
+    hace_horas = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+
+    resultado = send(engine, SENAL, message_id=779, is_edit=True, date=hace_horas)
+
+    assert resultado["status"] == "edicion_ignorada"
+    assert store.open_positions() == []
 
 
 # --------------------------------------------------------------------------

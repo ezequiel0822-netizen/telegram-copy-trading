@@ -103,7 +103,13 @@ def engine(tmp_path):
 def send(engine: Engine, text: str, **meta) -> dict:
     meta.setdefault("message_id", id(text) % 100000)
     meta.setdefault("chat_id", -100)
-    return asyncio.run(engine.handle_message(text, meta))
+
+    async def mandar_y_esperar_la_ia():
+        resultado = await engine.handle_message(text, meta)
+        # La IA corre de fondo: sin esperarla, asyncio.run la cortaba.
+        await engine.esperar_la_ia()
+        return resultado
+    return asyncio.run(mandar_y_esperar_la_ia())
 
 
 # --------------------------------------------------------------------------
@@ -330,7 +336,9 @@ def test_la_ia_avisa_pero_no_opera(tmp_path):
 
     resultado = send(engine, "oro compren 2345 stop 2335 target 2355")
 
-    assert resultado["status"] == "sugerencia_ia"
+    # El parser lo entiende a medias (precios sin lado): eso se registra en el
+    # momento, y la IA opina de fondo, sin hacer esperar a nadie.
+    assert resultado["status"] == "actualizacion_registrada"
     assert store.read_paper_trades() == [], "no debe registrar ninguna operacion"
     assert store.open_positions() == [], "no debe abrir ninguna posicion"
     assert any(e["kind"] == "ia_sugerencia" for e in store.read_events()), "pero si dejar rastro"
@@ -392,4 +400,7 @@ def test_si_la_ia_explota_el_bot_sigue_vivo(tmp_path):
     engine = Engine(settings, store, PaperBroker(), ollama=IaRota())
 
     resultado = send(engine, "muchachos compren oro tipo 2345 y cuiden en 2335")
-    assert resultado["status"] == "ignorado", "degrada al parser de reglas sin romperse"
+    # La IA corre de fondo: el mensaje no espera su respuesta, y que explote
+    # no rompe nada (send espera la tarea, que habria relanzado el error).
+    assert resultado["status"] == "consultando_ia", "degrada al parser de reglas sin romperse"
+    assert not store.open_positions()

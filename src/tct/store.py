@@ -24,8 +24,15 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _today_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+def _hoy() -> str:
+    """El dia de la PC, que es el del usuario.
+
+    Era el dia UTC, que en UTC-6 cambia a las 18:00: un dia malo que cruzaba
+    esa hora podia llevarse 5 senales antes y 5 despues. Con el freno diario
+    apagado -la real, desde el 27/09- MAX_SIGNALS_PER_DAY es lo unico que
+    acota un dia malo, y tiene que ser el dia que el usuario cuenta.
+    """
+    return datetime.now().astimezone().strftime("%Y-%m-%d")
 
 
 @dataclass
@@ -125,7 +132,7 @@ class State:
     opened_message_ids: list[str] = field(default_factory=list)
     open_positions: list[OpenPosition] = field(default_factory=list)
     signals_today: int = 0
-    signals_day: str = field(default_factory=_today_utc)
+    signals_day: str = field(default_factory=_hoy)
 
     # Pausa manual. Persiste a proposito: si pausaste desde el telefono porque
     # el mercado se puso feo, un reinicio del bot NO debe reanudar solo.
@@ -158,7 +165,7 @@ class State:
             opened_message_ids=list(data.get("opened_message_ids") or []),
             open_positions=[OpenPosition.from_dict(p) for p in (data.get("open_positions") or [])],
             signals_today=int(data.get("signals_today") or 0),
-            signals_day=data.get("signals_day") or _today_utc(),
+            signals_day=data.get("signals_day") or _hoy(),
             paused=bool(data.get("paused")),
             paused_reason=data.get("paused_reason") or "",
             day_start_balance=data.get("day_start_balance"),
@@ -289,7 +296,7 @@ class Store:
     # -- Cupo diario -------------------------------------------------------
 
     def bump_daily_counter(self) -> int:
-        today = _today_utc()
+        today = _hoy()
         if self.state.signals_day != today:
             self.state.signals_day = today
             self.state.signals_today = 0
@@ -297,7 +304,7 @@ class Store:
         return self.state.signals_today
 
     def signals_today(self) -> int:
-        if self.state.signals_day != _today_utc():
+        if self.state.signals_day != _hoy():
             return 0
         return self.state.signals_today
 
@@ -325,7 +332,7 @@ class Store:
         Se reinicia al cambiar de dia, junto con el cupo de senales, para que
         el tope de perdida sea diario de verdad y no acumulado desde siempre.
         """
-        hoy = _today_utc()
+        hoy = _hoy()
         if self.state.signals_day != hoy:
             self.state.signals_day = hoy
             self.state.signals_today = 0

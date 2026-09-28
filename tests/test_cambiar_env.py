@@ -1438,7 +1438,7 @@ def test_una_opcion_abreviada_dice_que_va_entera(tmp_path, capsys, opcion):
 
 @pytest.mark.parametrize("asignaciones", [
     ["TELEGRAM_SOURCE_CHATS=-1001234567890,", "-1009876543210"],
-    ["MT5_PATH=C:\Program", "Files\FxPro", "-", "MetaTrader", "5\terminal64.exe"],
+    [r"MT5_PATH=C:\Program", r"Files\FxPro", "-", "MetaTrader", r"5\terminal64.exe"],
 ])
 def test_un_guion_suelto_de_un_valor_partido_sigue_con_el_consejo(tmp_path, capsys,
                                                                    asignaciones):

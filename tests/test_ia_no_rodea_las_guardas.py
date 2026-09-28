@@ -175,7 +175,7 @@ def test_una_apertura_sin_simbolo_no_genera_aviso(tmp_path):
 
     resultado = send(engine, RECAP_2, message_id=1)
 
-    assert resultado["status"] == "ignorado"
+    assert resultado["status"] == "consultando_ia"
     assert "MENSAJE QUE EL PARSER NO ENTENDIO" not in avisos.texto, (
         f"aviso de una interpretacion inutilizable: {avisos.texto}"
     )
@@ -202,6 +202,7 @@ def test_una_interpretacion_completa_si_se_avisa(tmp_path):
 
     resultado = send(engine, "oro compren en 4386 pongan stop 4380", message_id=1)
 
-    assert resultado["status"] == "sugerencia_ia"
+    # Entendido a medias: se registra en el momento y la IA avisa de fondo.
+    assert resultado["status"] == "actualizacion_registrada"
     assert "MENSAJE QUE EL PARSER NO ENTENDIO" in avisos.texto
     assert "XAUUSD" in avisos.texto

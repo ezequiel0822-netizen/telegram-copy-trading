@@ -284,6 +284,16 @@ def test_el_cupo_diario_se_reinicia_al_cambiar_el_dia(store):
     assert store.signals_today() == 0, "otro dia, cupo nuevo"
 
 
+def test_el_dia_del_cupo_es_el_de_la_pc_no_el_utc(store):
+    """En UTC-6 el dia UTC cambia a las 18:00: un dia malo que cruzaba esa hora
+    se llevaba 5 senales antes y 5 despues (auditoria del 27/09)."""
+    from datetime import datetime
+
+    store.bump_daily_counter()
+
+    assert store.state.signals_day == datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
 def test_el_arranque_muestra_el_timeout_de_la_ia(tmp_path):
     """Es lo unico configurable de esa capa con consecuencias visibles:
     mientras la IA piensa, el procesamiento de los mensajes siguientes hace
