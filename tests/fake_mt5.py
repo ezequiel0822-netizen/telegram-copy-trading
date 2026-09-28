@@ -256,6 +256,11 @@ class FakeMT5:
             posicion = self._posiciones.get(request["position"])
             if posicion is None:
                 return FakeResult(TRADE_RETCODE_INVALID_VOLUME, comment="posicion inexistente")
+            # Cerrar es operar el lado CONTRARIO. Del mismo lado, MT5 no cierra:
+            # el fake lo aceptaba, y un cierre con el lado invertido pasaba.
+            compra = request["type"] == self.ORDER_TYPE_BUY
+            if compra == (posicion.type == self.POSITION_TYPE_BUY):
+                return FakeResult(10013, comment="Invalid request: mismo lado que la posicion")
             volumen = request["volume"]
             # El broker no puede cerrar mas de lo que hay abierto.
             cerrado = min(volumen, posicion.volume)

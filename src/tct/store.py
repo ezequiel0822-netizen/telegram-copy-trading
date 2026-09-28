@@ -35,6 +35,21 @@ def _hoy() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%d")
 
 
+def _dia_del_cupo(data: dict[str, Any]) -> str:
+    """El dia del cupo diario guardado, en dia de la PC.
+
+    Hasta el 27/09 se guardaba el dia UTC. Un estado de esa version leido
+    despues de las 18:00 (UTC-6) tenia "manana" como dia, no coincidia con el
+    de la PC, y el cupo volvia a 0: ese dia admitia 5 senales mas. Si no trae
+    la marca de dia local y su dia es HOY en UTC, es el dia de hoy.
+    """
+    dia = data.get("signals_day") or _hoy()
+    if not data.get("signals_day_es_local") and dia == datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d"):
+        return _hoy()
+    return dia
+
+
 @dataclass
 class OpenPosition:
     """Una operacion que el bot considera viva.
@@ -152,6 +167,8 @@ class State:
             "open_positions": [p.to_dict() for p in self.open_positions],
             "signals_today": self.signals_today,
             "signals_day": self.signals_day,
+            # Marca de que `signals_day` es el dia de la PC (desde el 27/09).
+            "signals_day_es_local": True,
             "paused": self.paused,
             "paused_reason": self.paused_reason,
             "day_start_balance": self.day_start_balance,
@@ -165,7 +182,7 @@ class State:
             opened_message_ids=list(data.get("opened_message_ids") or []),
             open_positions=[OpenPosition.from_dict(p) for p in (data.get("open_positions") or [])],
             signals_today=int(data.get("signals_today") or 0),
-            signals_day=data.get("signals_day") or _hoy(),
+            signals_day=_dia_del_cupo(data),
             paused=bool(data.get("paused")),
             paused_reason=data.get("paused_reason") or "",
             day_start_balance=data.get("day_start_balance"),

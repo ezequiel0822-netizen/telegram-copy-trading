@@ -261,6 +261,9 @@ def test_la_orden_de_prueba_tambien_la_pide(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "load_settings", lambda _ruta: settings)
     monkeypatch.setattr("getpass.getpass", respuestas("a", "b", "c"))
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    # Fuera de Windows el comando sale ANTES de pedir la clave, y el test
+    # pasaba sin probarla (auditoria de calidad, 28/09).
+    monkeypatch.setattr("sys.platform", "win32")
 
     def no_deberia_probar(*_a, **_k):
         raise AssertionError("llego a conectarse sin la clave")

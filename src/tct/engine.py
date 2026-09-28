@@ -15,6 +15,7 @@ perderia la unica evidencia de que la senal existio.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -367,6 +368,7 @@ class Engine:
 
         # La IA solo entra donde el parser de reglas fallo. Si el parser
         # entendio, no se la consulta: es mas rapida, gratis y determinista.
+        ia_de_fondo = False
         if self.ollama is not None and _vale_preguntarle_a_la_ia(event, text):
             if not self.settings.ollama_auto_execute:
                 # Lo que diga la IA solo se anota: nunca opera. Entonces no
@@ -379,6 +381,7 @@ class Engine:
                 # de entrada tarde RECHAZABA la senal. Ahora se consulta de
                 # fondo, fuera del turno.
                 self._ia_de_fondo(text, metadata)
+                ia_de_fondo = True
                 if event is None:
                     self.store.save_state()
                     return {"status": "consultando_ia"}
@@ -434,13 +437,19 @@ class Engine:
         }
         handler = handlers.get(event.event_type)
 
+        # Con la IA consultando este mismo mensaje de fondo, el aviso lo da
+        # ella: el del parser ("modificacion que no se pudo aplicar") salia
+        # ademas, y decia lo contrario (la IA lo leia como una apertura).
         if handler is None:  # UNKNOWN
             self.store.append_event("ambiguo", {"signal": event.to_dict()})
             self.store.save_state()
-            await self._avisar(
-                f"Mensaje ambiguo, no se ejecuto nada:\n{text[:300]}", problema=True
-            )
+            if not ia_de_fondo:
+                await self._avisar(
+                    f"Mensaje ambiguo, no se ejecuto nada:\n{text[:300]}", problema=True
+                )
             return {"status": "ambiguo", "signal": event.to_dict()}
+        if event.event_type is EventType.UPDATE and ia_de_fondo:
+            handler = functools.partial(self._handle_update, avisar=False)
 
         try:
             result = await handler(event)
@@ -559,9 +568,20 @@ class Engine:
             papers.append(paper)
 
             # 2) Broker, solo si el modo lo permite.
-            order = await self._send_open(
-                event, lot, [objetivo] if objetivo is not None else []
-            )
+            # Una excepcion aca cortaba la senal entera por el `except` general
+            # de `_procesar`: con una posicion ya abierta, el mensaje quedaba
+            # sin marcar como operado y la edicion siguiente la volvia a abrir.
+            # Ahora es una posicion fallida, y "sin confirmar": pudo haber
+            # entrado antes de fallar, asi que se la busca en la cuenta.
+            try:
+                order = await self._send_open(
+                    event, lot, [objetivo] if objetivo is not None else []
+                )
+            except Exception as exc:
+                logger.exception("Fallo al mandar la orden de %s (%s)", event.symbol, etiqueta)
+                order = OrderResult(False, "open", f"error al mandar la orden: {exc}",
+                                    symbol=event.symbol, lot=lot,
+                                    raw={"sin_respuesta": True, "sin_confirmar": True})
 
             # Si el broker rechazo, NO se registra la posicion. Registrarla dejaria
             # una fantasma: existe en el estado y no en el broker, bloquea el
@@ -597,6 +617,11 @@ class Engine:
             position = self._nueva_posicion(event, trade_id, order, lot_abierto,
                                             take_profits, indice, objetivo)
             self.store.add_position(position)
+            # Marcada y guardada YA, con la primera que entra: si algo corta la
+            # senal despues, una edicion de este mensaje no la vuelve a abrir.
+            if event.telegram_message_id is not None:
+                self.store.marcar_que_opero(event.telegram_chat_id, event.telegram_message_id)
+            self.store.save_state()
             aperturas.append({
                 "trade_id": trade_id,
                 "tp": objetivo,
@@ -1294,7 +1319,7 @@ class Engine:
         return {"status": "tp_ambiguo", "movidas": [], "no_movidas": no_movidas,
                 "orders": []}
 
-    async def _handle_update(self, event: SignalEvent) -> dict[str, Any]:
+    async def _handle_update(self, event: SignalEvent, avisar: bool = True) -> dict[str, Any]:
         """Modificacion suelta (SL/TP sin lado).
 
         No se ejecuta automaticamente: sin direccion ni simbolo no hay forma
@@ -1302,11 +1327,12 @@ class Engine:
         la persona decida.
         """
         self.store.append_event("actualizacion", {"signal": event.to_dict()})
-        await self._avisar(
-            "Llego una modificacion que no se pudo aplicar sola (sin simbolo o sin direccion):\n"
-            f"{event.raw_message[:300]}",
-            problema=True,
-        )
+        if avisar:
+            await self._avisar(
+                "Llego una modificacion que no se pudo aplicar sola (sin simbolo o sin "
+                f"direccion):\n{event.raw_message[:300]}",
+                problema=True,
+            )
         return {"status": "actualizacion_registrada", "signal": event.to_dict()}
 
     async def fijar_referencia_del_dia(self) -> None:

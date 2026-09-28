@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-28 · v2.7.0 · 1043 tests · el último commit que describe
-es `596a891`, más este mismo cambio
+Actualizado: 2026-09-28 · v2.7.0 · 1108 tests · el último commit que describe
+es `e001701`, más este mismo cambio
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
 principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
@@ -122,12 +122,84 @@ de arreglarlo:
 - El cupo diario de señales cuenta el día de la PC, no el UTC.
 - `tct mt5` avisa si entran menos posiciones que `MAX_OPEN_TRADES`.
 
-**La segunda mitad de esa auditoría NO corrió** (caminos solo LIVE, señales y
-estado, multi-instancia, calidad, y un ataque a los arreglos): los cinco
-revisores murieron por el límite de uso sin dejar nada. Es lo pendiente antes
-de fondear. **Lección, por segunda vez:** subir cada avance a una rama antes de
-lanzar revisores largos; los arreglos de `596a891` estuvieron un día enteros
-sin commit, solo en su PC.
+**La segunda mitad de esa auditoría corrió el 28/09**, relanzada: cinco
+revisores (ataque a los arreglos, camino solo LIVE + Bullwaves, señales y
+estado, tres bots a la vez, calidad de los tests), cada hallazgo reproducido
+ejecutando código y anotado apenas se confirmaba. **Lección, por segunda
+vez:** subir cada avance a una rama antes de lanzar revisores largos; los
+arreglos de `596a891` estuvieron un día enteros sin commit, solo en su PC.
+
+### La auditoría del 28/09 (segunda mitad): lo que se arregló
+
+Unos 40 hallazgos confirmados; los de plata, todos arreglados, cada uno con su
+test y cada test verificado rompiendo el arreglo (mutación: sin él, falla).
+Tests en `tests/test_auditoria_{ejecucion,senales,instancias,calidad}.py`.
+
+**Ejecución en MT5**
+- La recotización (10004/10020/10021) ya no se reintenta dentro del broker:
+  se salteaba el filtro de entrada tarde (una entrada 4432 abrió a 4440.5).
+  Reintenta el motor, hasta 2 veces, y solo si el precio nuevo pasa el filtro.
+- Un cierre TOTAL que el broker llena a medias (10010) no se da por cerrado:
+  la posición sigue registrada con el lote que quedó.
+- Orden sin respuesta: si MetaTrader se reinició, reconecta para mirar; mira
+  también las órdenes en curso; nunca dice "no entró": queda "sin confirmar",
+  el motor la busca 10 min (antes de cada señal y cada 30 s) y si aparece la
+  toma bajo gestión (antes quedaba huérfana y fuera del tope: 3 con tope 2).
+- Una pendiente propia que se dispara durante la espera ya no se confunde con
+  la orden nueva (se miran posiciones Y órdenes).
+- Se recuerda el modo de llenado que funcionó; un stop rechazado por distancia
+  mínima (10016, típico del breakeven con el precio cerca) se reintenta cada
+  30 s hasta que entre o la posición cierre.
+
+**Señales y estado**
+- **Nada de hace más de 10 minutos ejecuta**: ni ediciones (el canal edita
+  horas después para anotar el resultado) ni mensajes entregados tarde al
+  volver internet. Depende de la hora de la PC; si está mal, todo parece viejo
+  y el aviso lo dice. `tct simular` no aplica la regla (reproduce a propósito).
+- **Una respuesta a una señal gestiona solo esa señal** ("cerrar" respondiendo
+  a A cerraba también B). Si A ya cerró, no se toca B. Sin respuesta, como
+  siempre: todo lo del símbolo.
+- Una pendiente viva no se suelta del registro por un "mover SL"; cerrarla la
+  cancela (TRADE_ACTION_REMOVE).
+- **Al arrancar se comparan MetaTrader y el registro**: lo que tiene la marca
+  del bot y el registro no conoce se toma bajo gestión y se avisa. `save_state`
+  hace fsync (un corte de luz dejaba el state.json vacío).
+- La corrección del SL que manda el canal (edición dentro de los 10 min) se
+  aplica a esa señal; antes se ignoraba en silencio.
+- La misma señal repetida o reenviada no abre dos veces.
+- La pausa corta solo aperturas (el breakeven sigue); `/cerrar todo` toma el
+  turno del motor; la gestión sincroniza con el broker antes de actuar.
+- Una excepción a mitad de una apertura cuenta como esa posición fallida (y
+  "sin confirmar"); la señal se marca operada con la primera que entra.
+- Nuevo `MAX_STOP_DISTANCE_PCT` (0 = apagado): tope de distancia del SL al
+  abrir. **Pendiente de su decisión** para la real (se le propuso 0.5).
+
+**Tres bots a la vez y el camino de la real**
+- Sin `MT5_LOGIN`, la cuenta se compara contra la que se conectó antes de cada
+  orden (una demo así mandaba sus órdenes a la REAL si la real le logueaba la
+  terminal).
+- `trade_allowed` también en LIVE (password de inversor); trading por API
+  deshabilitado en MetaTrader no arranca; LIVE con varias instancias exige
+  `MT5_PATH`.
+- `tct run` compara con los otros `.env` de la carpeta: la real no arranca
+  compartiendo terminal, cuenta, sesión de Telegram, datos o nombre (las demos
+  solo avisan). Sale con 1 si MetaTrader no conecta.
+- Las rutas del `.env` son relativas al `.env`, no a la carpeta actual; un
+  `--env-file` que no existe es un error.
+- El control dice que la real no escucha comandos (`ENABLE_TELEGRAM_CONTROL=false`).
+- El oro con sufijo de broker (`XAUUSDpro`, `ecn`, `raw`, `#XAUUSD`) se reconoce.
+- `tct mt5`: si no está el oro es un problema; cuenta las que entran en total
+  (con abiertas mentía). `tct probar --operar`: abre al mínimo, con stop, y
+  dice si la cuenta es REAL.
+
+**Sin confirmar, para mirar en su PC** (no hay MetaTrader real acá):
+- `mt5.positions_get(ticket=1)` tiene que devolver `()` y no `None`; si diera
+  `None`, el bot nunca soltaría las posiciones cerradas por TP/SL.
+- La distancia mínima de stops del oro en Bullwaves (`trade_stops_level`).
+- `pip freeze > requirements.lock` en la PC antes de fondear: no hay versiones
+  fijas y reinstalar trae otras.
+- El vigilante reconecta con el turno tomado: si MetaTrader está colgado, una
+  señal puede esperar hasta 60 s. Ocurre solo con la terminal caída.
 
 **Sobre su pregunta de sacar el bot de MetaQuotes para ganar velocidad:** no
 hace falta. Medido, le quita ~0 ms a la real; lo que costaba segundos era la
