@@ -17,10 +17,13 @@ cuenta que la demo de FxPro, sesión propia, canal "David 💵 Forex | PRO"
 `-1004363872187`), topes **20/15/15** (su decisión). `tct ensayo` en la demo
 de Bullwaves dio TODO ENTRA BIEN; `tct check` de la real dio "todo listo";
 el requisito del canal (`tct volumen`, 1 lote EURUSD) ya se hizo y salió bien.
-**El próximo paso es suyo, el 30/09:** `iniciar_real.bat` con el mercado
-abierto, y pasar las primeras líneas (tiene que decir
-`MT5 listo | servidor=BullWaves-LIVE` y la cuenta 4049290) y las de la primera
-señal que entre. `tct probar --operar` quedó opcional y no lo corrió. Todo el
+**LA REAL ESTÁ CORRIENDO desde el 30/09 a las 00:04.** Arranque limpio:
+`MT5 listo | servidor=BullWaves-LIVE balance=483.0` (500 menos los ~17 del
+requisito del canal), `XAUUSD` resuelto como `XAUUSD!`, IA lista, Telegram
+como Jezrel escuchando "David 💵 Forex | PRO", `BOT REAL arrancado [REAL] |
+Modo: LIVE`. Nada adoptado al arrancar. **Lo próximo: revisar con él la
+primera señal que entre** (líneas `SENAL ACEPTADA ... tickets=` o el motivo
+del rechazo) y `tct informe --env-file .env.real`. `tct probar --operar` quedó opcional y no lo corrió. Todo el
 trabajo de esta sesión está en `main`; en su PC alcanza con `git pull`.
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
