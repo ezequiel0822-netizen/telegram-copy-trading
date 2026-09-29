@@ -5,8 +5,23 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-28 · v2.7.0 · 1113 tests · el último commit que describe
-es `d43ea9e`, más este mismo cambio
+Actualizado: 2026-09-29 · v2.7.0 · 1121 tests · el último commit que describe
+es `4cd89c7`, más este mismo cambio
+
+**DÓNDE QUEDÓ (29/09, a la noche) — leer esto antes que nada.** La cuenta
+REAL de Bullwaves está **lista y sin arrancar**: #4049290, `BullWaves-LIVE`,
+STP, HEDGING, 1:500, balance 500 + bono de crédito 750, oro `XAUUSD!`
+(contrato 100: 0.05 = 5 USD por punto). `.env.real` completo: credenciales,
+`MT5_PATH` de Bullwaves, `MT5_BROKER_PROFILE=bullwaves`, Telegram (misma
+cuenta que la demo de FxPro, sesión propia, canal "David 💵 Forex | PRO"
+`-1004363872187`), topes **20/15/15** (su decisión). `tct ensayo` en la demo
+de Bullwaves dio TODO ENTRA BIEN; `tct check` de la real dio "todo listo";
+el requisito del canal (`tct volumen`, 1 lote EURUSD) ya se hizo y salió bien.
+**El próximo paso es suyo, el 30/09:** `iniciar_real.bat` con el mercado
+abierto, y pasar las primeras líneas (tiene que decir
+`MT5 listo | servidor=BullWaves-LIVE` y la cuenta 4049290) y las de la primera
+señal que entre. `tct probar --operar` quedó opcional y no lo corrió. Todo el
+trabajo de esta sesión está en `main`; en su PC alcanza con `git pull`.
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
 principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
