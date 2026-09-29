@@ -118,6 +118,17 @@ El canal le pidió, para entrar al "PRO", operar 1 lote de EURUSD (0.5 compra
 si el bono lo prohíbe, que lo haga a mano con el bot apagado, y que pregunte
 si el PRO es el mismo canal que copia el bot. El bot NO hace nada de eso.
 
+**Los topes de la real, desde el 29/09: 20 señales por día y 15 abiertas a
+la vez (también 15 por símbolo)**, puestos por él con `tct cambiar`: *"quiero
+que tome todas las señales al día... y al mismo tiempo"*, el canal manda 7-8
+como mucho. Reemplaza el 2/2/5. Se le dijo el riesgo con números (cada stop
+20-40 USD; freno diario apagado) y es su decisión: no volver a proponer bajar.
+Quedan como techo contra un canal que repita mensajes. El canal que copia la
+real (`-1004363872187`) es **"David 💵 Forex | PRO"**; hay otro, "David 💵 Forex"
+(`-1004369139080`), que el bot no lee. La real entró a Telegram con la misma
+cuenta que la demo de FxPro, con su propia sesión. `tct check` de la real dio
+"todo listo para arrancar"; arranca el 30/09 (`iniciar_real.bat`).
+
 Sobre su miedo de que más bots demoren la real: cada bot es un proceso aparte
 que recibe el mensaje a la vez que los otros; no hacen fila. Medido en la
 auditoría: con la IA de los tres ocupada, la señal entró en 0,01 s.
