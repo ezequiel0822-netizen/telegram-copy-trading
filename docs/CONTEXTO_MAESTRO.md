@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-29 · v2.7.0 · 1121 tests · el último commit que describe
-es `4cd89c7`, más este mismo cambio
+Actualizado: 2026-09-30 · v2.7.0 · 1128 tests · el último commit que describe
+es `f27ca87`, más este mismo cambio
 
 **DÓNDE QUEDÓ (29/09, a la noche) — leer esto antes que nada.** La cuenta
 REAL de Bullwaves está **lista y sin arrancar**: #4049290, `BullWaves-LIVE`,
@@ -36,6 +36,15 @@ leía como apertura sin símbolo y el stop NUNCA se movía. Ahora es MOVE_SL
 solo de la posición con ese lado y esa entrada del mensaje
 (`posicion_lado`/`posicion_entrada`, `_separar_referencia_a_posicion`); si no
 está abierta no toca a ninguna. Tests: `test_breakeven_por_posicion.py`.
+
+**Último estado (30/09, 13:47):** hizo `git pull` (está en `f27ca87`), se
+olvidó la clave de arranque y puso una nueva con `tct clave --env-file
+.env.real` (no hay forma de recuperarla, solo reemplazarla). La real
+rearrancó bien: `BullWaves-LIVE balance=481.2`, escuchando el canal PRO, en
+LIVE; al arrancar limpió del estado la BUY 4191 que ya había cerrado (normal).
+**Pendiente:** confirmar con él que el próximo "PARA LA POSICIÓN ... MOVA SU
+SL ... BE" deje en el log `SL movido a breakeven en 1 posicion(es)`. Él mueve
+a veces el TP a mano para cerrar antes: no es un error del bot.
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
 principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
