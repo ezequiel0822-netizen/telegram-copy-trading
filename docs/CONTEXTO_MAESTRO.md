@@ -26,6 +26,17 @@ primera señal que entre** (líneas `SENAL ACEPTADA ... tickets=` o el motivo
 del rechazo) y `tct informe --env-file .env.real`. `tct probar --operar` quedó opcional y no lo corrió. Todo el
 trabajo de esta sesión está en `main`; en su PC alcanza con `git pull`.
 
+**Primeros días de la real (30/09):** 29/09 noche: stop −40 y TP +27.90 (ese
+TP lo bajó él A MANO a 4162; el bot conserva el TP vigente al mover el SL).
+30/09: 4 operadas en FxPro y Bullwaves, iguales salvo la de 05:38 (TP movido
+a mano de nuevo, por eso +41.64 vs +15.55). Diferencias de centavos entre
+brokers = precio propio de cada broker, normal. **Arreglado:** el canal manda
+el breakeven como `PARA LA POSICIÓN "BUY 4187", MOVA SU SL ... 4187 BE`; se
+leía como apertura sin símbolo y el stop NUNCA se movía. Ahora es MOVE_SL
+solo de la posición con ese lado y esa entrada del mensaje
+(`posicion_lado`/`posicion_entrada`, `_separar_referencia_a_posicion`); si no
+está abierta no toca a ninguna. Tests: `test_breakeven_por_posicion.py`.
+
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
 principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
 lista vigente para el día de fondear. Después "Estado al 2026-09-27" (qué le

@@ -517,6 +517,26 @@ def evaluate_management(
                 "TP o su SL): no se toca a las otras."
             ]), []
 
+    # Si NOMBRA la posicion ('PARA LA POSICION "BUY 4187"'), aplica solo a esa.
+    # Se compara con la entrada del MENSAJE de la senal, exacto: el canal la
+    # nombra con el mismo numero que uso al abrirla. Si no hay ninguna, no se
+    # toca ninguna: mover el stop de la de 4191 a 4187 porque la de 4187 ya
+    # cerro la dejaria con un stop que nadie pidio.
+    if event.posicion_entrada is not None:
+        lado = event.posicion_lado.value if event.posicion_lado else None
+        nombrada = f"{lado or ''} {event.posicion_entrada:g}".strip()
+        targets = [
+            p for p in targets
+            if p.entry is not None
+            and abs(p.entry - event.posicion_entrada) <= 1e-6
+            and (lado is None or p.side == lado)
+        ]
+        if not targets:
+            return RiskDecision(False, [
+                f"Pide gestionar la posicion {nombrada} y no hay ninguna abierta con esa "
+                "entrada (ya cerro, o no se opero): no se toca a las otras."
+            ]), []
+
     if not targets:
         detail = f" en {event.symbol}" if event.symbol else ""
         return RiskDecision(False, [f"No hay posiciones abiertas{detail}"]), []

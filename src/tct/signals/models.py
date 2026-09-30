@@ -70,6 +70,12 @@ class SignalEvent:
     # Solo para MOVE_SL: si el mensaje dice "a breakeven" en vez de un precio.
     move_sl_to_breakeven: bool = False
 
+    # Solo para gestion que nombra su posicion: 'PARA LA POSICION "BUY 4187",
+    # MOVA SU SL...'. Con esto la gestion toca SOLO la posicion de ese lado y
+    # esa entrada; si no hay ninguna abierta, no toca ninguna.
+    posicion_lado: Side | None = None
+    posicion_entrada: float | None = None
+
     # Trazabilidad: sin esto no se puede auditar por que el bot hizo algo.
     raw_message: str = ""
     telegram_message_id: int | None = None
@@ -104,6 +110,7 @@ class SignalEvent:
         data = asdict(self)
         data["event_type"] = self.event_type.value
         data["side"] = self.side.value if self.side else None
+        data["posicion_lado"] = self.posicion_lado.value if self.posicion_lado else None
         data["order_type"] = self.order_type.value
         data["entry"] = self.entry
         return data

@@ -108,8 +108,13 @@ _PARTIAL_RE = re.compile(
 _CLOSE_RE = re.compile(
     r"\b(?:CLOSE|CLOSED|CIERRE|CIERREN|CERRAR|EXIT|SALIR|CANCEL|CANCELAR)\b"
 )
+# MOVA, MUEVA, MUEVAN, MUEVE...: el canal escribe en espanol de traductor
+# ("MOVA SU SL A SER EL SL RESULTANTE ES 4187", 30/09). El verbo tiene que
+# apuntar a un SL o STOP a menos de 30 caracteres, asi que "el precio se
+# mueve" no alcanza.
 _MOVE_SL_RE = re.compile(
-    r"\b(?:MOVE|MOVER|SET|PON|PONER|BRING|SUBIR|BAJAR|TRAIL)\b[^\n]{0,30}?\b(?:SL|STOP)\b"
+    r"\b(?:MOVE|MOVER|MOVA|MOVAN|MUEVA|MUEVAN|MUEVE|MOVEMOS|MOVAMOS|SET|PON|PONER|"
+    r"COLOQUE|COLOQUEN|BRING|SUBIR|BAJAR|TRAIL)\b[^\n]{0,30}?\b(?:SL|STOP)\b"
     r"|\b(?:SL|STOP\s*LOSS)\b[^\n]{0,20}?\b(?:TO\s+)?(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN|ENTRY|ENTRADA)\b"
     r"|\b(?:BREAK\s*EVEN|BREAKEVEN)\b"
 )
@@ -234,6 +239,17 @@ def _pide_mover_tp_normalizado(normalizado: str) -> bool:
 
 
 _BREAKEVEN_RE = re.compile(r"\b(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN)\b")
+
+# Una gestion que nombra a QUE posicion va: 'PARA LA POSICION "BUY 4187",
+# MOVA SU SL ... 4187' (30/09, dos veces). El "BUY 4187" no es una senal
+# nueva, es el nombre de una que ya esta abierta. Antes el BUY y el 4187 se
+# leian como una apertura sin simbolo y se rechazaba: el breakeven no se
+# aplicaba nunca. Se saca del texto antes de buscar lado y precios, y queda
+# guardado para que la gestion toque SOLO esa posicion.
+_REFERENCIA_POSICION_RE = re.compile(
+    r"\b(?:POSICION|POSITION|OPERACION|ORDEN|TRADE)\s*(?:DE\s+|EN\s+)?[\"'`]*\s*"
+    r"(BUY|SELL|COMPRA|VENTA)\s+(\d+(?:[.,]\d+)?)\s*[\"'`]*"
+)
 _HALF_RE = re.compile(r"\b(?:HALF|MITAD)\b")
 _PERCENT_RE = re.compile(r"(\d{1,3})\s*%")
 
@@ -258,6 +274,9 @@ def parse_signal(
 
     text = _normalize(message)
     warnings: list[str] = []
+
+    # --- Paso 1: gestion que nombra su posicion ("POSICION "BUY 4187"") ---
+    text, posicion_lado, posicion_entrada = _separar_referencia_a_posicion(text)
 
     # --- Paso 2: extraer datos duros --------------------------------------
     order_type, masked = _extract_order_type(text)
@@ -290,6 +309,11 @@ def parse_signal(
     if event_type is None:
         return None
 
+    # La referencia solo sirve para gestionar. Si con todo el mensaje a la
+    # vista no salio gestion, no se arrastra a otra cosa.
+    if event_type not in _GESTION_CON_DESTINO:
+        posicion_lado = posicion_entrada = None
+
     # Normalizaciones finales por tipo de evento.
     if event_type is EventType.PARTIAL_CLOSE and close_fraction is None:
         close_fraction = 0.5
@@ -318,6 +342,8 @@ def parse_signal(
         take_profits=take_profits,
         close_fraction=close_fraction,
         move_sl_to_breakeven=move_to_be,
+        posicion_lado=posicion_lado,
+        posicion_entrada=posicion_entrada,
         raw_message=message,
         telegram_message_id=message_id,
         telegram_chat_id=chat_id,
@@ -326,6 +352,37 @@ def parse_signal(
         source=source,
         warnings=warnings,
     )
+
+
+_GESTION_CON_DESTINO = {
+    EventType.MOVE_SL, EventType.MOVE_TP, EventType.CLOSE, EventType.PARTIAL_CLOSE,
+}
+
+
+def _separar_referencia_a_posicion(text: str) -> tuple[str, Side | None, float | None]:
+    """Saca del texto un 'POSICION "BUY 4187"' y devuelve a que posicion apunta.
+
+    Solo cuando el resto del mensaje es gestion (mover el stop, cerrar, un
+    parcial) y NO trae take profits. Una senal de apertura siempre trae TP, y
+    "TRADE BUY 4187 SL 4180 TP 4195" tiene que seguir siendo una apertura:
+    leerla como gestion perderia la senal entera.
+    """
+    referencia = _REFERENCIA_POSICION_RE.search(text)
+    if referencia is None:
+        return text, None, None
+
+    sin_referencia = text[: referencia.start()] + " POSICION " + text[referencia.end() :]
+    es_gestion = (
+        _MOVE_SL_RE.search(sin_referencia)
+        or _CLOSE_RE.search(sin_referencia)
+        or _PARTIAL_RE.search(sin_referencia)
+    )
+    _, _, _, take_profits = _extract_prices(_mask_symbols(sin_referencia))
+    if not es_gestion or take_profits:
+        return text, None, None
+
+    lado = Side.BUY if referencia.group(1) in {"BUY", "COMPRA"} else Side.SELL
+    return sin_referencia, lado, _to_float(referencia.group(2))
 
 
 # --------------------------------------------------------------------------
