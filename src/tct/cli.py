@@ -2264,6 +2264,91 @@ async def _informar_desenlaces(settings: Settings, eventos: list) -> None:
         print("  tiene ese tramo del historial cargado.")
 
 
+def cmd_evaluar_stop(args: argparse.Namespace) -> int:
+    """Que habria pasado con el stop al 65/75/85% del que manda el canal.
+
+    SOLO LEE el historial de MetaTrader: no manda ordenes ni cambia nada del
+    bot. Es para decidir CON DATOS si conviene achicar el stop (08/10).
+    """
+    from tct.informe import filtrar_por_horas, tickets_operados
+    from tct.store import Store
+
+    settings = load_settings(args.env_file)
+    store = Store(settings.events_path, settings.paper_trades_path,
+                  settings.state_path, solo_lectura=True)
+    operadas = tickets_operados(filtrar_por_horas(store.read_events(), args.horas))
+    porcentajes = sorted({int(p) for p in args.porcentajes.split(",") if p.strip()})
+
+    print("=" * 66)
+    print(f"  QUE HABRIA PASADO CON UN STOP MAS CORTO  (ultimas {args.horas} horas)")
+    print("=" * 66)
+    print(f"  Instancia: {settings.instance_name.upper()}. Solo lee el historial de")
+    print("  MetaTrader: no manda ordenes ni cambia nada del bot.")
+    if not operadas:
+        print("\n  No hay operaciones con ticket en ese rango. Proba con --horas 500")
+        return 0
+    return asyncio.run(_evaluar_stop_async(settings, operadas, porcentajes))
+
+
+async def _evaluar_stop_async(settings: Settings, operadas: list, porcentajes: list) -> int:
+    from tct.brokers.base import build_broker
+    from tct.informe import clasificar_desenlace, evaluar_stop_corto, hora_local, precio
+
+    broker = build_broker(settings)
+    if not hasattr(broker, "recorrido_de"):
+        print("\n  Esto lee precios de MetaTrader: solo sirve con BROKER=mt5.")
+        return 1
+    if not await broker.connect():
+        print("\n  No se pudo conectar a MetaTrader. Abrilo y volve a correr esto.")
+        return 1
+    filas, fuentes = [], set()
+    try:
+        for operada in operadas:
+            desenlace = await broker.desenlace_de(operada["ticket"])
+            recorrido = await broker.recorrido_de(operada["ticket"])
+            fila = dict(operada)
+            if desenlace is not None:
+                fila.update(resultado=clasificar_desenlace(operada, desenlace),
+                            profit=desenlace.get("profit"),
+                            precio_entrada=desenlace.get("precio_entrada"))
+            if recorrido is not None:
+                fila.update(peor=recorrido["peor"], usd_por_punto=recorrido["usd_por_punto"])
+                fuentes.add(recorrido["fuente"])
+            filas.append(fila)
+    finally:
+        await broker.disconnect()
+
+    r = evaluar_stop_corto(filas, porcentajes)
+    if not r["filas"]:
+        print("\n  Ninguna operacion tiene historial de precios en MetaTrader.")
+        return 1
+
+    print(f"  Precios: {', '.join(sorted(fuentes))}.")
+    print("\n  Hasta donde fue el precio EN CONTRA antes de cerrar, como parte")
+    print("  del stop del canal (100% = toco el stop):\n")
+    for f in r["filas"]:
+        llego = max(f["llego"], 0.0) * 100
+        print(f"      {hora_local(f.get('ts'))}  {f['side'] or '':<4} "
+              f"entrada={precio(f['entry']):<8} SL={precio(f['stop_loss']):<8} "
+              f"{f['resultado']:<10} {float(f.get('profit') or 0):+8.2f}   llego al {llego:3.0f}%")
+
+    tps = [f for f in r["filas"] if str(f["resultado"]).startswith("TP")]
+    print(f"\n  De {len(tps)} que terminaron en TP, cuantas se acercaron al stop:")
+    for pct in porcentajes:
+        cuantas = sum(1 for f in tps if f["llego"] >= pct / 100)
+        print(f"      {cuantas:>3}  llegaron al {pct}% o mas")
+
+    print(f"\n  Resultado real          : {r['total_real']:+8.2f}")
+    for e in r["escenarios"]:
+        print(f"  Con el stop al {e['pct']}%     : {e['total']:+8.2f}   "
+              f"({e['tp_cortados']} TP se habrian cortado, "
+              f"{e['stops_achicados']} stops perdian menos)")
+    if r["sin_datos"]:
+        print(f"\n  ({r['sin_datos']} sin datos: siguen abiertas o MetaTrader no tiene sus precios)")
+    print("\n  Es una foto de pocos dias: sirve para ver la tendencia, no es una promesa.")
+    return 0
+
+
 def _informar_distancias(medidas: list, settings: Settings) -> None:
     """El dato para calibrar, medido en el momento en que llego cada senal.
 
@@ -2927,6 +3012,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     informe.add_argument("--horas", type=int, default=24,
                          help="Cuantas horas hacia atras mirar (por defecto 24)")
+    evaluar = sub.add_parser(
+        "evaluar-stop", parents=[comunes],
+        help="Que habria pasado con un stop mas corto. SOLO LEE el historial de MT5")
+    evaluar.add_argument("--horas", type=int, default=200)
+    evaluar.add_argument("--porcentajes", default="65,75,85",
+                         help="Stops a probar, en %% de la distancia del canal")
     run = sub.add_parser("run", parents=[comunes], help="Arranca el bot")
     run.add_argument(
         "--esperar-mt5", type=int, default=0, dest="esperar_mt5", metavar="SEGUNDOS",
@@ -2983,6 +3074,7 @@ def main(argv: list[str] | None = None) -> int:
         "test": cmd_test,
         "status": cmd_status,
         "informe": cmd_informe,
+        "evaluar-stop": cmd_evaluar_stop,
         "run": cmd_run,
     }
     try:

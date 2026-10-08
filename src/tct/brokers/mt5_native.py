@@ -634,6 +634,87 @@ class MT5NativeBroker(Broker):
             "cerrada_en": getattr(ultimo, "time", None),
         }
 
+    async def recorrido_de(self, ticket: int | None) -> dict[str, Any] | None:
+        """Hasta donde fue el precio EN CONTRA mientras la posicion estuvo abierta.
+
+        Lo usa `tct evaluar-stop` para ver que habria pasado con un stop mas
+        corto: una operacion que termino en TP pero antes bajo al 80% del stop
+        se habria cortado con un stop al 75%. SOLO LECTURA, como el desenlace.
+        """
+        if ticket is None or not await self.is_ready():
+            return None
+        return await asyncio.to_thread(self._recorrido_sync, ticket)
+
+    def _recorrido_sync(self, ticket: int) -> dict[str, Any] | None:
+        from datetime import datetime, timezone
+
+        mt5 = self._mt5
+        try:
+            deals = mt5.history_deals_get(position=ticket)
+        except Exception:
+            logger.debug("No se pudo leer el historial de %s", ticket, exc_info=True)
+            return None
+        if not deals:
+            return None
+        entrada_codigo = getattr(mt5, "DEAL_ENTRY_IN", 0)
+        salidas = {getattr(mt5, "DEAL_ENTRY_OUT", 1), getattr(mt5, "DEAL_ENTRY_OUT_BY", 3)}
+        entradas = [d for d in deals if getattr(d, "entry", None) == entrada_codigo]
+        cierres = [d for d in deals if getattr(d, "entry", None) in salidas]
+        if not entradas or not cierres:
+            return None
+
+        simbolo = getattr(entradas[0], "symbol", "") or ""
+        es_compra = getattr(entradas[0], "type", 0) == getattr(mt5, "DEAL_TYPE_BUY", 0)
+        desde_s = int(getattr(entradas[0], "time", 0) or 0)
+        hasta_s = int(getattr(cierres[-1], "time", 0) or 0)
+        if not simbolo or not desde_s or hasta_s < desde_s:
+            return None
+        # Los tiempos de MT5 son la hora del servidor contada como si fuera
+        # UTC, y asi tambien los espera copy_ticks_range: van tal cual.
+        desde = datetime.fromtimestamp(desde_s, tz=timezone.utc)
+        hasta = datetime.fromtimestamp(hasta_s + 1, tz=timezone.utc)
+
+        # Un BUY se cierra con el bid y un SELL con el ask: el stop de cada uno
+        # se toca con ese precio, no con el otro.
+        peor, fuente = None, None
+        try:
+            ticks = mt5.copy_ticks_range(simbolo, desde, hasta,
+                                         getattr(mt5, "COPY_TICKS_ALL", -1))
+        except Exception:
+            ticks = None
+        if ticks is not None and len(ticks):
+            campo = "bid" if es_compra else "ask"
+            precios = [float(t[campo]) for t in ticks if float(t[campo]) > 0]
+            if precios:
+                peor, fuente = (min(precios) if es_compra else max(precios)), "ticks"
+        if peor is None:
+            # Sin ticks (el broker no guarda tanto historial), velas de 1 minuto.
+            # Son del bid: al SELL se le suma el spread de cada vela.
+            try:
+                velas = mt5.copy_rates_range(simbolo, getattr(mt5, "TIMEFRAME_M1", 1),
+                                             desde, hasta)
+            except Exception:
+                velas = None
+            if velas is not None and len(velas):
+                info = mt5.symbol_info(simbolo)
+                punto = float(getattr(info, "point", 0.0) or 0.0)
+                if es_compra:
+                    peor = min(float(v["low"]) for v in velas)
+                else:
+                    peor = max(float(v["high"]) + float(v["spread"]) * punto for v in velas)
+                fuente = "velas de 1 minuto"
+        if peor is None:
+            return None
+
+        info = mt5.symbol_info(simbolo)
+        contrato = float(getattr(info, "trade_contract_size", 0.0) or 0.0)
+        volumen = float(getattr(entradas[0], "volume", 0.0) or 0.0)
+        return {
+            "peor": peor,
+            "fuente": fuente,
+            "usd_por_punto": volumen * contrato or None,
+        }
+
     async def posicion_existe(self, ticket: int | None) -> bool | None:
         if ticket is None or not await self.is_ready():
             return None

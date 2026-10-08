@@ -582,3 +582,72 @@ def resumir_desenlaces(desenlaces: list[dict[str, Any]]) -> dict[str, Any]:
         "profit_total": neto,
         "costos_desconocidos": sin_costos,
     }
+
+
+# --------------------------------------------------------------------------
+# Que habria pasado con un stop mas corto (`tct evaluar-stop`)
+# --------------------------------------------------------------------------
+
+
+def evaluar_stop_corto(
+    filas: list[dict[str, Any]], porcentajes: list[int]
+) -> dict[str, Any]:
+    """Recalcula cada operacion con el stop al X% de la distancia del canal.
+
+    Lo pidio el 08/10: los stops de -40 le parecen mucho, y antes de achicarlos
+    quiso saber cuantas operaciones que terminaron en TP se habrian cortado.
+    El dato es `peor`: el precio mas en contra que hubo mientras estuvo abierta,
+    leido del historial de MetaTrader.
+
+    Con el stop al 75%, una BUY 4392 con SL 4382 tendria el stop en 4384.5. Si
+    el precio bajo hasta ahi, se habria cerrado en ese stop sin importar como
+    termino de verdad; si no, termina igual que termino. Se mide contra la
+    entrada y el SL del MENSAJE, que es como lo calcularia el bot.
+
+    Solo cuentan las que tienen todos los datos, en el total real tambien: si
+    no, se compararian sumas de operaciones distintas.
+    """
+    evaluables = []
+    sin_datos = 0
+    for fila in filas:
+        entrada, sl, peor = fila.get("entry"), fila.get("stop_loss"), fila.get("peor")
+        usd = fila.get("usd_por_punto")
+        if (not fila.get("resultado") or entrada is None or sl is None
+                or peor is None or not usd or entrada == sl):
+            sin_datos += 1
+            continue
+        sentido = 1.0 if fila.get("side") == "BUY" else -1.0
+        distancia = abs(entrada - sl)
+        # Que parte del stop llego a recorrer el precio en contra: 1.0 es que
+        # toco el stop del canal, 0.8 que llego al 80%, negativo que nunca
+        # estuvo en contra de la entrada del mensaje.
+        llego = sentido * (entrada - peor) / distancia
+        evaluables.append({**fila, "llego": llego, "_sentido": sentido,
+                           "_distancia": distancia})
+
+    escenarios = []
+    for pct in porcentajes:
+        p = pct / 100
+        total = 0.0
+        tp_cortados = stops_achicados = 0
+        for fila in evaluables:
+            if fila["llego"] < p:
+                total += float(fila.get("profit") or 0.0)
+                continue
+            nuevo_sl = fila["entry"] - fila["_sentido"] * p * fila["_distancia"]
+            lleno = fila.get("precio_entrada") or fila["entry"]
+            total += fila["_sentido"] * (nuevo_sl - lleno) * fila["usd_por_punto"]
+            if str(fila["resultado"]).startswith("TP"):
+                tp_cortados += 1
+            elif fila["resultado"] == "stop":
+                stops_achicados += 1
+        escenarios.append({"pct": pct, "total": total, "tp_cortados": tp_cortados,
+                           "stops_achicados": stops_achicados})
+
+    return {
+        "filas": [{k: v for k, v in f.items() if not k.startswith("_")} for f in evaluables],
+        "escenarios": escenarios,
+        "total_real": sum(float(f.get("profit") or 0.0) for f in evaluables),
+        "tp_total": sum(1 for f in evaluables if str(f["resultado"]).startswith("TP")),
+        "sin_datos": sin_datos,
+    }
