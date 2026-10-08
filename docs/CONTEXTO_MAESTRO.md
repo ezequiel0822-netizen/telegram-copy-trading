@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-09-30 · v2.7.0 · 1128 tests · el último commit que describe
+Actualizado: 2026-10-08 · v2.7.0 · 1137 tests · el último commit que describe
 es `f27ca87`, más este mismo cambio
 
 **DÓNDE QUEDÓ (29/09, a la noche) — leer esto antes que nada.** La cuenta
@@ -45,6 +45,16 @@ LIVE; al arrancar limpió del estado la BUY 4191 que ya había cerrado (normal).
 **Pendiente:** confirmar con él que el próximo "PARA LA POSICIÓN ... MOVA SU
 SL ... BE" deje en el log `SL movido a breakeven en 1 posicion(es)`. Él mueve
 a veces el TP a mano para cerrar antes: no es un error del bot.
+
+**08/10:** 200 h de la real: 15 operadas, 11 TP / 4 stop, +92.65 (balance
+~563). 18 "mover el stop" aplicados, todos después del arreglo: el breakeven
+por posición parece andar (falta ver la línea del log). Los stops de -40 le
+parecen mucho y propuso achicar el SL al 65-85% de la distancia del canal.
+**No se cambió nada del bot:** se agregó `tct evaluar-stop --env-file
+.env.real --horas 200` (solo lee el historial de MT5: ticks, o velas M1 si no
+hay) que muestra hasta qué % del stop llegó el precio en contra en cada
+operación y el resultado con el stop al 65/75/85%. Él pidió decidir con esos
+números ANTES de tocar el SL; sigue vigente su decisión de usar el SL del canal.
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
 principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
