@@ -6,85 +6,131 @@ seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
 Actualizado: 2026-10-08 · v2.7.0 · 1146 tests · el último commit que describe
-es `f27ca87`, más este mismo cambio
+es `cf543c2`, más este mismo cambio
 
-**DÓNDE QUEDÓ (29/09, a la noche) — leer esto antes que nada.** La cuenta
-REAL de Bullwaves está **lista y sin arrancar**: #4049290, `BullWaves-LIVE`,
-STP, HEDGING, 1:500, balance 500 + bono de crédito 750, oro `XAUUSD!`
-(contrato 100: 0.05 = 5 USD por punto). `.env.real` completo: credenciales,
-`MT5_PATH` de Bullwaves, `MT5_BROKER_PROFILE=bullwaves`, Telegram (misma
-cuenta que la demo de FxPro, sesión propia, canal "David 💵 Forex | PRO"
-`-1004363872187`), topes **20/15/15** (su decisión). `tct ensayo` en la demo
-de Bullwaves dio TODO ENTRA BIEN; `tct check` de la real dio "todo listo";
-el requisito del canal (`tct volumen`, 1 lote EURUSD) ya se hizo y salió bien.
-**LA REAL ESTÁ CORRIENDO desde el 30/09 a las 00:04.** Arranque limpio:
-`MT5 listo | servidor=BullWaves-LIVE balance=483.0` (500 menos los ~17 del
-requisito del canal), `XAUUSD` resuelto como `XAUUSD!`, IA lista, Telegram
-como Jezrel escuchando "David 💵 Forex | PRO", `BOT REAL arrancado [REAL] |
-Modo: LIVE`. Nada adoptado al arrancar. **Lo próximo: revisar con él la
-primera señal que entre** (líneas `SENAL ACEPTADA ... tickets=` o el motivo
-del rechazo) y `tct informe --env-file .env.real`. `tct probar --operar` quedó opcional y no lo corrió. Todo el
-trabajo de esta sesión está en `main`; en su PC alcanza con `git pull`.
+**ESTADO ACTUAL (08/10) — leer esto antes que nada.**
 
-**Primeros días de la real (30/09):** 29/09 noche: stop −40 y TP +27.90 (ese
-TP lo bajó él A MANO a 4162; el bot conserva el TP vigente al mover el SL).
-30/09: 4 operadas en FxPro y Bullwaves, iguales salvo la de 05:38 (TP movido
-a mano de nuevo, por eso +41.64 vs +15.55). Diferencias de centavos entre
-brokers = precio propio de cada broker, normal. **Arreglado:** el canal manda
-el breakeven como `PARA LA POSICIÓN "BUY 4187", MOVA SU SL ... 4187 BE`; se
-leía como apertura sin símbolo y el stop NUNCA se movía. Ahora es MOVE_SL
-solo de la posición con ese lado y esa entrada del mensaje
-(`posicion_lado`/`posicion_entrada`, `_separar_referencia_a_posicion`); si no
-está abierta no toca a ninguna. Tests: `test_breakeven_por_posicion.py`.
+**Qué corre.** Tres bots en su PC Windows, cada uno con su `.env`, sus datos,
+su sesión de Telegram y su MetaTrader: `demo` (`.env`, MetaQuotes), `fxpro`
+(`.env.segunda`, demo de FxPro) y **`real` (`.env.real`, Bullwaves LIVE,
+cuenta #4049290, STP, HEDGING, 1:500, oro `XAUUSD!`)**. La real corre desde el
+30/09 a las 00:04: lote **0.05 fijo** (5 USD por punto), SL y TP **exactamente
+como los manda el canal** "David 💵 Forex | PRO" (`-1004363872187`), topes
+20 señales por día / 15 abiertas / 15 por símbolo, **sin control ni avisos por
+Telegram** (su decisión: *"así lo dejamos"*) y con clave de arranque (la
+cambió el 30/09; no se puede recuperar, solo reemplazar con `tct clave
+--env-file .env.real`). Código: todo en `main`, en su PC alcanza con `git
+pull` y reiniciar los bots (el código se carga al arrancar).
 
-**Último estado (30/09, 13:47):** hizo `git pull` (está en `f27ca87`), se
-olvidó la clave de arranque y puso una nueva con `tct clave --env-file
-.env.real` (no hay forma de recuperarla, solo reemplazarla). La real
-rearrancó bien: `BullWaves-LIVE balance=481.2`, escuchando el canal PRO, en
-LIVE; al arrancar limpió del estado la BUY 4191 que ya había cerrado (normal).
-**Pendiente:** confirmar con él que el próximo "PARA LA POSICIÓN ... MOVA SU
-SL ... BE" deje en el log `SL movido a breakeven en 1 posicion(es)`. Él mueve
-a veces el TP a mano para cerrar antes: no es un error del bot.
+**La plata (captura de su MT5 del 08/10).** Depósito 500, crédito 750, retiros
+0. **El "Balance 1,335.60" que muestra MT5 incluye el crédito: lo suyo es
+585.60** (500 − ~17 del requisito de EURUSD del canal + 102.70 de señales).
+El crédito de 750 no se retira y, según lo que se pudo averiguar (sitios de
+terceros y reseñas, **no** el sitio oficial, que no abrió desde acá), no cubre
+pérdidas: sirve de margen. Los términos reales NO están confirmados.
 
-**08/10:** 200 h de la real: 15 operadas, 11 TP / 4 stop, +92.65 (balance
-~563). 18 "mover el stop" aplicados, todos después del arreglo: el breakeven
-por posición parece andar (falta ver la línea del log). Los stops de -40 le
-parecen mucho y propuso achicar el SL al 65-85% de la distancia del canal.
-**No se cambió nada del bot:** se agregó `tct evaluar-stop --env-file
-.env.real --horas 200` (solo lee el historial de MT5: ticks, o velas M1 si no
-hay) que muestra hasta qué % del stop llegó el precio en contra en cada
-operación y el resultado con el stop al 65/75/85%. Él pidió decidir con esos
-números ANTES de tocar el SL; sigue vigente su decisión de usar el SL del canal.
-Resultado de `evaluar-stop` (15 operaciones): real +92.65; stop al 85% +58.50,
-al 75% +17.45, al 65% +9.95 → **no conviene**, se le dijo y no se cambió.
+**Resultados de la real** (primera noche + 30/09 al 08/10): **14 ganadas de
+19 (74%)**, +102.70 en señales. El equilibrio de este canal es ~**61%** (un
+stop cuesta ~32-40, un TP rinde ~20), así que 19 operaciones todavía no
+prueban nada: el % verdadero puede estar entre ~50% y ~90%. Los stops que
+llegaron al 101-137% del stop del canal son los 4-5 que perdieron.
 
-**Lote (08/10):** quiso subir a 0.07-0.10. Se le recomendó NO todavía: 12/17
-ganadas (71%) pero el equilibrio del canal es ~61% (stop ~-32 vs TP ~+20) y
-con 17 operaciones el % real es muy incierto; 4 stops seguidos a 0.10 = -57%
-de ~563. Regla propuesta: subir el lote con el balance (0.07 a ~790, 0.10 a
-~1130) y con ~50 operaciones ≥65%. El bono de crédito NO cubre pérdidas.
-Para tener más historia se agregó **`tct repaso --env-file .env.real --dias 40
-[--detalle]`**: trae el historial del canal con una sesión de Telegram PROPIA
-(`<sesión>_repaso`, la primera vez pide teléfono y código; no toca la del bot)
-y pasa cada mensaje por el MISMO `Engine` con `BrokerDeRepaso`, que vive en el
-pasado sobre los ticks de MT5 (velas M1 si no hay ticks). Hora del servidor
-medida con una operación del bot (`desfase_del_servidor`). Señales editadas
-con el resultado se recuperan sacando esas líneas. Imprime % ganadas, % de
-equilibrio, peor racha, y resultado y peor caída por lote. Solo lee.
-**Pendiente:** todavía NO lo corrió. Hoy no tiene a mano el número de la
-cuenta de Telegram del bot (tiene otra cuenta en la versión en inglés del
-grupo, pero decidió esperar para medir el mismo canal). Cuando lo corra,
-decidir el lote con esos números. El código de login llega a la app de
-Telegram de esa cuenta, no por SMS.
+**Decisiones suyas que NO se re-litigan.**
 
-**Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
-principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
-lista vigente para el día de fondear. Después "Estado al 2026-09-27" (qué le
-falta a `.env.real`; su lista de fondeo con FxPro quedó reemplazada) y
-"Estado al 2026-09-22", que tiene la
-configuración de las tres instancias, y §5 y §9, que son las que evitan romper
-algo que costó caro.
+- **SL y TP del canal, sin tocar.** `tct evaluar-stop` (08/10, 15
+  operaciones): con el stop al 85/75/65% habría dado +58.50/+17.45/+9.95
+  contra +92.65 real. Revisar solo con más datos (`--horas 700`).
+- **Topes 20/15/15** ("quiero que tome todas las señales").
+- **Sin 4º bot** (usó `tct ensayo`) y **sin Telegram de control ni de avisos**.
+- **Lote 0.05 hasta que la regla de abajo lo diga.** Pidió subir a 0.06 el
+  08/10 *"frío mente fría"* (ese día ganó +22.15; a 0.06 habría sido +26.58,
+  y un stop cuesta 8 más): se le dijo que todavía no. La regla, que no
+  objetó: **0.06 con balance propio ~675 y el repaso ≥65%**; 0.07 a ~790;
+  0.10 a ~1,130 y ~50 operaciones ≥65%. Si retira plata, bajar el lote en
+  proporción (retirando 222 → 0.03). El cambio: `tct cambiar DEFAULT_LOT=0.06
+  MAX_LOT=0.06 --env-file .env.real`, con el bot real cerrado, sin
+  operaciones abiertas, y reiniciarlo.
+- **Retiros (plan propuesto, todavía no retiró nada):** no antes de
+  saber qué pasa con el crédito (preguntar a soporte@bullwaves.com: ¿el
+  crédito cubre pérdidas?, ¿qué pasa con él si retiro?, ¿hay requisito de
+  volumen?, y guardar la respuesta); después un retiro de prueba de ~50 USD;
+  luego, cada fin de mes, la mitad de la ganancia del mes; con balance ~1,000
+  retirar los 500 del depósito. Siempre sin operaciones abiertas.
+
+**Pendiente, en orden.**
+
+1. **`tct repaso --env-file .env.real --dias 40 --detalle`**: todavía no lo
+   corrió. Necesita el número de Telegram de la cuenta del bot (el código
+   llega a la app de Telegram, no por SMS); tiene otra cuenta en la versión
+   en inglés del grupo pero prefirió esperar para medir el mismo canal. Con
+   eso se decide el lote.
+2. Que mande la línea del log `SL movido a breakeven en 1 posicion(es)` tras
+   un mensaje `PARA LA POSICIÓN "BUY ...", MOVA SU SL ... BE`. El informe ya
+   muestra 18 "mover el stop" aplicados después del arreglo del 30/09, pero
+   falta ver la línea.
+3. Las preguntas a soporte de Bullwaves (arriba).
+
+**Lo que él hace a mano y no es un error del bot:** a veces baja el TP en
+MT5 para cerrar antes (29/09: 4162 en vez de 4168; 30/09: la de 05:38). Al
+mover el SL el bot conserva el TP vigente; solo un "mover TP" del canal
+pisaría el suyo.
+
+**Comandos que dejó esta etapa** (todos solo leen, ninguno manda órdenes):
+`tct informe --env-file .env.real --horas 200 --con-resultados`,
+`tct evaluar-stop --env-file .env.real --horas 200`,
+`tct repaso --env-file .env.real --dias 40 [--detalle] [--lotes 0.05,0.07,0.10]`.
+
+**Reglas de seguridad que siguen vigentes:** no pegar en el chat el
+`TELEGRAM_API_HASH` ni el contenido de ningún `.env`; los `.env` nunca van al
+repositorio; la contraseña de MT5 es la MAESTRA y se escribe por prompt, sin
+`=`; ningún identificador de modelo en commits, PR ni código.
+
+**Si retomás en un chat nuevo:** después de esto leé **"Estado al
+2026-09-28"** al principio de §2 (la real pasó de FxPro a Bullwaves y por qué;
+datos de la cuenta), y §5 y §9, que evitan romper algo que costó caro. "Estado
+al 2026-09-27" y "al 2026-09-22" son historia de las otras instancias.
 Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
+
+### Bitácora de la real (29/09 – 08/10)
+
+- **29-30/09, arranque.** `tct ensayo` en la demo de Bullwaves dio TODO ENTRA
+  BIEN; `tct check` "todo listo"; el requisito del canal (`tct volumen`: 0.5
+  compra + 0.5 venta de EURUSD, 30 min) salió bien. Arranque limpio:
+  `balance=483.0`, `XAUUSD` resuelto como `XAUUSD!`, Telegram como Jezrel
+  escuchando el canal PRO, `BOT REAL arrancado [REAL] | Modo: LIVE`.
+- **29/09, primera noche:** stop −40 (05:37, cerró en 4149.77 con el stop en
+  4150: deslizamiento normal) y +27.90 (05:51; él bajó el TP a 4162 a mano).
+  Neto −12.10.
+- **30/09:** 4 operadas en FxPro y en Bullwaves, casi iguales (centavos de
+  diferencia = precio propio de cada broker; la de 05:38 difiere porque movió
+  el TP a mano: +41.64 vs +15.55). **Bug encontrado y arreglado
+  (`f27ca87`):** el canal manda el breakeven como `PARA LA POSICIÓN "BUY
+  4187", MOVA SU SL ... 4187 BE`; se leía como apertura sin símbolo y el stop
+  NUNCA se movía. Ahora es MOVE_SL solo de la posición con ese lado y esa
+  entrada (`posicion_lado`/`posicion_entrada`, `_separar_referencia_a_posicion`
+  en el parser, filtro en `evaluate_management`); si no está abierta no toca
+  a ninguna. Tests: `test_breakeven_por_posicion.py`.
+- **30/09 13:47:** `git pull` (`f27ca87`), clave nueva, rearranque limpio
+  (`balance=481.2`); al arrancar limpió del estado una BUY 4191 ya cerrada.
+- **08/10, informe de 200 h:** 15 operadas, 11 TP / 4 stop, +92.65. 18
+  "gestión que no se pudo aplicar": ediciones del canal que llegan cuando la
+  operación ya cerró (normal).
+- **08/10, herramientas nuevas.** `tct evaluar-stop` (`brokers/mt5_native.py`
+  `recorrido_de`, `informe.py` `evaluar_stop_corto`): hasta qué % del stop del
+  canal fue el precio en contra en cada operación, y el resultado con el stop
+  más corto; usa ticks de MT5 (velas M1 si no hay). **`tct repaso`**
+  (`repaso.py`): trae N días del canal con una sesión de Telegram PROPIA
+  (`<sesión>_repaso`, no toca la del bot; la primera vez pide teléfono y
+  código) y pasa cada mensaje, en su hora, por el MISMO `Engine` con un
+  `BrokerDeRepaso` que vive en el pasado sobre los ticks de MT5. La hora del
+  servidor se mide con una operación del bot (`desfase_del_servidor`); las
+  señales editadas con el resultado se recuperan sacando esas líneas. Imprime
+  % ganadas, % de equilibrio, peor racha, y resultado y peor caída por lote.
+  Tests: `test_evaluar_stop.py`, `test_repaso.py`.
+- **08/10, lote y retiros.** Quiso 0.07-0.10, después 0.06; preguntó por
+  retirar ~222 (con 563-585 de balance; de eso solo ~86 era ganancia: el resto
+  era depósito, y habría que bajar el lote a 0.03) y cuándo conviene retirar.
+  Respuestas y regla: ver arriba, "Decisiones suyas".
 
 ---
 
@@ -1183,6 +1229,9 @@ Los `.bat` de `scripts/` envuelven todo esto para no depender de la terminal.
 | **La IA avisa, no opera** | `risk.py` valida que un precio sea *coherente*, no que sea el *correcto*. Un 2345 leído donde decía 2355 pasa todos los controles. |
 | **Una instancia por cuenta = un proceso** | MT5 admite una cuenta por terminal y el paquete de Python una terminal por proceso: `login()` reemplaza, no agrega. Verificado contra la API. Cada instancia necesita su `.env`, su carpeta de datos, su sesion de Telethon y **su `MT5_PATH`**. Los nombres salen de `INSTANCE_NAMES`, que tiene que ser identico en todos los `.env`. |
 | **Equity y no balance** | Para el freno diario. El balance solo ve lo cerrado; con una posición abierta perdiendo, no se movería. |
+| **SL y TP como los manda el canal** (real, 08/10) | `tct evaluar-stop` con 15 operaciones: achicar el stop al 85/75/65% rinde +58.50/+17.45/+9.95 contra +92.65, porque cada TP que se corta pasa de ~+20 a ~-35. Se revisa solo con más datos. |
+| **Lote 0.05 hasta que la regla lo suba** (real, 08/10) | El equilibrio del canal es ~61% y con 19 operaciones el % real es muy incierto. El crédito de 750 no cubre pérdidas: el riesgo se calcula sobre el balance propio. Regla en "ESTADO ACTUAL". |
+| **La real sin control ni avisos por Telegram, sin 4º bot, topes 20/15/15** | Decisiones suyas del 28-29/09. No volver a proponer lo contrario. |
 
 ---
 
@@ -2162,6 +2211,10 @@ midió nada. → `${PIPESTATUS[0]}`.
 ## 8. Qué falta
 
 Ordenado por lo que más importa antes de dinero real.
+
+**Lo vigente al 08/10 está en "ESTADO ACTUAL", arriba del todo** (el repaso de 40
+días, la línea del log del breakeven, las preguntas a soporte sobre el crédito).
+Lo que sigue es anterior a la real.
 
 1. **Juntar resultados y comparar los dos informes.** Es lo único que hoy
    bloquea una decisión de verdad, y ya no falta código:
