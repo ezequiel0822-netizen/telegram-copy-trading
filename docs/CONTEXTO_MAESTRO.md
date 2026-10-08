@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-08 · v2.7.0 · 1137 tests · el último commit que describe
+Actualizado: 2026-10-08 · v2.7.0 · 1146 tests · el último commit que describe
 es `f27ca87`, más este mismo cambio
 
 **DÓNDE QUEDÓ (29/09, a la noche) — leer esto antes que nada.** La cuenta
@@ -55,6 +55,22 @@ parecen mucho y propuso achicar el SL al 65-85% de la distancia del canal.
 hay) que muestra hasta qué % del stop llegó el precio en contra en cada
 operación y el resultado con el stop al 65/75/85%. Él pidió decidir con esos
 números ANTES de tocar el SL; sigue vigente su decisión de usar el SL del canal.
+Resultado de `evaluar-stop` (15 operaciones): real +92.65; stop al 85% +58.50,
+al 75% +17.45, al 65% +9.95 → **no conviene**, se le dijo y no se cambió.
+
+**Lote (08/10):** quiso subir a 0.07-0.10. Se le recomendó NO todavía: 12/17
+ganadas (71%) pero el equilibrio del canal es ~61% (stop ~-32 vs TP ~+20) y
+con 17 operaciones el % real es muy incierto; 4 stops seguidos a 0.10 = -57%
+de ~563. Regla propuesta: subir el lote con el balance (0.07 a ~790, 0.10 a
+~1130) y con ~50 operaciones ≥65%. El bono de crédito NO cubre pérdidas.
+Para tener más historia se agregó **`tct repaso --env-file .env.real --dias 40
+[--detalle]`**: trae el historial del canal con una sesión de Telegram PROPIA
+(`<sesión>_repaso`, la primera vez pide teléfono y código; no toca la del bot)
+y pasa cada mensaje por el MISMO `Engine` con `BrokerDeRepaso`, que vive en el
+pasado sobre los ticks de MT5 (velas M1 si no hay ticks). Hora del servidor
+medida con una operación del bot (`desfase_del_servidor`). Señales editadas
+con el resultado se recuperan sacando esas líneas. Imprime % ganadas, % de
+equilibrio, peor racha, y resultado y peor caída por lote. Solo lee.
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
 principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la

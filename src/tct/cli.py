@@ -2349,6 +2349,158 @@ async def _evaluar_stop_async(settings: Settings, operadas: list, porcentajes: l
     return 0
 
 
+def cmd_repaso(args: argparse.Namespace) -> int:
+    """Los mensajes de los ultimos N dias del canal, contra los precios reales.
+
+    Para decidir el lote con mas historia que la del bot (08/10). SOLO LEE:
+    Telegram con una sesion propia y los precios del historial de MT5. Ninguna
+    orden sale de aca.
+    """
+    settings = load_settings(args.env_file)
+    setup_logging(verbose=args.verbose)
+    if not args.verbose:
+        # El motor cuenta cada senal en el log; aca solo importa el resumen.
+        logging.getLogger("tct").setLevel(logging.WARNING)
+    if not settings.telegram_source_chats:
+        print("No hay ningun chat configurado en TELEGRAM_SOURCE_CHATS.")
+        return 1
+    try:
+        lotes = sorted({float(x) for x in args.lotes.split(",") if x.strip()})
+    except ValueError:
+        print(f"--lotes tiene que ser una lista de numeros, como 0.05,0.07,0.10 ({args.lotes})")
+        return 1
+    return asyncio.run(_repaso_async(settings, args.dias, lotes, args.detalle))
+
+
+async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detalle: bool) -> int:
+    import dataclasses
+    import tempfile
+    import time as reloj
+
+    from tct.brokers.mt5_native import MT5NativeBroker
+    from tct.engine import Engine
+    from tct.informe import hora_local, precio
+    from tct.repaso import (BrokerDeRepaso, PreciosDeMT5, a_ms, desfase_del_servidor,
+                            repasar, resumir)
+    from tct.store import Store
+    from tct.telegram.reader import fetch_history
+
+    print("=" * 66)
+    print(f"  REPASO DEL CANAL: ULTIMOS {dias} DIAS")
+    print("=" * 66)
+    print("  Solo lee: los mensajes de Telegram y los precios del historial de")
+    print("  MetaTrader. No manda ninguna orden. Los bots pueden seguir andando.")
+    print("\n  Telegram usa una sesion aparte, para no tocar la del bot. La")
+    print("  PRIMERA vez te pide el telefono y el codigo que llega a la app.\n")
+
+    mensajes = await fetch_history(settings, dias)
+    if not mensajes:
+        print("  No llego ningun mensaje de ese rango.")
+        return 1
+    print(f"  {len(mensajes)} mensajes, del {hora_local(mensajes[0][1]['date'])} "
+          f"al {hora_local(mensajes[-1][1]['date'])}.")
+
+    mt5_broker = MT5NativeBroker(settings)
+    if not await mt5_broker.connect():
+        print("\n  No se pudo conectar a MetaTrader. Abrilo y volve a correr esto.")
+        return 1
+    try:
+        mt5 = mt5_broker._mt5
+        store_del_bot = Store(settings.events_path, settings.paper_trades_path,
+                              settings.state_path, solo_lectura=True)
+        precios, contratos = {}, {}
+        desfase, como = 0, ""
+        for canonico in sorted(settings.allowed_symbols):
+            nombre = mt5_broker._resolver_contra_broker(canonico)
+            info = mt5.symbol_info(nombre) if nombre else None
+            if info is None:
+                continue
+            if not como:
+                desfase, como = desfase_del_servidor(
+                    mt5, nombre, store_del_bot.read_events(), reloj.time())
+            precios[canonico] = PreciosDeMT5(mt5, nombre, desfase)
+            contratos[canonico] = float(getattr(info, "trade_contract_size", 0) or 0) or 100.0
+        if not precios:
+            print("\n  MetaTrader no tiene ninguno de los simbolos de ALLOWED_SYMBOLS.")
+            return 1
+        print(f"  Hora del servidor de MT5: {como}.")
+        print("  Pasando cada mensaje por el bot, en su hora... (puede tardar unos minutos)\n")
+
+        cuenta = mt5.account_info()
+        balance = float(getattr(cuenta, "balance", 0.0) or 0.0) if cuenta else 0.0
+
+        broker = BrokerDeRepaso(precios, contratos)
+        with tempfile.TemporaryDirectory() as carpeta:
+            base = Path(carpeta)
+            ajustes = dataclasses.replace(
+                settings, dry_run=False, enable_ollama=False,
+                # El cupo diario se cuenta con el reloj de HOY: en el repaso,
+                # 40 dias de senales caerian todas en el mismo dia.
+                max_signals_per_day=10**6,
+                data_dir=base, events_path=base / "events.jsonl",
+                paper_trades_path=base / "paper_trades.jsonl", state_path=base / "state.json")
+            store = Store(ajustes.events_path, ajustes.paper_trades_path, ajustes.state_path)
+            engine = Engine(ajustes, store, broker)
+            filas = await repasar(engine, broker, mensajes, a_ms(datetime.now(timezone.utc)))
+    finally:
+        await mt5_broker.disconnect()
+
+    contrato = next(iter(contratos.values()))
+    r = resumir(filas, settings.default_lot, sorted({settings.default_lot, *lotes}), contrato)
+
+    abiertas = [f for f in filas if f.get("posicion") is not None]
+    rechazadas = [f for f in filas if f.get("rechazo") is not None]
+    if detalle:
+        print("  UNA POR UNA")
+        for f in sorted(filas, key=lambda x: x["fecha_ms"]):
+            senal = f.get("senal")
+            hora = hora_local(datetime.fromtimestamp(f["fecha_ms"] / 1000, tz=timezone.utc)
+                              .isoformat())
+            cabeza = (f"    {hora}  {(senal.side.value if senal and senal.side else ''):<4} "
+                      f"entrada={precio(senal.entry if senal else None):<8}")
+            if f.get("rechazo"):
+                print(f"{cabeza} no se opero: {f['rechazo'][0]}"[:110])
+                continue
+            pos = f["posicion"]
+            if pos.cerrada is None:
+                print(f"{cabeza} sigue abierta")
+            else:
+                print(f"{cabeza} {pos.cerrada['motivo']:<6} {pos.resultado:+8.2f}"
+                      + ("  (senal recuperada de una edicion)" if f.get("reconstruida") else ""))
+        print()
+
+    print("  " + "-" * 62)
+    print(f"  {len(abiertas)} senales operadas, {len(rechazadas)} que el bot no habria abierto")
+    print("  " + "-" * 62)
+    if not r["cerradas"]:
+        print("  Ninguna termino todavia: no hay nada que medir.")
+        return 0
+    print(f"  Ganadas      : {r['ganadas']} de {r['ganadas'] + r['perdidas']}  "
+          f"({r['pct_ganadas']:.0f}%)   breakeven: {r['breakeven']}")
+    if r["pct_equilibrio"] is not None:
+        print(f"  Para no perder hace falta ganar el {r['pct_equilibrio']:.0f}% "
+              f"(gana {r['promedio_ganada']:.2f} y pierde {r['promedio_perdida']:.2f} "
+              f"en promedio, a {settings.default_lot})")
+    print(f"  Peor racha   : {r['peor_racha']} stops seguidos")
+    print()
+    for x in r["por_lote"]:
+        caida_pct = f"  ({x['peor_caida'] / balance * 100:.0f}% de {balance:.0f})" if balance else ""
+        print(f"  Lote {x['lote']:.2f}: resultado {x['total']:+9.2f}   "
+              f"peor caida {-x['peor_caida']:9.2f}{caida_pct}")
+    print()
+    if r["abiertas"]:
+        print(f"  {r['abiertas']} siguen abiertas (no cuentan).")
+    if r["reconstruidas"]:
+        print(f"  {r['reconstruidas']} senales venian editadas con el resultado y se recuperaron.")
+    fuentes = [p for p in precios.values()]
+    con_velas = sum(p.horas_con_velas for p in fuentes)
+    if con_velas:
+        print(f"  {con_velas} horas sin ticks en MT5 se midieron con velas de 1 minuto")
+        print("  (menos exacto: no se sabe si el stop o el TP llego primero).")
+    print("  Sin comision ni swap, igual que la cuenta real hoy.")
+    return 0
+
+
 def _informar_distancias(medidas: list, settings: Settings) -> None:
     """El dato para calibrar, medido en el momento en que llego cada senal.
 
@@ -3018,6 +3170,14 @@ def build_parser() -> argparse.ArgumentParser:
     evaluar.add_argument("--horas", type=int, default=200)
     evaluar.add_argument("--porcentajes", default="65,75,85",
                          help="Stops a probar, en %% de la distancia del canal")
+    repaso = sub.add_parser(
+        "repaso", parents=[comunes],
+        help="Los mensajes de los ultimos dias del canal contra los precios reales. SOLO LEE")
+    repaso.add_argument("--dias", type=int, default=40)
+    repaso.add_argument("--lotes", default="0.05,0.07,0.10",
+                        help="Lotes para comparar el resultado y la peor caida")
+    repaso.add_argument("--detalle", action="store_true",
+                        help="Mostrar cada senal con como habria terminado")
     run = sub.add_parser("run", parents=[comunes], help="Arranca el bot")
     run.add_argument(
         "--esperar-mt5", type=int, default=0, dest="esperar_mt5", metavar="SEGUNDOS",
@@ -3075,6 +3235,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": cmd_status,
         "informe": cmd_informe,
         "evaluar-stop": cmd_evaluar_stop,
+        "repaso": cmd_repaso,
         "run": cmd_run,
     }
     try:

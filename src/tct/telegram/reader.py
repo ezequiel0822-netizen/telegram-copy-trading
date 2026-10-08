@@ -296,6 +296,62 @@ async def fetch_recent_messages(
     return recolectados
 
 
+async def fetch_history(settings, dias: int) -> list[tuple[str, dict[str, Any]]]:
+    """Los mensajes de texto de los ultimos `dias` de los chats del .env, en orden.
+
+    Para `tct repaso`. Usa una sesion PROPIA (`<sesion>_repaso`): la del bot
+    esta abierta mientras el bot escucha, y compartir el archivo con otro
+    proceso arriesga trabarlo o que Telegram invalide la clave de los dos. La
+    primera vez pide el telefono y el codigo, como cualquier sesion nueva.
+
+    Telegram devuelve la ULTIMA version de cada mensaje; `editado` dice cuales
+    fueron editados, para que el repaso pueda recuperar la senal original.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from telethon import TelegramClient
+
+    client = TelegramClient(
+        f"{settings.telegram_session_name}_repaso",
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+    )
+    await client.start()
+
+    desde = datetime.now(timezone.utc) - timedelta(days=dias)
+    recolectados: list[tuple[str, dict[str, Any]]] = []
+    try:
+        for crudo in settings.telegram_source_chats:
+            candidato: Any = int(crudo) if crudo.lstrip("-").isdigit() else crudo
+            try:
+                entidad = await client.get_entity(candidato)
+            except Exception as exc:
+                logger.error("No se pudo resolver el chat '%s': %s", crudo, exc)
+                continue
+            async for mensaje in client.iter_messages(entidad, limit=None):
+                if mensaje.date and mensaje.date < desde:
+                    break
+                texto = (mensaje.message or "").strip()
+                if not texto or not mensaje.date:
+                    continue
+                recolectados.append((texto, {
+                    "message_id": mensaje.id,
+                    "chat_id": getattr(entidad, "id", None),
+                    "is_edit": False,
+                    "editado": getattr(mensaje, "edit_date", None) is not None,
+                    "reply_to_message_id": getattr(mensaje.reply_to, "reply_to_msg_id", None)
+                    if getattr(mensaje, "reply_to", None) else None,
+                    "source": "caption" if _media_kind(mensaje) != "none" else "text",
+                    "date": mensaje.date.isoformat(),
+                }))
+    finally:
+        await client.disconnect()
+
+    # Por fecha y, dentro del mismo segundo, en el orden en que se mandaron.
+    recolectados.sort(key=lambda par: (par[1]["date"], par[1]["message_id"]))
+    return recolectados
+
+
 async def list_available_chats(settings, limit: int = 60) -> list[dict[str, Any]]:
     """Lista los chats de la cuenta. Sirve para completar TELEGRAM_SOURCE_CHATS.
 
