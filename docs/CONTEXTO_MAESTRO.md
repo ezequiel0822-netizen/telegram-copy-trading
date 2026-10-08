@@ -71,6 +71,11 @@ pasado sobre los ticks de MT5 (velas M1 si no hay ticks). Hora del servidor
 medida con una operación del bot (`desfase_del_servidor`). Señales editadas
 con el resultado se recuperan sacando esas líneas. Imprime % ganadas, % de
 equilibrio, peor racha, y resultado y peor caída por lote. Solo lee.
+**Pendiente:** todavía NO lo corrió. Hoy no tiene a mano el número de la
+cuenta de Telegram del bot (tiene otra cuenta en la versión en inglés del
+grupo, pero decidió esperar para medir el mismo canal). Cuando lo corra,
+decidir el lote con esos números. El código de login llega a la app de
+Telegram de esa cuenta, no por SMS.
 
 **Si retomás en un chat nuevo:** leé primero **"Estado al 2026-09-28"**, al
 principio de §2: **la cuenta real pasó de FxPro a Bullwaves**, y ahí está la
