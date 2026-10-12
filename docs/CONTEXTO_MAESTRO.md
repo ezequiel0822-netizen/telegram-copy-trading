@@ -14,7 +14,8 @@ es `b4833d4`, más este mismo cambio
 su sesión de Telegram y su MetaTrader: `demo` (`.env`, MetaQuotes), `fxpro`
 (`.env.segunda`, demo de FxPro) y **`real` (`.env.real`, Bullwaves LIVE,
 cuenta #4049290, STP, HEDGING, 1:500, oro `XAUUSD!`)**. La real corre desde el
-30/09 a las 00:04: lote **0.05 fijo** (5 USD por punto), SL y TP **exactamente
+30/09 a las 00:04: lote **0.03 fijo desde el 12/10** (0.05 hasta entonces; 3 USD por
+punto), SL y TP **exactamente
 como los manda el canal** "David 💵 Forex | PRO" (`-1004363872187`), topes
 20 señales por día / 15 abiertas / 15 por símbolo, **sin control ni avisos por
 Telegram** (su decisión: *"así lo dejamos"*) y con clave de arranque (la
@@ -48,17 +49,17 @@ llegaron al 101-137% del stop del canal son los que perdieron.
   contra +92.65 real. Revisar solo con más datos (`--horas 700`).
 - **Topes 20/15/15** ("quiero que tome todas las señales").
 - **Sin 4º bot** (usó `tct ensayo`) y **sin Telegram de control ni de avisos**.
-- **Lote 0.05 hasta que la regla de abajo lo diga.** Pidió subir a 0.06 el
-  08/10 *"frío mente fría"* (ese día ganó +22.15; a 0.06 habría sido +26.58,
-  y un stop cuesta 8 más): se le dijo que todavía no. La regla, que no
-  objetó: **0.06 con balance propio ~675 y el repaso ≥65%**; 0.07 a ~790;
-  0.10 a ~1,130 y ~50 operaciones ≥65%. Si retira plata, bajar el lote en
-  proporción. **Ya retiró 218 (12/10): su dinero propio es 321.75 y la real
-  sigue en 0.05** (un stop de −40 = 12%, 4 seguidos = 50%); lo que
-  corresponde es **0.03** (−24 por stop, 7.5%). Se lo dije el 12/10; decide
-  él. El cambio: `tct cambiar DEFAULT_LOT=0.06
-  MAX_LOT=0.06 --env-file .env.real`, con el bot real cerrado, sin
-  operaciones abiertas, y reiniciarlo.
+- **Lote: 0.03 desde el 12/10** (`DEFAULT_LOT=0.03 MAX_LOT=0.03`, lo cambió
+  él con `tct cambiar`). Pidió subir a 0.06 el 08/10 *"frío mente fría"* (se le
+  dijo que todavía no); después retiró 218 y su dinero propio quedó en
+  321.75: con 0.05 un stop de −40 era el 12% y 4 seguidos el 50%; con 0.03,
+  −24 y 7.5%. **La regla es riesgo constante, el lote sube con el balance
+  propio** (no con el que muestra MT5, que incluye crédito): 0.04 a ~450,
+  0.05 a ~565, 0.06 a ~675, 0.07 a ~790, 0.10 a ~1,130, y siempre con el
+  repaso ≥65% y ~50 operaciones ≥65%. Si vuelve a retirar, bajar el lote en
+  proporción. El cambio: `tct cambiar DEFAULT_LOT=0.04 MAX_LOT=0.04
+  --env-file .env.real`, con el bot real cerrado, sin operaciones abiertas, y
+  reiniciarlo (el arranque muestra `Lote / max lote`).
 - **Retiros (plan propuesto el 08/10; retiró 218 el 08-09/10 igual):** no antes de
   saber qué pasa con el crédito (preguntar a soporte@bullwaves.com: ¿el
   crédito cubre pérdidas?, ¿qué pasa con él si retiro?, ¿hay requisito de
@@ -68,8 +69,6 @@ llegaron al 101-137% del stop del canal son los que perdieron.
 
 **Pendiente, en orden.**
 
-0. **Bajar el lote de la real a 0.03** (ver "Lote" arriba) o decidir
-   conscientemente seguir en 0.05 con 321.75 propios.
 1. **`tct repaso --env-file .env.real --dias 40 --detalle`**: todavía no lo
    corrió. Necesita el número de Telegram de la cuenta del bot (el código
    llega a la app de Telegram, no por SMS); tiene otra cuenta en la versión
@@ -1262,7 +1261,7 @@ Los `.bat` de `scripts/` envuelven todo esto para no depender de la terminal.
 | **Una instancia por cuenta = un proceso** | MT5 admite una cuenta por terminal y el paquete de Python una terminal por proceso: `login()` reemplaza, no agrega. Verificado contra la API. Cada instancia necesita su `.env`, su carpeta de datos, su sesion de Telethon y **su `MT5_PATH`**. Los nombres salen de `INSTANCE_NAMES`, que tiene que ser identico en todos los `.env`. |
 | **Equity y no balance** | Para el freno diario. El balance solo ve lo cerrado; con una posición abierta perdiendo, no se movería. |
 | **SL y TP como los manda el canal** (real, 08/10) | `tct evaluar-stop` con 15 operaciones: achicar el stop al 85/75/65% rinde +58.50/+17.45/+9.95 contra +92.65, porque cada TP que se corta pasa de ~+20 a ~-35. Se revisa solo con más datos. |
-| **Lote 0.05 hasta que la regla lo suba** (real, 08/10) | El equilibrio del canal es ~61% y con 19 operaciones el % real es muy incierto. El crédito de 750 no cubre pérdidas: el riesgo se calcula sobre el balance propio. Regla en "ESTADO ACTUAL". |
+| **Lote por riesgo constante: 0.03 con 321.75 propios** (real, 12/10) | El equilibrio del canal es ~61% y con 22 operaciones el % real es muy incierto. El crédito de 750 no cubre pérdidas: el riesgo se calcula sobre el balance propio. Regla en "ESTADO ACTUAL". |
 | **La real sin control ni avisos por Telegram, sin 4º bot, topes 20/15/15** | Decisiones suyas del 28-29/09. No volver a proponer lo contrario. |
 
 ---
