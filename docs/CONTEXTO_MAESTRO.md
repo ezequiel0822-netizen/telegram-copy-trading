@@ -81,9 +81,10 @@ llegaron al 101-137% del stop del canal son los que perdieron.
    falta ver la línea.
 3. Las preguntas a soporte de Bullwaves (arriba). Ya se sabe una respuesta:
    retirar quita crédito en proporción (ver "La plata").
-4. Confirmar la hipótesis de FxPro vs Bullwaves del 09/10 (bitácora) con
-   `tct evaluar-stop --env-file .env.segunda --horas 72` y lo mismo con
-   `.env.real`.
+4. (Hecho el 12/10) la hipótesis de FxPro vs Bullwaves del 09/10 se
+   confirmó, ver bitácora. Opcional: repetir `tct evaluar-stop --horas 300`
+   en la real para ver si la conclusión sobre achicar el stop aguanta con las
+   22 operaciones.
 
 **Lo que él hace a mano y no es un error del bot:** a veces baja el TP en
 MT5 para cerrar antes (29/09: 4162 en vez de 4168; 30/09: la de 05:38). Al
@@ -156,8 +157,12 @@ Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
   unas décimas por debajo. **Hipótesis, sin verificar:** el mínimo del
   movimiento rozó el stop de 4175 en el precio de Bullwaves y no en el de
   FxPro; es diferencia de feed, no del bot (mismo código, mismo mensaje).
-  Para confirmarlo, `tct evaluar-stop` en las dos instancias: la de las 11:00
-  debería llegar al ~100% del stop en Bullwaves y un poco menos en FxPro.
+  **Confirmado el 12/10 con `tct evaluar-stop --horas 72` en las dos:** la
+  primera llegó al **100%** del stop en Bullwaves y al **99%** en FxPro (el
+  mínimo de FxPro quedó a ~0.08 puntos de tocarlo: ~0.40 USD a 0.05 lotes
+  decidieron +21.35 contra −40.85); la segunda, 80% contra 78%. Bullwaves
+  baja ~0.1-0.2 más en el bid, siempre. Ojo al comparar: una demo llena al
+  precio cotizado, sin deslizamiento; no es la misma vara que la real.
 
 ---
 
