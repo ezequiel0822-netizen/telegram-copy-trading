@@ -5,10 +5,10 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-08 · v2.7.0 · 1146 tests · el último commit que describe
-es `cf543c2`, más este mismo cambio
+Actualizado: 2026-10-12 · v2.7.0 · 1146 tests · el último commit que describe
+es `b4833d4`, más este mismo cambio
 
-**ESTADO ACTUAL (08/10) — leer esto antes que nada.**
+**ESTADO ACTUAL (12/10) — leer esto antes que nada.**
 
 **Qué corre.** Tres bots en su PC Windows, cada uno con su `.env`, sus datos,
 su sesión de Telegram y su MetaTrader: `demo` (`.env`, MetaQuotes), `fxpro`
@@ -22,18 +22,24 @@ cambió el 30/09; no se puede recuperar, solo reemplazar con `tct clave
 --env-file .env.real`). Código: todo en `main`, en su PC alcanza con `git
 pull` y reiniciar los bots (el código se carga al arrancar).
 
-**La plata (captura de su MT5 del 08/10).** Depósito 500, crédito 750, retiros
-0. **El "Balance 1,335.60" que muestra MT5 incluye el crédito: lo suyo es
-585.60** (500 − ~17 del requisito de EURUSD del canal + 102.70 de señales).
-El crédito de 750 no se retira y, según lo que se pudo averiguar (sitios de
-terceros y reseñas, **no** el sitio oficial, que no abrió desde acá), no cubre
-pérdidas: sirve de margen. Los términos reales NO están confirmados.
+**La plata (capturas de su MT5 del 08/10 y del 12/10).** Depósito 500. **Retiró
+218** (6 el 08/10 y 212 el 09/10) y Bullwaves le quitó crédito **en la misma
+proporción en que sacó de lo suyo** (salió exacto: 6 de 563.55 propios →
+−7.99 de crédito; 212 de 533.75 → −294.72): el crédito pasó de 750 a
+**447.29**. El "Solde" que muestra MT5 (769.04) incluye ese crédito: **lo suyo
+es 321.75** (500 − 218 + 39.75 de ganancia acumulada, ya descontado el
+requisito de EURUSD del canal). El crédito no se retira y, según lo que se
+pudo averiguar (sitios de terceros y reseñas, **no** el sitio oficial, que no
+abrió desde acá), no cubre pérdidas: sirve de margen. Del resto de sus
+términos (requisito de volumen, etc.) no hay nada confirmado.
 
-**Resultados de la real** (primera noche + 30/09 al 08/10): **14 ganadas de
-19 (74%)**, +102.70 en señales. El equilibrio de este canal es ~**61%** (un
-stop cuesta ~32-40, un TP rinde ~20), así que 19 operaciones todavía no
-prueban nada: el % verdadero puede estar entre ~50% y ~90%. Los stops que
-llegaron al 101-137% del stop del canal son los 4-5 que perdieron.
+**Resultados de la real** (primera noche + 30/09 al 09/10): **15 ganadas de
+22 (68%)**, +56.85 en señales (+39.75 contando el requisito de EURUSD). Eran
+14 de 19 (74%) el 08/10: el 08/10 por la tarde (SELL −22.05) y el 09/10
+(−40.85 y +17.05) bajaron el %. El equilibrio de este canal es ~**61%** (un
+stop cuesta ~32-40, un TP rinde ~20), así que 22 operaciones todavía no
+prueban nada: el % verdadero puede estar entre ~50% y ~85%. Los stops que
+llegaron al 101-137% del stop del canal son los que perdieron.
 
 **Decisiones suyas que NO se re-litigan.**
 
@@ -47,10 +53,13 @@ llegaron al 101-137% del stop del canal son los 4-5 que perdieron.
   y un stop cuesta 8 más): se le dijo que todavía no. La regla, que no
   objetó: **0.06 con balance propio ~675 y el repaso ≥65%**; 0.07 a ~790;
   0.10 a ~1,130 y ~50 operaciones ≥65%. Si retira plata, bajar el lote en
-  proporción (retirando 222 → 0.03). El cambio: `tct cambiar DEFAULT_LOT=0.06
+  proporción. **Ya retiró 218 (12/10): su dinero propio es 321.75 y la real
+  sigue en 0.05** (un stop de −40 = 12%, 4 seguidos = 50%); lo que
+  corresponde es **0.03** (−24 por stop, 7.5%). Se lo dije el 12/10; decide
+  él. El cambio: `tct cambiar DEFAULT_LOT=0.06
   MAX_LOT=0.06 --env-file .env.real`, con el bot real cerrado, sin
   operaciones abiertas, y reiniciarlo.
-- **Retiros (plan propuesto, todavía no retiró nada):** no antes de
+- **Retiros (plan propuesto el 08/10; retiró 218 el 08-09/10 igual):** no antes de
   saber qué pasa con el crédito (preguntar a soporte@bullwaves.com: ¿el
   crédito cubre pérdidas?, ¿qué pasa con él si retiro?, ¿hay requisito de
   volumen?, y guardar la respuesta); después un retiro de prueba de ~50 USD;
@@ -59,6 +68,8 @@ llegaron al 101-137% del stop del canal son los 4-5 que perdieron.
 
 **Pendiente, en orden.**
 
+0. **Bajar el lote de la real a 0.03** (ver "Lote" arriba) o decidir
+   conscientemente seguir en 0.05 con 321.75 propios.
 1. **`tct repaso --env-file .env.real --dias 40 --detalle`**: todavía no lo
    corrió. Necesita el número de Telegram de la cuenta del bot (el código
    llega a la app de Telegram, no por SMS); tiene otra cuenta en la versión
@@ -68,7 +79,11 @@ llegaron al 101-137% del stop del canal son los 4-5 que perdieron.
    un mensaje `PARA LA POSICIÓN "BUY ...", MOVA SU SL ... BE`. El informe ya
    muestra 18 "mover el stop" aplicados después del arreglo del 30/09, pero
    falta ver la línea.
-3. Las preguntas a soporte de Bullwaves (arriba).
+3. Las preguntas a soporte de Bullwaves (arriba). Ya se sabe una respuesta:
+   retirar quita crédito en proporción (ver "La plata").
+4. Confirmar la hipótesis de FxPro vs Bullwaves del 09/10 (bitácora) con
+   `tct evaluar-stop --env-file .env.segunda --horas 72` y lo mismo con
+   `.env.real`.
 
 **Lo que él hace a mano y no es un error del bot:** a veces baja el TP en
 MT5 para cerrar antes (29/09: 4162 en vez de 4168; 30/09: la de 05:38). Al
@@ -131,6 +146,18 @@ Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
   retirar ~222 (con 563-585 de balance; de eso solo ~86 era ganancia: el resto
   era depósito, y habría que bajar el lote a 0.03) y cuándo conviene retirar.
   Respuestas y regla: ver arriba, "Decisiones suyas".
+- **08-09/10, retiros y la diferencia FxPro vs Bullwaves.** Retiró 218 (ver "La
+  plata"). El 09/10 las dos cuentas recibieron las mismas dos señales BUY de
+  oro: **FxPro demo** entró en 4182.96 y 4179.39 y las dos cerraron en TP
+  (+21.35 y +18.30); **Bullwaves** entró en 4183.17 y 4179.59 y la primera
+  cerró **en el stop, exacto en 4175.00 (−40.85)** y la segunda en TP 4183.00
+  (+17.05). Lo medible: Bullwaves entra ~0.2 puntos peor en cada operación
+  (+0.25 por trade ≈ 1.25 USD a 0.05 lotes) y su precio de venta (bid) queda
+  unas décimas por debajo. **Hipótesis, sin verificar:** el mínimo del
+  movimiento rozó el stop de 4175 en el precio de Bullwaves y no en el de
+  FxPro; es diferencia de feed, no del bot (mismo código, mismo mensaje).
+  Para confirmarlo, `tct evaluar-stop` en las dos instancias: la de las 11:00
+  debería llegar al ~100% del stop en Bullwaves y un poco menos en FxPro.
 
 ---
 
