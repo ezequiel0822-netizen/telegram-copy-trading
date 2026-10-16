@@ -2416,10 +2416,49 @@ def cmd_repaso(args: argparse.Namespace) -> int:
     except ValueError:
         print(f"--lotes tiene que ser una lista de numeros, como 0.05,0.07,0.10 ({args.lotes})")
         return 1
-    with _consola_sin_seleccion():
+    with _consola_sin_seleccion(), _tambien_a_un_archivo("repaso"):
         if getattr(args, "chat", None) and len(settings.telegram_source_chats) > 1:
             return _repaso_de_cada_grupo(settings, args.dias, lotes, args.detalle)
         return asyncio.run(_repaso_async(settings, args.dias, lotes, args.detalle))
+
+
+@contextmanager
+def _tambien_a_un_archivo(prefijo: str):
+    """Todo lo que se imprime va a la consola Y a un archivo.
+
+    El detalle de un grupo son cientos de lineas y la consola no deja copiar
+    tanto (16/10). Con el archivo, se abre con el Bloc de notas y se manda.
+    Los avisos del log no van: solo lo que el comando imprime.
+    """
+    nombre = f"{prefijo}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    try:
+        archivo = open(nombre, "w", encoding="utf-8")
+    except OSError:
+        yield None
+        return
+    consola = sys.stdout
+
+    class AmbosLados:
+        def write(self, texto: str) -> int:
+            consola.write(texto)
+            archivo.write(texto)
+            return len(texto)
+
+        def flush(self) -> None:
+            consola.flush()
+            archivo.flush()
+
+        def __getattr__(self, atributo):
+            return getattr(consola, atributo)
+
+    sys.stdout = AmbosLados()
+    try:
+        yield nombre
+    finally:
+        sys.stdout = consola
+        archivo.close()
+        print(f"\n  Todo lo de arriba quedo guardado en {nombre}. Para verlo o "
+              f"copiarlo:  notepad {nombre}")
 
 
 def _repaso_de_cada_grupo(settings: Settings, dias: int, lotes: list[float],

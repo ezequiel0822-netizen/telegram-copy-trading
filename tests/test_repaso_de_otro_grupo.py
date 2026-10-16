@@ -193,3 +193,22 @@ def test_con_varios_simbolos_cada_posicion_usa_su_contrato():
 
     assert (r["ganadas"], r["perdidas"], r["breakeven"]) == (2, 1, 1)
     assert r["peor_racha"] == 1
+
+
+def test_todo_el_repaso_queda_en_un_archivo(monkeypatch, tmp_path):
+    """El detalle son cientos de lineas: la consola no deja copiarlo (16/10)."""
+    settings = build_settings(tmp_path)
+
+    async def repaso_falso(ajustes, dias, lotes, detalle, resumen=None):
+        print("        mensaje : XAUUSD BUY 2650 SL 2640 TP 2660 \U0001F680")
+        return 0
+
+    monkeypatch.setattr(cli, "load_settings", lambda _ruta: settings)
+    monkeypatch.setattr(cli, "_repaso_async", repaso_falso)
+    monkeypatch.chdir(tmp_path)
+    cli.cmd_repaso(argparse.Namespace(env_file=".env.segunda", verbose=False, dias=40,
+                                      lotes="0.03", detalle=True, chat="-1001666520346"))
+
+    guardados = [p for p in tmp_path.glob("repaso_*.txt") if "grupos" not in p.name]
+    assert len(guardados) == 1
+    assert "XAUUSD BUY 2650" in guardados[0].read_text(encoding="utf-8")

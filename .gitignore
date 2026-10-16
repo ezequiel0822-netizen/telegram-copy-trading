@@ -56,5 +56,5 @@ desktop.ini
 # sistema adentro. No es del proyecto.
 %SystemDrive%/
 
-# Las tablas que deja tct repaso con varios grupos.
-repaso_grupos_*.txt
+# Lo que guarda tct repaso: la salida completa y la tabla de varios grupos.
+repaso_*.txt
