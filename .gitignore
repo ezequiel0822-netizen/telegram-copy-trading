@@ -55,3 +55,6 @@ desktop.ini
 # Una variable de Windows sin expandir crea esta carpeta con caches del
 # sistema adentro. No es del proyecto.
 %SystemDrive%/
+
+# Las tablas que deja tct repaso con varios grupos.
+repaso_grupos_*.txt

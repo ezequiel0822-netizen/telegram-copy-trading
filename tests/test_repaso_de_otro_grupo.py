@@ -141,6 +141,7 @@ def test_varios_grupos_se_miden_cada_uno_por_separado(monkeypatch, tmp_path, cap
 
     monkeypatch.setattr(cli, "load_settings", lambda _ruta: settings)
     monkeypatch.setattr(cli, "_repaso_async", repaso_falso)
+    monkeypatch.chdir(tmp_path)
     codigo = cli.cmd_repaso(argparse.Namespace(
         env_file=".env.segunda", verbose=False, dias=40, lotes="0.03",
         detalle=False, chat="-1002,-1001,-1003"))
@@ -151,4 +152,44 @@ def test_varios_grupos_se_miden_cada_uno_por_separado(monkeypatch, tmp_path, cap
     tabla = salida.split("TODOS LOS GRUPOS")[1]
     assert tabla.index("Grupo -1001") < tabla.index("Grupo -1002"), "no ordeno del mejor al peor"
     assert "+15" in tabla and "-10" in tabla      # margen: 75-60 y 50-60
-    assert "-1003" in tabla and "sin operaciones" in tabla
+    assert "-1003" in tabla and "no se pudo leer el grupo" in tabla
+
+    # La consola no deja copiar tanto: la tabla queda tambien en un archivo.
+    guardada = list(tmp_path.glob("repaso_grupos_*.txt"))
+    assert len(guardada) == 1
+    assert "Grupo -1001" in guardada[0].read_text(encoding="utf-8")
+
+
+def test_el_detalle_muestra_el_mensaje_y_lo_que_entendio():
+    from tct.signals.parser import parse_signal
+
+    senal = parse_signal("DEAL | GOLD (XAU/USD) BUY XAUUSD 4432 Parameters: TP1: 4436 "
+                         "TP2: 4438 TP3: 4440 SL: 4424")
+
+    mensaje, entendio = cli._mensaje_y_lo_que_entendio(senal)
+
+    assert "DEAL | GOLD" in mensaje
+    assert "XAUUSD BUY entrada 4432" in entendio
+    assert "SL 4424" in entendio and "TP 4436 / 4438 / 4440" in entendio
+
+
+def test_con_varios_simbolos_cada_posicion_usa_su_contrato():
+    """16/10: con .env.segunda (12 simbolos) el umbral salia del contrato de
+    AUDUSD, 100.000, y todo contaba como breakeven: 0% ganadas en los 16."""
+    from types import SimpleNamespace
+
+    from tct.repaso import resumir
+
+    def fila(simbolo, entrada, resultado, cerrada_ms):
+        pos = SimpleNamespace(simbolo=simbolo, lote=0.05, entrada=entrada,
+                              resultado=resultado, cerrada={"cerrada_ms": cerrada_ms})
+        return {"posicion": pos}
+
+    filas = [fila("XAUUSD", 4400.0, 20.0, 1), fila("XAUUSD", 4400.0, -40.0, 2),
+             fila("EURUSD", 1.08, 15.0, 3), fila("XAUUSD", 4400.0, 0.4, 4)]
+
+    r = resumir(filas, lote=0.05, lotes=[0.03], contrato=100000.0,
+                contratos={"XAUUSD": 100.0, "EURUSD": 100000.0})
+
+    assert (r["ganadas"], r["perdidas"], r["breakeven"]) == (2, 1, 1)
+    assert r["peor_racha"] == 1

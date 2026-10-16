@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-16 · v2.7.0 · 1226 tests · el último commit que describe
+Actualizado: 2026-10-16 · v2.7.0 · 1228 tests · el último commit que describe
 es `17bb660`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
@@ -82,7 +82,15 @@ modela deslizamiento: el 14/10 calculó −57 y la real perdió −84.
   separados por coma, mide **cada uno por separado** (juntos, la gestión de
   uno tocaría las posiciones de otro) y termina con una tabla del mejor al
   peor: % ganadas, % que hace falta, margen, resultado y peor caída al lote
-  más chico de `--lotes`. Son **16 grupos** a comparar (16/10).
+  más chico de `--lotes`. Son **16 grupos** a comparar (16/10). La tabla
+  también queda en `repaso_grupos_<fecha>.txt` (la consola no deja copiar
+  tanto), y `--detalle` muestra cada mensaje y lo que entendió el bot.
+  **La primera corrida de los 16 salió con 0% de ganadas en todos: era un bug
+  del repaso**, no de los grupos. El umbral de breakeven usaba el contrato del
+  primer símbolo del `.env` (con `.env.segunda`, AUDUSD = 100.000 en vez de
+  100 del oro) y todo contaba como breakeven. Ahora cada posición usa el de
+  su símbolo (`_umbral_de_breakeven` en `repaso.py`). Los RESULTADOS en plata
+  de esa corrida sí estaban bien; el % de ganadas, no. Hay que repetirla.
 - `tct chats --repaso`: lista los grupos con la sesión del repaso, no la del
   bot. Los grupos a medir están en OTRO número de Telegram (no en Jezrel): con
   `--env-file .env.segunda`, la sesión `_repaso` de la segunda quedó para ese

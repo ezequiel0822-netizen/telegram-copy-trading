@@ -66,10 +66,11 @@ def setup_logging(settings: Settings | None = None, verbose: bool = False) -> No
 # querer al copiar lineas para pegarlas en un chat. Auditoria del 27/09.
 
 
-def _sin_seleccion_con_el_mouse() -> None:
-    """Apaga la seleccion rapida de la ventana del bot (solo Windows)."""
+def _sin_seleccion_con_el_mouse() -> int | None:
+    """Apaga la seleccion rapida de la ventana (solo Windows). Devuelve el modo
+    que tenia, para poder devolverselo, o None si no habia nada que apagar."""
     if sys.platform != "win32":
-        return
+        return None
     try:
         import ctypes
 
@@ -77,12 +78,35 @@ def _sin_seleccion_con_el_mouse() -> None:
         entrada = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
         modo = ctypes.c_uint32()
         if not kernel32.GetConsoleMode(entrada, ctypes.byref(modo)):
-            return  # no es una consola: nada que apagar
+            return None  # no es una consola: nada que apagar
         # ENABLE_EXTENDED_FLAGS (0x80) hace falta para que se respete el
         # cambio; ENABLE_QUICK_EDIT_MODE (0x40) es lo que se apaga.
         kernel32.SetConsoleMode(entrada, (modo.value | 0x0080) & ~0x0040)
+        return modo.value
     except Exception:
-        pass
+        return None
+
+
+@contextmanager
+def _consola_sin_seleccion():
+    """Sin seleccion con el mouse mientras dura, y despues como estaba.
+
+    Para el repaso, que corre en la consola donde despues hay que copiar la
+    tabla: un clic lo dejaba en "Select" y pausado (16/10), pero apagarla para
+    siempre impedia copiar el resultado.
+    """
+    anterior = _sin_seleccion_con_el_mouse()
+    try:
+        yield
+    finally:
+        if anterior is not None:
+            try:
+                import ctypes
+
+                kernel32 = ctypes.windll.kernel32
+                kernel32.SetConsoleMode(kernel32.GetStdHandle(-10), anterior)
+            except Exception:
+                pass
 
 
 @contextmanager
@@ -2392,9 +2416,10 @@ def cmd_repaso(args: argparse.Namespace) -> int:
     except ValueError:
         print(f"--lotes tiene que ser una lista de numeros, como 0.05,0.07,0.10 ({args.lotes})")
         return 1
-    if getattr(args, "chat", None) and len(settings.telegram_source_chats) > 1:
-        return _repaso_de_cada_grupo(settings, args.dias, lotes, args.detalle)
-    return asyncio.run(_repaso_async(settings, args.dias, lotes, args.detalle))
+    with _consola_sin_seleccion():
+        if getattr(args, "chat", None) and len(settings.telegram_source_chats) > 1:
+            return _repaso_de_cada_grupo(settings, args.dias, lotes, args.detalle)
+        return asyncio.run(_repaso_async(settings, args.dias, lotes, args.detalle))
 
 
 def _repaso_de_cada_grupo(settings: Settings, dias: int, lotes: list[float],
@@ -2422,6 +2447,21 @@ def _repaso_de_cada_grupo(settings: Settings, dias: int, lotes: list[float],
     return 0
 
 
+def _mensaje_y_lo_que_entendio(senal) -> list[str]:
+    """Dos lineas para el detalle: el mensaje (recortado) y lo que leyo el bot."""
+    if senal is None:
+        return []
+    texto = " ".join((senal.raw_message or "").split())
+    if len(texto) > 110:
+        texto = texto[:107] + "..."
+    tps = " / ".join(f"{tp:g}" for tp in senal.take_profits) or "-"
+    lado = senal.side.value if senal.side else "?"
+    entrada = f"{senal.entry:g}" if senal.entry is not None else "-"
+    sl = f"{senal.stop_loss:g}" if senal.stop_loss is not None else "-"
+    return [f"        mensaje : {texto}",
+            f"        entendio: {senal.symbol or '?'} {lado} entrada {entrada}  SL {sl}  TP {tps}"]
+
+
 def _tabla_de_grupos(filas: list[tuple[str, dict]], lote_del_env: float,
                      lotes: list[float]) -> None:
     """La comparacion de todos los grupos, del mejor resultado al peor."""
@@ -2439,37 +2479,66 @@ def _tabla_de_grupos(filas: list[tuple[str, dict]], lote_del_env: float,
                 return x["peor_caida"]
         return None
 
+    lineas: list[str] = []
+
+    def escribir(texto: str = "") -> None:
+        print(texto)
+        lineas.append(texto)
+
+    def nombre_de(chat: str, datos: dict) -> str:
+        # "𝗫𝗔𝗨𝗨𝗦𝗗 𝗧𝗥𝗔𝗗𝗜𝗡𝗚" son letras anchas que corrian las columnas.
+        import unicodedata
+
+        crudo = unicodedata.normalize("NFKD", datos.get("titulo") or chat)
+        limpio = " ".join("".join(c for c in crudo if c.isascii()).split())
+        return (limpio or chat)[:26]
+
     medidos = [(c, d) for c, d in filas if d.get("cerradas")]
     sin_datos = [(c, d) for c, d in filas if not d.get("cerradas")]
     medidos.sort(key=lambda par: resultado(par[1]) or 0.0, reverse=True)
 
-    print("\n\n" + "=" * 100)
-    print(f"  TODOS LOS GRUPOS, del mejor al peor (resultado a lote {lote:.2f}, sin comision)")
-    print("=" * 100)
-    print(f"  {'GRUPO':<26} {'MSJ':>5} {'OPER':>5} {'NO':>4} {'GANADAS':>8} {'HACE FALTA':>11}"
+    escribir("\n\n" + "=" * 100)
+    escribir(f"  TODOS LOS GRUPOS, del mejor al peor (resultado a lote {lote:.2f}, sin comision)")
+    escribir("=" * 100)
+    escribir(f"  {'GRUPO':<26} {'MSJ':>5} {'OPER':>5} {'NO':>4} {'GANADAS':>8} {'HACE FALTA':>11}"
           f" {'MARGEN':>7} {'RESULTADO':>10} {'PEOR CAIDA':>11} {'RACHA':>6}")
     for chat, d in medidos:
-        nombre = (d.get("titulo") or chat)[:26]
+        nombre = nombre_de(chat, d)
         equilibrio = d.get("pct_equilibrio")
         margen = (d["pct_ganadas"] - equilibrio) if equilibrio is not None else None
         decididas = d["ganadas"] + d["perdidas"]
         aviso = "  (pocas)" if decididas < 20 else ""
-        print(f"  {nombre:<26} {d['mensajes']:>5} {d['operadas']:>5} {d['no_abiertas']:>4}"
+        escribir(f"  {nombre:<26} {d['mensajes']:>5} {d['operadas']:>5} {d['no_abiertas']:>4}"
               f" {d['pct_ganadas']:>7.0f}%"
               f" {(f'{equilibrio:.0f}%' if equilibrio is not None else '-'):>11}"
               f" {(f'{margen:+.0f}' if margen is not None else '-'):>7}"
               f" {resultado(d) or 0.0:>+10.2f} {-(caida(d) or 0.0):>11.2f}"
               f" {d['peor_racha']:>6}{aviso}")
     for chat, d in sin_datos:
-        nombre = (d.get("titulo") or chat)[:26]
-        print(f"  {nombre:<26} sin operaciones terminadas que medir")
-    print()
-    print("  GANADAS: % de operaciones ganadas. HACE FALTA: el % para no perder, con lo")
-    print("  que gana y pierde en promedio ESE grupo. MARGEN: la diferencia (positivo es")
-    print("  bueno). NO: senales que el bot no habria abierto (si son muchas, el bot no")
-    print("  entiende como escribe ese grupo: revisarlo con --detalle antes de conectarlo).")
-    print("  '(pocas)': menos de 20 operaciones decididas, el % todavia no dice mucho.")
-    print("  Sin deslizamiento: en una cuenta real los stops pueden salir peor.")
+        nombre = nombre_de(chat, d)
+        if not d:
+            escribir(f"  {nombre:<26} no se pudo leer el grupo (ver el error mas arriba)")
+        elif not d.get("operadas"):
+            escribir(f"  {nombre:<26} {d.get('mensajes', 0):>5}     0 {d.get('no_abiertas', 0):>4}"
+                     "  el bot no entendio ninguna senal de este grupo")
+        else:
+            escribir(f"  {nombre:<26} {d.get('mensajes', 0):>5} {d['operadas']:>5}"
+                     f" {d.get('no_abiertas', 0):>4}  ninguna termino todavia")
+    escribir()
+    escribir("  GANADAS: % de operaciones ganadas. HACE FALTA: el % para no perder, con lo")
+    escribir("  que gana y pierde en promedio ESE grupo. MARGEN: la diferencia (positivo es")
+    escribir("  bueno). NO: senales que el bot no habria abierto (si son muchas, el bot no")
+    escribir("  entiende como escribe ese grupo: revisarlo con --detalle antes de conectarlo).")
+    escribir("  '(pocas)': menos de 20 operaciones decididas, el % todavia no dice mucho.")
+    escribir("  Sin deslizamiento: en una cuenta real los stops pueden salir peor.")
+    # La consola no deja copiar tanto texto de una vez (16/10): la tabla queda
+    # tambien en un archivo, que se abre con el Bloc de notas.
+    nombre = f"repaso_grupos_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    try:
+        Path(nombre).write_text("\n".join(lineas) + "\n", encoding="utf-8")
+        print(f"\n  La tabla quedo guardada en {nombre}. Para copiarla:  notepad {nombre}")
+    except OSError:
+        pass
 
 
 async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detalle: bool,
@@ -2556,7 +2625,8 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
         await mt5_broker.disconnect()
 
     contrato = next(iter(contratos.values()))
-    r = resumir(filas, settings.default_lot, sorted({settings.default_lot, *lotes}), contrato)
+    r = resumir(filas, settings.default_lot, sorted({settings.default_lot, *lotes}), contrato,
+                contratos=contratos)
 
     abiertas = [f for f in filas if f.get("posicion") is not None]
     rechazadas = [f for f in filas if f.get("rechazo") is not None]
@@ -2574,13 +2644,17 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
                       f"entrada={precio(senal.entry if senal else None):<8}")
             if f.get("rechazo"):
                 print(f"{cabeza} no se opero: {f['rechazo'][0]}"[:110])
-                continue
-            pos = f["posicion"]
-            if pos.cerrada is None:
-                print(f"{cabeza} sigue abierta")
             else:
-                print(f"{cabeza} {pos.cerrada['motivo']:<6} {pos.resultado:+8.2f}"
-                      + ("  (senal recuperada de una edicion)" if f.get("reconstruida") else ""))
+                pos = f["posicion"]
+                if pos.cerrada is None:
+                    print(f"{cabeza} sigue abierta")
+                else:
+                    print(f"{cabeza} {pos.cerrada['motivo']:<6} {pos.resultado:+8.2f}"
+                          + ("  (senal recuperada de una edicion)" if f.get("reconstruida") else ""))
+            # Para ver si el bot lee bien un grupo nuevo, sin ir a buscar el
+            # mensaje a Telegram (16/10): que decia, y que entendio.
+            for linea in _mensaje_y_lo_que_entendio(senal):
+                print(linea)
         print()
 
     print("  " + "-" * 62)

@@ -401,8 +401,28 @@ async def _llegar_a(engine: Any, broker: BrokerDeRepaso, t: int) -> None:
     broker.ahora_ms = t
 
 
+# Un breakeven es un resultado de mas o menos lo que mueve el spread. En el oro
+# eso es medio punto (~0.5 en 4000), y se mide como movimiento de precio
+# RELATIVO para que valga igual en un par de divisas.
+_MOVIMIENTO_DE_BREAKEVEN = 0.5 / 4000
+
+
+def _umbral_de_breakeven(posicion: Any, contratos: dict[str, float], contrato: float) -> float:
+    """En plata, para ESTA posicion: su lote, su contrato y su precio.
+
+    Era uno solo para todas, con el contrato del primer simbolo del .env. Con
+    .env.segunda ese es AUDUSD (100.000, no 100 como el oro): el umbral quedaba
+    mil veces mas grande, todo contaba como breakeven, y la tabla de 16 grupos
+    salio con 0% de ganadas en todos (16/10).
+    """
+    por_lote = contratos.get(getattr(posicion, "simbolo", ""), contrato)
+    entrada = float(getattr(posicion, "entrada", 0.0) or 0.0)
+    return posicion.lote * por_lote * entrada * _MOVIMIENTO_DE_BREAKEVEN
+
+
 def resumir(filas: list[dict[str, Any]], lote: float, lotes: list[float],
-            contrato: float = 100.0) -> dict[str, Any]:
+            contrato: float = 100.0,
+            contratos: dict[str, float] | None = None) -> dict[str, Any]:
     """Ganadas, el punto de equilibrio, la peor racha y la peor caida, por lote."""
     cerradas = [f for f in filas if f.get("posicion") is not None
                 and f["posicion"].cerrada is not None]
@@ -412,17 +432,16 @@ def resumir(filas: list[dict[str, Any]], lote: float, lotes: list[float],
     rechazadas = [f for f in filas if f.get("rechazo") is not None]
 
     resultados = [f["posicion"].resultado for f in cerradas]
-    # Breakeven: menos de medio punto, que es lo que mueve el spread.
-    umbral = 0.5 * lote * contrato
-    ganadas = [r for r in resultados if r > umbral]
-    perdidas = [r for r in resultados if r < -umbral]
+    umbrales = [_umbral_de_breakeven(f["posicion"], contratos or {}, contrato) for f in cerradas]
+    ganadas = [r for r, u in zip(resultados, umbrales) if r > u]
+    perdidas = [r for r, u in zip(resultados, umbrales) if r < -u]
 
     racha = peor_racha = 0
-    for r in resultados:
-        if r < -umbral:
+    for r, u in zip(resultados, umbrales):
+        if r < -u:
             racha += 1
             peor_racha = max(peor_racha, racha)
-        elif r > umbral:
+        elif r > u:
             racha = 0
 
     acumulado = pico = caida = 0.0
