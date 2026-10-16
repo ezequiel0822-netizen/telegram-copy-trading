@@ -78,7 +78,11 @@ modela deslizamiento: el 14/10 calculó −57 y la real perdió −84.
 - `tct repaso --chat <numero o @nombre>`: mide OTRO grupo sin tocar el `.env`
   (para decidir antes de conectarlo). Usa el lote, filtros, símbolos y precios
   del `.env` que se le pase. Si el número empieza con `-`, escribirlo pegado:
-  `--chat=-100...` (y sin `<` `>`: en cmd son redirecciones).
+  `--chat=-100...` (y sin `<` `>`: en cmd son redirecciones). Con varios
+  separados por coma, mide **cada uno por separado** (juntos, la gestión de
+  uno tocaría las posiciones de otro) y termina con una tabla del mejor al
+  peor: % ganadas, % que hace falta, margen, resultado y peor caída al lote
+  más chico de `--lotes`. Son **16 grupos** a comparar (16/10).
 - `tct chats --repaso`: lista los grupos con la sesión del repaso, no la del
   bot. Los grupos a medir están en OTRO número de Telegram (no en Jezrel): con
   `--env-file .env.segunda`, la sesión `_repaso` de la segunda quedó para ese

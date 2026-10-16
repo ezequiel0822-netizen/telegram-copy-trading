@@ -283,6 +283,7 @@ async def fetch_recent_messages(
                 recolectados.append((texto, {
                     "message_id": mensaje.id,
                     "chat_id": getattr(entidad, "id", None),
+                    "chat_titulo": getattr(entidad, "title", None),
                     "is_edit": False,
                     "reply_to_message_id": getattr(mensaje.reply_to, "reply_to_msg_id", None)
                     if getattr(mensaje, "reply_to", None) else None,
@@ -366,6 +367,7 @@ async def fetch_history(settings, dias: int) -> list[tuple[str, dict[str, Any]]]
                 recolectados.append((texto, {
                     "message_id": mensaje.id,
                     "chat_id": getattr(entidad, "id", None),
+                    "chat_titulo": getattr(entidad, "title", None),
                     "is_edit": False,
                     "editado": getattr(mensaje, "edit_date", None) is not None,
                     "reply_to_message_id": getattr(mensaje.reply_to, "reply_to_msg_id", None)

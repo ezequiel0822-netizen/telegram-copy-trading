@@ -48,12 +48,6 @@ def test_sin_chat_sigue_con_el_del_env(monkeypatch, tmp_path):
     assert visto["chats"] == ["-1004363872187"]
 
 
-def test_varios_grupos_separados_por_coma(monkeypatch, tmp_path):
-    _, visto, _ = correr_repaso(monkeypatch, tmp_path, "-1001, @senalesoro")
-
-    assert visto["chats"] == ["-1001", "@senalesoro"]
-
-
 def test_la_opcion_existe_en_la_linea_de_comandos():
     args = cli.build_parser().parse_args(
         ["repaso", "--env-file", ".env.segunda", "--chat", "-1001234567890"])
@@ -123,3 +117,38 @@ def test_chats_sin_repaso_sigue_con_la_sesion_del_bot(monkeypatch, tmp_path):
     _, visto = correr_chats(monkeypatch, tmp_path, False)
 
     assert visto["sesion"] == "tct_fxpro"
+
+
+def test_varios_grupos_se_miden_cada_uno_por_separado(monkeypatch, tmp_path, capsys):
+    """Juntos en un motor, el 'cerrar' de un grupo tocaria las posiciones de
+    otro. Eran 16 grupos para comparar (16/10)."""
+    settings = build_settings(tmp_path, telegram_source_chats=["-1004363872187"])
+    medidos = []
+
+    async def repaso_falso(ajustes, dias, lotes, detalle, resumen=None):
+        medidos.append(list(ajustes.telegram_source_chats))
+        chat = ajustes.telegram_source_chats[0]
+        if chat == "-1003":
+            return 1  # un grupo sin mensajes no corta los demas
+        bueno = chat == "-1001"
+        resumen.update(
+            titulo=f"Grupo {chat}", mensajes=300, operadas=60, no_abiertas=5,
+            cerradas=60, ganadas=45 if bueno else 30, perdidas=15 if bueno else 30,
+            breakeven=0, pct_ganadas=75.0 if bueno else 50.0, pct_equilibrio=60.0,
+            peor_racha=3 if bueno else 7,
+            por_lote=[{"lote": 0.03, "total": 120.0 if bueno else -90.0, "peor_caida": 40.0}])
+        return 0
+
+    monkeypatch.setattr(cli, "load_settings", lambda _ruta: settings)
+    monkeypatch.setattr(cli, "_repaso_async", repaso_falso)
+    codigo = cli.cmd_repaso(argparse.Namespace(
+        env_file=".env.segunda", verbose=False, dias=40, lotes="0.03",
+        detalle=False, chat="-1002,-1001,-1003"))
+
+    salida = capsys.readouterr().out
+    assert codigo == 0
+    assert medidos == [["-1002"], ["-1001"], ["-1003"]]
+    tabla = salida.split("TODOS LOS GRUPOS")[1]
+    assert tabla.index("Grupo -1001") < tabla.index("Grupo -1002"), "no ordeno del mejor al peor"
+    assert "+15" in tabla and "-10" in tabla      # margen: 75-60 y 50-60
+    assert "-1003" in tabla and "sin operaciones" in tabla

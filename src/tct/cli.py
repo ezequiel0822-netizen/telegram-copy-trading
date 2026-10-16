@@ -2392,10 +2392,90 @@ def cmd_repaso(args: argparse.Namespace) -> int:
     except ValueError:
         print(f"--lotes tiene que ser una lista de numeros, como 0.05,0.07,0.10 ({args.lotes})")
         return 1
+    if getattr(args, "chat", None) and len(settings.telegram_source_chats) > 1:
+        return _repaso_de_cada_grupo(settings, args.dias, lotes, args.detalle)
     return asyncio.run(_repaso_async(settings, args.dias, lotes, args.detalle))
 
 
-async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detalle: bool) -> int:
+def _repaso_de_cada_grupo(settings: Settings, dias: int, lotes: list[float],
+                          detalle: bool) -> int:
+    """`--chat a,b,c`: cada grupo por separado y una tabla para compararlos.
+
+    Juntos en un solo motor, el "cerrar" o el "mover SL" de un grupo tocaria
+    las posiciones de otro, y el resultado no seria de ninguno (16/10: eran 16
+    grupos para elegir cuales conectar a la demo de FxPro).
+    """
+    import dataclasses
+
+    filas = []
+    for numero, chat in enumerate(settings.telegram_source_chats, start=1):
+        print(f"\n\n######## GRUPO {numero} de {len(settings.telegram_source_chats)}: "
+              f"{chat} ########\n")
+        resumen: dict = {}
+        ajustes = dataclasses.replace(settings, telegram_source_chats=[chat])
+        try:
+            asyncio.run(_repaso_async(ajustes, dias, lotes, detalle, resumen))
+        except Exception as exc:  # noqa: BLE001 - un grupo roto no corta los demas
+            print(f"  No se pudo medir este grupo: {exc}")
+        filas.append((chat, resumen))
+    _tabla_de_grupos(filas, settings.default_lot, lotes)
+    return 0
+
+
+def _tabla_de_grupos(filas: list[tuple[str, dict]], lote_del_env: float,
+                     lotes: list[float]) -> None:
+    """La comparacion de todos los grupos, del mejor resultado al peor."""
+    lote = min(lotes) if lotes else lote_del_env
+
+    def resultado(datos: dict) -> float | None:
+        for x in datos.get("por_lote", []):
+            if abs(x["lote"] - lote) < 1e-9:
+                return x["total"]
+        return None
+
+    def caida(datos: dict) -> float | None:
+        for x in datos.get("por_lote", []):
+            if abs(x["lote"] - lote) < 1e-9:
+                return x["peor_caida"]
+        return None
+
+    medidos = [(c, d) for c, d in filas if d.get("cerradas")]
+    sin_datos = [(c, d) for c, d in filas if not d.get("cerradas")]
+    medidos.sort(key=lambda par: resultado(par[1]) or 0.0, reverse=True)
+
+    print("\n\n" + "=" * 100)
+    print(f"  TODOS LOS GRUPOS, del mejor al peor (resultado a lote {lote:.2f}, sin comision)")
+    print("=" * 100)
+    print(f"  {'GRUPO':<26} {'MSJ':>5} {'OPER':>5} {'NO':>4} {'GANADAS':>8} {'HACE FALTA':>11}"
+          f" {'MARGEN':>7} {'RESULTADO':>10} {'PEOR CAIDA':>11} {'RACHA':>6}")
+    for chat, d in medidos:
+        nombre = (d.get("titulo") or chat)[:26]
+        equilibrio = d.get("pct_equilibrio")
+        margen = (d["pct_ganadas"] - equilibrio) if equilibrio is not None else None
+        decididas = d["ganadas"] + d["perdidas"]
+        aviso = "  (pocas)" if decididas < 20 else ""
+        print(f"  {nombre:<26} {d['mensajes']:>5} {d['operadas']:>5} {d['no_abiertas']:>4}"
+              f" {d['pct_ganadas']:>7.0f}%"
+              f" {(f'{equilibrio:.0f}%' if equilibrio is not None else '-'):>11}"
+              f" {(f'{margen:+.0f}' if margen is not None else '-'):>7}"
+              f" {resultado(d) or 0.0:>+10.2f} {-(caida(d) or 0.0):>11.2f}"
+              f" {d['peor_racha']:>6}{aviso}")
+    for chat, d in sin_datos:
+        nombre = (d.get("titulo") or chat)[:26]
+        print(f"  {nombre:<26} sin operaciones terminadas que medir")
+    print()
+    print("  GANADAS: % de operaciones ganadas. HACE FALTA: el % para no perder, con lo")
+    print("  que gana y pierde en promedio ESE grupo. MARGEN: la diferencia (positivo es")
+    print("  bueno). NO: senales que el bot no habria abierto (si son muchas, el bot no")
+    print("  entiende como escribe ese grupo: revisarlo con --detalle antes de conectarlo).")
+    print("  '(pocas)': menos de 20 operaciones decididas, el % todavia no dice mucho.")
+    print("  Sin deslizamiento: en una cuenta real los stops pueden salir peor.")
+
+
+async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detalle: bool,
+                        resumen: dict | None = None) -> int:
+    """El repaso de los chats de `settings`. Si se pasa `resumen`, ademas lo
+    llena con los numeros del final, para la tabla de varios grupos."""
     import dataclasses
     import tempfile
     import time as reloj
@@ -2480,6 +2560,10 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
 
     abiertas = [f for f in filas if f.get("posicion") is not None]
     rechazadas = [f for f in filas if f.get("rechazo") is not None]
+    if resumen is not None:
+        resumen.update(r, mensajes=len(mensajes), operadas=len(abiertas),
+                       no_abiertas=len(rechazadas), balance=balance,
+                       titulo=mensajes[0][1].get("chat_titulo"))
     if detalle:
         print("  UNA POR UNA")
         for f in sorted(filas, key=lambda x: x["fecha_ms"]):
