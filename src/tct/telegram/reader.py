@@ -383,6 +383,48 @@ async def fetch_history(settings, dias: int) -> list[tuple[str, dict[str, Any]]]
     return recolectados
 
 
+async def ultimos_mensajes(settings, chats: list[str], cantidad: int) -> list[dict[str, Any]]:
+    """Los ultimos `cantidad` mensajes de cada chat, CON o sin texto.
+
+    Para `tct mensajes` (16/10): ver como escribe un grupo antes de pedirle al
+    bot que lo lea. A diferencia del repaso, no se saltean los que son solo
+    imagen: si un grupo manda las senales como foto, eso es lo primero que hay
+    que saber. Usa la sesion del repaso, que puede ser otra cuenta.
+    """
+    from telethon import TelegramClient
+
+    client = TelegramClient(
+        f"{settings.telegram_session_name}_repaso",
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+    )
+    await _entrar(client)
+    grupos: list[dict[str, Any]] = []
+    try:
+        for crudo in chats:
+            candidato: Any = int(crudo) if crudo.lstrip("-").isdigit() else crudo
+            try:
+                entidad = await client.get_entity(candidato)
+            except Exception as exc:
+                grupos.append({"chat": crudo, "titulo": None, "error": str(exc),
+                               "mensajes": []})
+                continue
+            mensajes = []
+            async for mensaje in client.iter_messages(entidad, limit=cantidad):
+                mensajes.append({
+                    "fecha": mensaje.date.isoformat() if mensaje.date else None,
+                    "texto": (mensaje.message or "").strip(),
+                    "adjunto": _media_kind(mensaje),
+                    "editado": getattr(mensaje, "edit_date", None) is not None,
+                })
+            mensajes.reverse()  # del mas viejo al mas nuevo, como se leen
+            grupos.append({"chat": crudo, "titulo": getattr(entidad, "title", None),
+                           "error": None, "mensajes": mensajes})
+    finally:
+        await client.disconnect()
+    return grupos
+
+
 async def list_available_chats(settings, limit: int = 60) -> list[dict[str, Any]]:
     """Lista los chats de la cuenta. Sirve para completar TELEGRAM_SOURCE_CHATS.
 

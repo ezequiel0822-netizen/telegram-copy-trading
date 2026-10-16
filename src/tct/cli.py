@@ -2422,6 +2422,69 @@ def cmd_repaso(args: argparse.Namespace) -> int:
         return asyncio.run(_repaso_async(settings, args.dias, lotes, args.detalle))
 
 
+def cmd_mensajes(args: argparse.Namespace) -> int:
+    """Los ultimos mensajes de uno o varios grupos y lo que entiende el bot de
+    cada uno. SOLO LEE, con la sesion del repaso (16/10)."""
+    from tct.informe import hora_local
+    from tct.signals.parser import parse_signal
+    from tct.telegram.reader import TelefonoInvalido, ultimos_mensajes
+
+    settings = load_settings(args.env_file)
+    setup_logging(verbose=args.verbose)
+    chats = [c.strip() for c in (args.chat or "").split(",") if c.strip()]
+    if not chats:
+        print("Falta --chat: el numero del grupo (sale de 'tct chats --repaso'), o varios")
+        print("separados por coma:  --chat=-1001234567890,-1009876543210")
+        return 1
+
+    with _consola_sin_seleccion(), _tambien_a_un_archivo("mensajes"):
+        try:
+            grupos = asyncio.run(ultimos_mensajes(settings, chats, args.cantidad))
+        except TelefonoInvalido:
+            print("No se entro a Telegram: el telefono no fue aceptado. Volve a correr el")
+            print("comando y escribilo completo, con + y el codigo de pais.")
+            return 1
+        for grupo in grupos:
+            print("\n" + "=" * 78)
+            print(f"  {grupo['titulo'] or grupo['chat']}  ({grupo['chat']})")
+            print("=" * 78)
+            if grupo["error"]:
+                print(f"  No se pudo leer este grupo: {grupo['error']}")
+                continue
+            senales = gestion = solo_imagen = 0
+            for mensaje in grupo["mensajes"]:
+                marcas = []
+                if mensaje["adjunto"] != "none":
+                    marcas.append(f"[{'imagen' if mensaje['adjunto'] == 'photo' else mensaje['adjunto']}]")
+                if mensaje["editado"]:
+                    marcas.append("(editado)")
+                hora = hora_local(mensaje["fecha"]) if mensaje["fecha"] else "?"
+                print(f"\n  {hora} {' '.join(marcas)}")
+                if not mensaje["texto"]:
+                    solo_imagen += mensaje["adjunto"] != "none"
+                    print("    (sin texto)")
+                    continue
+                for linea in mensaje["texto"].splitlines()[:25]:
+                    if linea.strip():
+                        print(f"    | {linea.strip()[:150]}")
+                evento = parse_signal(mensaje["texto"])
+                if evento is None:
+                    print("    -> el bot: no es una senal")
+                    continue
+                if evento.event_type.value == "OPEN":
+                    senales += 1
+                    print("    -> el bot:" + _mensaje_y_lo_que_entendio(evento)[1]
+                          .replace("        entendio:", " apertura"))
+                else:
+                    gestion += 1
+                    print(f"    -> el bot: {evento.event_type.value}"
+                          + (f" a {evento.stop_loss:g}" if evento.stop_loss is not None else "")
+                          + (" (breakeven)" if evento.move_sl_to_breakeven else ""))
+            print(f"\n  En {len(grupo['mensajes'])} mensajes: {senales} que el bot lee como "
+                  f"apertura, {gestion} de gestion, {solo_imagen} solo imagen sin texto.")
+    return 0
+
+
 @contextmanager
 def _tambien_a_un_archivo(prefijo: str):
     """Todo lo que se imprime va a la consola Y a un archivo.
@@ -3340,6 +3403,14 @@ def build_parser() -> argparse.ArgumentParser:
         r"(explicit argument ).*", r"\1(no se muestra)",
         re.sub(r"'[^']*'|\"[^\"]*\"", "(no se muestra)", mensaje)))
 
+    mensajes = sub.add_parser(
+        "mensajes", parents=[comunes],
+        help="Los ultimos mensajes de otros grupos y lo que entiende el bot. SOLO LEE")
+    mensajes.add_argument("--chat", default=None,
+                          help="El grupo (de 'tct chats --repaso'), o varios separados por coma")
+    mensajes.add_argument("--cantidad", type=int, default=40,
+                          help="Cuantos mensajes de cada grupo (por defecto 40)")
+
     simular = sub.add_parser(
         "simular", parents=[comunes],
         help="Reproduce los mensajes reales de hoy contra el sistema")
@@ -3469,6 +3540,7 @@ def main(argv: list[str] | None = None) -> int:
         "informe": cmd_informe,
         "evaluar-stop": cmd_evaluar_stop,
         "repaso": cmd_repaso,
+        "mensajes": cmd_mensajes,
         "run": cmd_run,
     }
     try:
