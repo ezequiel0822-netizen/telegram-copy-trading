@@ -51,13 +51,19 @@ cosas distintas explican los stops grandes:
 
 **Operaciones de 0.05 que NO son del bot** en la cuenta real: 14/10 19:04,
 19:25, 20:00 y 15/10 01:13, 16:00-16:29 (hora del servidor, UTC+0), unos −105
-en total. El bot opera 0.03 y el canal no mandó señales a esas horas. Se le
-preguntó si son suyas (a mano u otro grupo); sin respuesta todavía.
+en total. **Son suyas, a mano** (lo confirmó el 16/10). Al leer el historial o
+`Profit` de MT5, separar las del bot (0.03, en las horas de las señales del
+canal) de las suyas.
 
 **La plata según el pie del historial de MT5 (16/10):** Deposit 722, Withdrawal
 −218, Profit −199.12, Credit 447.29, Balance 752.17. Lo suyo, sin crédito:
-**304.88** (es el "305" que muestra el repaso). OJO: el contexto decía
-"depósito 500"; 722 sugiere 222 más depositados después. Sin confirmar.
+**304.88** (es el "305" que muestra el repaso). El 722 se explica así (lo
+contó él): depósito 500; del retiro de 218 salieron 6 y los otros **212 los
+canceló y volvieron a la cuenta** (MT5 los anota como depósito); después
+depositó **10 más**. 500 + 212 + 10 = 722, y neto depositado 500 + 10 − 6 =
+**504**. El crédito sigue en 447.29: cuando retiró, Bullwaves le quitó crédito
+en proporción, y al cancelar el retiro de 212 no parece haberlo devuelto. Si le
+importa, es una pregunta para soporte de Bullwaves.
 
 **`tct repaso` de 40 días sobre el canal (corrido el 16/10):** 74 operadas,
 40 de 67 ganadas (**60%**) contra un equilibrio de **64%** (gana 12.68, pierde
