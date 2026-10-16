@@ -105,8 +105,30 @@ _PARTIAL_RE = re.compile(
     r"|\b(?:PARTIALS?|PARCIALES?|PARCIAL)\b"
     r"|\bCLOSE\s+\d{1,3}\s*%"
 )
+# CIERRE tambien es un sustantivo del analisis: "un cierre de vela por encima
+# de 4450", "el cierre diario del oro fue en 4185", "cierre semanal:". Con un
+# articulo adelante, o seguido de vela, dia, semana..., no pide cerrar nada: se
+# leia como CERRAR y el bot cerraba TODAS las posiciones de oro (auditoria del
+# 16/10).
+# "Por encima / por debajo" es analisis cuando va con un nivel: "un cierre por
+# encima de 4450". "CIERRE POR ENCIMA DE TODO" es una orden.
+_UN_NIVEL = (r"(?:POR\s+(?:ENCIMA|DEBAJO)|ARRIBA|ABAJO|ABOVE|BELOW)(?:\s+DE)?\s+"
+             r"(?:(?:LOS?|LAS?|EL|DEL)\s+)?(?:\d|NIVEL|SOPORTE|RESISTENCIA|ZONA|RANGO)")
+_ANALISIS_DE_CIERRE = (
+    r"(?!\s+(?:" + _UN_NIVEL + r"|LA\s+(?:SEMANA|VELA|SESION)|H\d|\d+H|D1|W1))"
+)
 _CLOSE_RE = re.compile(
-    r"\b(?:CLOSE|CLOSED|CIERRE|CIERREN|CERRAR|EXIT|SALIR|CANCEL|CANCELAR)\b"
+    r"\b(?:CLOSE|CLOSED|CERRAR)\b" + _ANALISIS_DE_CIERRE +
+    r"|\b(?:CIERREN|EXIT|SALIR|CANCEL|CANCELAR)\b"
+    r"|(?<!UN )(?<!EL )(?<!DEL )(?<!AL )(?<!SU )(?<!ESTE )(?<!BUEN )(?<!OTRO )"
+    r"(?<!NUESTRO )\bCIERRE\b"
+    r"(?!\s+(?:DE\s+(?:LA\s+|UNA\s+|\d+\s*)?(?:VELA|SEMANA|MERCADO|SESION|DIA|MES|ANO|H\b)"
+    r"|DIARIO|SEMANAL|MENSUAL|ANUAL|DEL\s+(?:DIA|MES|ANO|MERCADO|VIERNES)"
+    r"|DEL\s+ORO\s+(?:POR|EN|ARRIBA|ABAJO)\b|DE\s+(?:HOY|AYER)|" + _UN_NIVEL + r"|CONFIRMADO"
+    r"|EN\s+(?:H\d|\d+H|TP|BE|GANANCIA|PERDIDA|\d)|H\d|\d+H|D1|W1))"
+    # El pedido con sustantivo, que el articulo de arriba dejaba afuera.
+    r"|\b(?:PROCEDAN|PROCEDA|HAGAN|HAGA|REALICEN|REALICE|EJECUTEN|EJECUTE)\s+"
+    r"(?:EL\s+|AL\s+)?CIERRE\b"
 )
 # MOVA, MUEVA, MUEVAN, MUEVE...: el canal escribe en espanol de traductor
 # ("MOVA SU SL A SER EL SL RESULTANTE ES 4187", 30/09). El verbo tiene que
@@ -245,11 +267,126 @@ _BREAKEVEN_RE = re.compile(r"\b(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN)\b")
 # nueva, es el nombre de una que ya esta abierta. Antes el BUY y el 4187 se
 # leian como una apertura sin simbolo y se rechazaba: el breakeven no se
 # aplicaba nunca. Se saca del texto antes de buscar lado y precios, y queda
-# guardado para que la gestion toque SOLO esa posicion.
+# guardado para que la gestion toque SOLO esa posicion. NEGOCIO es del 13/10:
+# 'PARA EL NEGOCIO "COMPRA 4184" ESTABLECER SL 4184'.
 _REFERENCIA_POSICION_RE = re.compile(
-    r"\b(?:POSICION|POSITION|OPERACION|ORDEN|TRADE)\s*(?:DE\s+|EN\s+)?[\"'`]*\s*"
+    r"\b(?:POSICION|POSITION|OPERACION|ORDEN|TRADE|NEGOCIO)\s*(?:DE\s+|EN\s+)?[\"'`]*\s*"
     r"(BUY|SELL|COMPRA|VENTA)\s+(\d+(?:[.,]\d+)?)\s*[\"'`]*"
 )
+# ESTABLECER, desde el 13/10: 'PARA EL NEGOCIO "COMPRA 4184" ESTABLECER SL
+# 4184' y 'ESTABLEZCA AMBOS SL EN LA MARCA 4170'. Sin el verbo esos breakeven
+# se leian como aperturas sin simbolo y el stop no se movia.
+#
+# Va APARTE de _MOVE_SL_RE y en una forma estrecha: el verbo, el SL, y en
+# seguida el precio o el BE. Y solo cuenta con la posicion nombrada o al
+# principio del mensaje. Suelto en cualquier lado convertia en orden la teoria
+# y el analisis ("es importante establecer su stop loss en 4150"): con una
+# sola posicion abierta, el stop se AGRANDABA (auditoria del 16/10).
+_ESTABLECER_SL_RE = re.compile(
+    r"\b(?:ESTABLECER|ESTABLEZCA|ESTABLEZCAN)\s+"
+    r"(?:(?:EL|SU|SUS|LOS|AMBOS|AMBAS|TODOS|TODAS)\s+)?"
+    r"(?:SL|STOP(?:\s*LOSS)?)\s*(?:EN|A|=|:)?\s*(?:LA\s+MARCA\s+(?:DE\s+)?)?"
+    r"(?=\d|(?:BE|B/E|BREAK\s*EVEN|BREAKEVEN)\b)"
+)
+_AL_EMPEZAR_RE = re.compile(r"(?m)^\W*$")
+
+# "NO CIERREN LA POSICION", "NO ESTABLEZCAN EL SL EN BE TODAVIA": un pedido
+# negado no es un pedido. Se mira solo la clausula -hasta la coma o el punto
+# anteriores-, para que "NO CIERREN, MUEVAN EL SL A BE" siga moviendo el stop.
+# Salvo las que piden lo contrario: "no olviden mover el SL a BE", "no duden en
+# cerrar", "no dejen de mover el stop" son ordenes, y perderlas es un breakeven
+# que no se aplica.
+_NEGACION_RE = re.compile(
+    r"\b(?:NO|NUNCA|JAMAS|NOT|DON'?\s?T)\b"
+    r"(?!(?:\s+(?:SE|TE|LES|LE|NOS|ME|DEBEN|DEBES|DEBEMOS|PUEDEN|HAY\s+QUE))*"
+    r"\s+(?:OLVID|DUD(?:EN|ES|E|AR)\b|DEJ\w*\s+DE\b|FORGET|HESITATE))"
+)
+# El canal junta oraciones sin puntuar ("YA NO HAY RIESGO MUEVAN EL SL A BE"):
+# PERO, ASI QUE y ENTONCES tambien cortan la clausula.
+_FIN_DE_CLAUSULA_RE = re.compile(r"[.,;:!?\n]|\b(?:PERO|ASI\s+QUE|ENTONCES|BUT)\b")
+# Con un imperativo, el NO lo niega solo si esta PEGADO ("NO CIERREN", "NO LO
+# MUEVAN") o atado con QUE/NI ("NO QUIERO QUE CIERREN"). "YA NO HAY RIESGO
+# MUEVAN EL SL" es una orden: el NO es de otra frase.
+_IMPERATIVO_RE = re.compile(
+    r"(?:MUEVAN|MUEVA|MOVA|MOVAN|CIERREN|CIERRE|COLOQUEN|COLOQUE|PON|ESTABLEZCAN|"
+    r"ESTABLEZCA|MOVE|CLOSE|EXIT|SET|BRING|TRAIL|CANCEL|TOMEN|TOME|TAKE)\b"
+)
+_RELLENO = (r"(?:(?:TODAVIA|AUN|YA|LO|LA|LOS|LAS|LE|LES|SE|ME|TE|NOS|YET|TO|DE|EL|SU|SUS|"
+            r"AMBOS|AMBAS|TODOS|TODAS|NUESTRO|NUESTROS|NUESTRA|THE|YOUR|A)\s+)*")
+_PEGADA_AL_VERBO_RE = re.compile(r"\s*" + _RELLENO)
+# Sin imperativo ("NO ESTABLEZCAN EL SL EN BE": lo que coincide es "SL EN BE"),
+# entre el NO y el pedido puede ir, ademas, el verbo de gestion que se niega.
+# "NO HAY RIESGO, SL A BE" o "NO ME GUSTA, CERRAR TODO" no niegan nada.
+_PEGADA_AL_PEDIDO_RE = re.compile(
+    r"\s*" + _RELLENO
+    + r"(?:(?:MUEV|MOV|ESTABLE|COLOQU|COLOC|PON|CIERR|CERR|TOM|SUB|BAJ|AJUST|SET|CLOSE|"
+      r"TAKE|PUT|BRING)\w*\s+" + _RELLENO + r")?")
+# "SI TODAVIA NO MOVIERON EL SL A BE, HAGANLO" y "QUIEN NO HAYA MOVIDO EL SL":
+# ese NO es de la condicion, no del pedido.
+_NO_DE_UNA_CONDICION_RE = re.compile(
+    r"\b(?:SI|QUIEN|QUIENES|IF)\s+(?:(?:TODAVIA|AUN|YA|STILL)\s+)?$")
+_ATADA_AL_VERBO_RE = re.compile(r"\b(?:QUE|NI|OR|NOR)\s*$")
+
+# Lo que sigue a una posicion nombrada cuando se la CUENTA, no se le pide
+# nada: 'la posicion "BUY 4185" se cerro en BE', '"BUY 4433": MANTENER EL SL'.
+_NARRA_LA_REFERENCIA_RE = re.compile(
+    r"\W*(?:SE\s+)?(?:CERRO|CERRARON|ALCANZO|TOCO|LLEGO|SALIO|FUE|ESTA\s+CERRAD\w*|"
+    r"MANTENER|MANTENGAN|MANTIENE|SIGUE|QUEDA)\b"
+)
+_MANTENER_RE = re.compile(
+    r"\W*(?:MANTENER|MANTENGAN|MANTIENE)\s+(?:EL|SU|SUS|LOS)\s+(?:SL|STOP)\b")
+_SL_CON_PRECIO_RE = re.compile(
+    r"\b(?:SL|STOP(?:\s*LOSS)?)\s*(?:EN|A|=|:)?\s*(?:LA\s+MARCA\s+(?:DE\s+)?)?"
+    r"(\d+(?:[.,]\d+)?)"
+)
+
+
+def _sin_negar(regex: re.Pattern, text: str) -> re.Match | None:
+    """La primera coincidencia de `regex` que es un pedido: no negada en su
+    clausula, y no una pregunta ("¿MOVEMOS EL SL A BE?")."""
+    for encontrada in regex.finditer(text):
+        siguiente = _FIN_DE_CLAUSULA_RE.search(text, encontrada.end())
+        if siguiente is not None and siguiente.group(0) == "?":
+            continue
+        inicio = 0
+        for fin in _FIN_DE_CLAUSULA_RE.finditer(text, 0, encontrada.start()):
+            inicio = fin.end()
+        negaciones = [n for n in _NEGACION_RE.finditer(text, inicio, encontrada.start())
+                      if not _NO_DE_UNA_CONDICION_RE.search(text, inicio, n.start())]
+        if not negaciones:
+            return encontrada
+        entre = text[negaciones[-1].end():encontrada.start()]
+        pegada = (_PEGADA_AL_VERBO_RE if _IMPERATIVO_RE.match(text, encontrada.start())
+                  else _PEGADA_AL_PEDIDO_RE)
+        if not pegada.fullmatch(entre) and not _ATADA_AL_VERBO_RE.search(entre):
+            return encontrada
+    return None
+
+
+# Sin posicion nombrada, ESTABLECER cuenta solo si el pedido termina en el
+# precio o el BE: "ESTABLECER SL 4150 ES LO QUE YO HARIA" y "ESTABLEZCAN EL SL
+# EN 4400 SI QUIEREN DARLE ESPACIO" son consejos, y con una sola posicion
+# abierta agrandaban el stop.
+_TERMINA_EN_EL_PRECIO_RE = re.compile(
+    r"\s*(?:\d+(?:[.,]\d+)?|BE|B/E|BREAK\s*EVEN|BREAKEVEN)\s*(?:\(BE\))?\s*"
+    r"(?:[.!]\s*)?(?:\n|$)"
+)
+
+
+def _establecer_como_mover(text: str, *, con_referencia: bool) -> str:
+    """Si el mensaje pide ESTABLECER el SL en una forma valida, lo reescribe con
+    MOVER, que es lo que entiende el resto del parser."""
+    pedido = _sin_negar(_ESTABLECER_SL_RE, text)
+    if pedido is None:
+        return text
+    if not con_referencia and (
+            not _AL_EMPEZAR_RE.match(text[text.rfind("\n", 0, pedido.start()) + 1:pedido.start()])
+            or not _TERMINA_EN_EL_PRECIO_RE.match(text, pedido.end())):
+        return text
+    verbo = pedido.group(0).split()[0]
+    return text[: pedido.start()] + "MOVER" + text[pedido.start() + len(verbo):]
+
+
 _HALF_RE = re.compile(r"\b(?:HALF|MITAD)\b")
 _PERCENT_RE = re.compile(r"(\d{1,3})\s*%")
 
@@ -276,7 +413,11 @@ def parse_signal(
     warnings: list[str] = []
 
     # --- Paso 1: gestion que nombra su posicion ("POSICION "BUY 4187"") ---
-    text, posicion_lado, posicion_entrada = _separar_referencia_a_posicion(text)
+    text, posicion_lado, posicion_entrada, todas_a_be = _separar_referencia_a_posicion(text)
+    if posicion_lado is None and not todas_a_be:
+        # 'ESTABLEZCA AMBOS SL EN LA MARCA 4170': sin posicion nombrada, solo
+        # al principio del mensaje.
+        text = _establecer_como_mover(text, con_referencia=False)
 
     # --- Paso 2: extraer datos duros --------------------------------------
     order_type, masked = _extract_order_type(text)
@@ -320,7 +461,10 @@ def parse_signal(
         warnings.append("Cierre parcial sin porcentaje explicito; se asume 50%")
 
     move_to_be = False
-    if event_type is EventType.MOVE_SL:
+    if event_type is EventType.MOVE_SL and todas_a_be:
+        # Un breakeven para cada posicion nombrada, cada una a su entrada.
+        stop_loss, move_to_be = None, True
+    elif event_type is EventType.MOVE_SL:
         move_to_be = bool(_BREAKEVEN_RE.search(masked)) and stop_loss is None
         if not move_to_be and stop_loss is None:
             warnings.append("MOVE_SL sin precio ni referencia a breakeven")
@@ -359,30 +503,61 @@ _GESTION_CON_DESTINO = {
 }
 
 
-def _separar_referencia_a_posicion(text: str) -> tuple[str, Side | None, float | None]:
-    """Saca del texto un 'POSICION "BUY 4187"' y devuelve a que posicion apunta.
+def _separar_referencia_a_posicion(
+    text: str,
+) -> tuple[str, Side | None, float | None, bool]:
+    """Saca del texto las 'POSICION "BUY 4187"' y dice a que posicion apunta.
 
-    Solo cuando el resto del mensaje es gestion (mover el stop, cerrar, un
-    parcial) y NO trae take profits. Una senal de apertura siempre trae TP, y
-    "TRADE BUY 4187 SL 4180 TP 4195" tiene que seguir siendo una apertura:
-    leerla como gestion perderia la senal entera.
+    Devuelve (texto, lado, entrada, todas_a_be). Solo cuando el resto del
+    mensaje es gestion (mover el stop, cerrar, un parcial) y NO trae take
+    profits. Una senal de apertura siempre trae TP, y "TRADE BUY 4187 SL 4180
+    TP 4195" tiene que seguir siendo una apertura: leerla como gestion perderia
+    la senal entera.
+
+    Con varias posiciones nombradas, se saltean las que el mensaje solo
+    CUENTA ('"COMPRA 4433" CERRO EN TP1. AHORA PARA EL NEGOCIO "COMPRA 4432"
+    ESTABLECER SL EN BE'): antes ganaba la primera, y el breakeven iba a la que
+    ya no estaba. Si quedan varias, no se elige una: se aplica a todas, como
+    antes; y si cada una tenia su SL en su propia entrada, es un breakeven para
+    cada una (todas_a_be).
     """
-    referencia = _REFERENCIA_POSICION_RE.search(text)
-    if referencia is None:
-        return text, None, None
+    referencias = list(_REFERENCIA_POSICION_RE.finditer(text))
+    if not referencias:
+        return text, None, None, False
 
-    sin_referencia = text[: referencia.start()] + " POSICION " + text[referencia.end() :]
+    sin_referencia = text
+    for referencia in reversed(referencias):
+        sin_referencia = (sin_referencia[: referencia.start()] + " POSICION "
+                          + sin_referencia[referencia.end():])
+    sin_referencia = _establecer_como_mover(sin_referencia, con_referencia=True)
     es_gestion = (
-        _MOVE_SL_RE.search(sin_referencia)
-        or _CLOSE_RE.search(sin_referencia)
-        or _PARTIAL_RE.search(sin_referencia)
+        _sin_negar(_MOVE_SL_RE, sin_referencia)
+        or _sin_negar(_CLOSE_RE, sin_referencia)
+        or _sin_negar(_PARTIAL_RE, sin_referencia)
     )
     _, _, _, take_profits = _extract_prices(_mask_symbols(sin_referencia))
     if not es_gestion or take_profits:
-        return text, None, None
+        return text, None, None, False
 
-    lado = Side.BUY if referencia.group(1) in {"BUY", "COMPRA"} else Side.SELL
-    return sin_referencia, lado, _to_float(referencia.group(2))
+    if len(referencias) == 1:
+        # Sola, es la destinataria aunque se la cuente ('LA POSICION "BUY
+        # 4185" LLEGO AL TP1, MUEVAN SU SL A 4185'), salvo que se pida
+        # mantenerla.
+        pedidas = [] if _MANTENER_RE.match(text, referencias[0].end()) else referencias
+    else:
+        pedidas = [r for r in referencias
+                   if not _NARRA_LA_REFERENCIA_RE.match(text, r.end())]
+    if not pedidas:
+        # Todas las nombradas se cuentan, ninguna se pide: no se toca nada.
+        return text, None, None, False
+    if len(pedidas) > 1:
+        entradas = {_to_float(r.group(2)) for r in pedidas}
+        stops = {_to_float(m.group(1)) for m in _SL_CON_PRECIO_RE.finditer(sin_referencia)}
+        return sin_referencia, None, None, bool(stops) and stops <= entradas
+
+    elegida = pedidas[0]
+    lado = Side.BUY if elegida.group(1) in {"BUY", "COMPRA"} else Side.SELL
+    return sin_referencia, lado, _to_float(elegida.group(2)), False
 
 
 # --------------------------------------------------------------------------
@@ -656,9 +831,9 @@ def _classify(
     # primero porque casi todas las reglas de abajo la consultan.
     looks_like_new_signal = side is not None and (stop_loss is not None or take_profits)
 
-    has_partial = bool(_PARTIAL_RE.search(text))
-    has_close = bool(_CLOSE_RE.search(text))
-    has_move_sl = bool(_MOVE_SL_RE.search(text))
+    has_partial = bool(_sin_negar(_PARTIAL_RE, text))
+    has_close = bool(_sin_negar(_CLOSE_RE, text))
+    has_move_sl = bool(_sin_negar(_MOVE_SL_RE, text))
     has_move_tp = _pide_mover_tp_normalizado(text)
 
     # --- 1) Gestion pura -------------------------------------------------

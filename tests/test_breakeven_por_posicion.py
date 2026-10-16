@@ -104,3 +104,63 @@ def test_si_el_lado_no_coincide_no_toca_nada(tmp_path):
 
     assert resultado["status"] == "rechazada", resultado
     assert sorted(p.sl for p in terminal.posiciones_abiertas()) == antes
+
+
+# --------------------------------------------------------------------------
+# Las palabras nuevas del 13/10: NEGOCIO, OPERACION y ESTABLECER
+# --------------------------------------------------------------------------
+
+# Tal cual los mostro el informe de la real del 15/10. El bot los rechazo como
+# aperturas sin simbolo y el stop no se movio; el 14 y el 15/10 la real perdio
+# -137 en cuatro stops.
+DEL_13_10 = [
+    ('PARA EL NEGOCIO "COMPRA 4184" ESTABLECER SL 4184', 4184.0),
+    ('PARA EL NEGOCIO "COMPRA 4185" ESTABLECER SL 4185', 4185.0),
+    ('PARA LA OPERACIÓN "BUY 4153" ESTABLECER SL 4153', 4153.0),
+]
+
+
+def test_los_breakeven_del_13_10_son_mover_el_stop_de_esa_posicion():
+    for mensaje, entrada in DEL_13_10:
+        evento = parse_signal(mensaje)
+
+        assert evento.event_type is EventType.MOVE_SL, mensaje
+        assert evento.side is None, "el COMPRA de la referencia no es una senal nueva"
+        assert evento.stop_loss == entrada
+        assert (evento.posicion_lado, evento.posicion_entrada) == (Side.BUY, entrada)
+
+
+def test_establecer_con_precio_sin_posicion_mueve_el_stop():
+    evento = parse_signal("ESTABLEZCA AMBOS SL EN LA MARCA 4170")
+
+    assert evento.event_type is EventType.MOVE_SL
+    assert evento.stop_loss == 4170.0
+
+
+def test_establecer_sin_precio_ni_be_es_teoria_no_una_orden():
+    assert parse_signal(
+        "Establecer un stop loss siempre es importante para proteger tu cuenta") is None
+
+
+def test_los_relatos_con_la_posicion_nombrada_no_mueven_nada():
+    """Del mismo dia: cuentan, no piden. Siguen sin poder operar (sin simbolo)."""
+    for mensaje in [
+        'Así que chicos, la posición "BUY 4185" se cerró en BE Nos quedan 2 TPs '
+        'de la posición "BUY 4184"',
+        'Si acaso, esta es la posición para la operación "BUY 4184"',
+    ]:
+        evento = parse_signal(mensaje)
+        assert evento is None or evento.event_type is not EventType.MOVE_SL, mensaje
+
+
+def test_el_negocio_nombrado_va_a_breakeven_y_la_otra_no(tmp_path):
+    engine, store, terminal = dos_abiertas(tmp_path)
+    otra_antes = stop_de(store, terminal, 200)
+
+    resultado = send(engine, 'PARA EL NEGOCIO "COMPRA 4432" ESTABLECER SL 4432',
+                     message_id=300)
+
+    assert resultado["status"] == "sl_movido", resultado
+    nombrada = next(p for p in store.open_positions() if p.signal_message_id == 100)
+    assert stop_de(store, terminal, 100) == nombrada.entry_real
+    assert stop_de(store, terminal, 200) == otra_antes, "le movio el stop a la otra"

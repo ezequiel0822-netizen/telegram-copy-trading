@@ -5,10 +5,99 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-12 · v2.7.0 · 1146 tests · el último commit que describe
-es `b4833d4`, más este mismo cambio
+Actualizado: 2026-10-16 · v2.7.0 · 1224 tests · el último commit que describe
+es `17bb660`, más este mismo cambio
 
-**ESTADO ACTUAL (12/10) — leer esto antes que nada.**
+**LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
+
+**La real perdió −137.28 del 12 al 15/10** (`tct informe --horas 100
+--con-resultados`): 12 operadas, 5 TP1, 4 stops, 3 cerradas por el bot. Tres
+cosas distintas explican los stops grandes:
+
+- **Bug, arreglado hoy: un breakeven con palabras nuevas no se leía.** El 13/10
+  el canal escribió `PARA EL NEGOCIO "COMPRA 4184" ESTABLECER SL 4184` y `PARA
+  LA OPERACIÓN "BUY 4153" ESTABLECER SL 4153`. Faltaban `NEGOCIO` en la
+  referencia a la posición y `ESTABLECER` (y familia) en los verbos de mover el
+  stop: se leían como aperturas sin símbolo y el stop no se movía. Ahora son
+  MOVE_SL de esa posición (`parser.py`, `test_breakeven_por_posicion.py`).
+  **Ojo, el primer intento era peligroso** y lo agarraron dos revisores antes
+  de subirlo: con ESTABLECER suelto, "es importante establecer su stop loss
+  en 4150" movía el stop, y con UNA sola posición abierta lo AGRANDABA (8 → 26
+  puntos). Quedó estrecho: ESTABLECER cuenta solo con la posición nombrada o al
+  principio de una línea, y seguido del SL y su precio o BE
+  (`_ESTABLECER_SL_RE`, `_establecer_como_mover`). De paso se arreglaron tres
+  cosas que venían de antes (`test_lo_que_no_es_una_orden.py`):
+  - **Un pedido negado no es un pedido** (`_sin_negar`): "NO CIERREN LA
+    POSICIÓN, ESPERAMOS TP2" cerraba todas las posiciones de oro, y "NO
+    ESTABLEZCAN EL SL EN BE" movía todo a BE. El NO niega solo si está
+    PEGADO al pedido (como mucho un verbo de gestión y artículos en el
+    medio). La primera versión miraba toda la cláusula y, como el canal junta
+    oraciones sin puntuar, perdía breakevens ("YA NO HAY RIESGO MUEVAN EL SL A
+    BE"). "SI NO…", "QUIEN NO…", "no olviden / no duden / no dejen de" no
+    niegan; las preguntas ("¿MOVEMOS EL SL A BE?") no son órdenes; también
+    vale para los parciales. Medido contra 324 mensajes del estilo del canal:
+    se equivoca en 57 (el código anterior en 141) y en ninguno hace peor que
+    el anterior (`test_ordenes_con_un_no_cerca.py`).
+  - **CIERRE como sustantivo no cierra**: "un cierre de vela por encima de
+    4450", "cierre diario", "cierre semanal" cerraban todo.
+  - **Con varias posiciones nombradas** se saltean las que el mensaje solo
+    cuenta ("cerró en TP1", "mantener"); si quedan varias, breakeven a cada
+    una en su entrada, en vez de la primera que aparece.
+- **Deslizamiento de Bullwaves, no del bot.** 14/10 BUY 4150.51 con SL **4135**
+  (del canal): cerró en **4122.35**, 12.65 puntos peor, en la caída rápida del
+  oro (−84.48 en vez de ~−46). Visto en su historial de MT5.
+- **El canal pasó a stops más anchos**: 15-16 puntos el 14 y 15/10 (antes ~8)
+  y agrega posiciones ("VAMOS A ABRIR UNA POSICIÓN ADICIONAL").
+
+**Operaciones de 0.05 que NO son del bot** en la cuenta real: 14/10 19:04,
+19:25, 20:00 y 15/10 01:13, 16:00-16:29 (hora del servidor, UTC+0), unos −105
+en total. El bot opera 0.03 y el canal no mandó señales a esas horas. Se le
+preguntó si son suyas (a mano u otro grupo); sin respuesta todavía.
+
+**La plata según el pie del historial de MT5 (16/10):** Deposit 722, Withdrawal
+−218, Profit −199.12, Credit 447.29, Balance 752.17. Lo suyo, sin crédito:
+**304.88** (es el "305" que muestra el repaso). OJO: el contexto decía
+"depósito 500"; 722 sugiere 222 más depositados después. Sin confirmar.
+
+**`tct repaso` de 40 días sobre el canal (corrido el 16/10):** 74 operadas,
+40 de 67 ganadas (**60%**) contra un equilibrio de **64%** (gana 12.68, pierde
+22.62 a 0.03); a 0.03 **−106.29**, peor caída −182.40 (60% de 305); a 0.05 la
+caída sería el 100%. Por su propia regla (subir el lote solo con el repaso
+≥65%) el lote no sube; con 304.88 propios la regla de riesgo constante da
+menos de 0.03. Se le dijo con números y que la decisión es suya. El repaso NO
+modela deslizamiento: el 14/10 calculó −57 y la real perdió −84.
+
+**Hecho hoy, además del breakeven:**
+
+- `tct repaso --chat <numero o @nombre>`: mide OTRO grupo sin tocar el `.env`
+  (para decidir antes de conectarlo). Usa el lote, filtros, símbolos y precios
+  del `.env` que se le pase.
+- El teléfono mal escrito en la primera sesión del repaso (le pasó: puso un
+  número sin código de país) ya no corta con un traceback en inglés: explica
+  el formato (`+52` y los 10 dígitos) y lo vuelve a pedir.
+- `tests/test_volumen.py` forzaba el candado de Linux y fallaba siempre en
+  Windows (ya fallaba en `main`): ahora usa el de la máquina.
+
+**Lo que quiere hacer después: dos grupos más en la demo de FxPro.** Tiene
+otros 2 grupos de Telegram (con la cuenta de Jezrel, la misma de los tres
+bots) que operan varios símbolos. Plan acordado, en orden:
+
+1. Medirlos con `tct repaso --env-file .env.segunda --dias 40 --detalle --chat
+   <id>` (precios de FxPro y sus 12 símbolos; la sesión `_repaso` de la
+   segunda pide teléfono y código la primera vez). Los ids salen de `tct chats
+   --env-file .env.segunda`.
+2. **Antes de conectar más de un grupo a un mismo bot hace falta un cambio de
+   código que todavía NO está:** las posiciones no guardan de qué grupo vinieron
+   (`OpenPosition` no tiene chat), `find_positions` filtra solo por símbolo, y
+   las respuestas se buscan solo por número de mensaje (`risk.py`,
+   `evaluate_management`), que se repite entre grupos. Con tres grupos, un
+   "cerrar" o un "mover SL" de uno tocaría las posiciones de los otros, y el
+   informe tampoco separa por grupo.
+3. Solo los que den bien, a `TELEGRAM_SOURCE_CHATS` de `.env.segunda`, con el
+   lote de esa demo en 0.03 (`tct cambiar --env-file .env.segunda
+   DEFAULT_LOT=0.03 MAX_LOT=0.03`, con ese bot cerrado).
+
+**ESTADO AL 12/10.**
 
 **Qué corre.** Tres bots en su PC Windows, cada uno con su `.env`, sus datos,
 su sesión de Telegram y su MetaTrader: `demo` (`.env`, MetaQuotes), `fxpro`
@@ -69,8 +158,9 @@ llegaron al 101-137% del stop del canal son los que perdieron.
 
 **Pendiente, en orden.**
 
-1. **`tct repaso --env-file .env.real --dias 40 --detalle`**: todavía no lo
-   corrió. Necesita el número de Telegram de la cuenta del bot (el código
+1. ~~**`tct repaso --env-file .env.real --dias 40 --detalle`**~~ **Hecho el
+   16/10**: 60% contra 64% de equilibrio, ver "Lo nuevo del 16/10". Antes no lo
+   había corrido. Necesita el número de Telegram de la cuenta del bot (el código
    llega a la app de Telegram, no por SMS); tiene otra cuenta en la versión
    en inglés del grupo pero prefirió esperar para medir el mismo canal. Con
    eso se decide el lote.

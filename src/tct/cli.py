@@ -2361,6 +2361,14 @@ def cmd_repaso(args: argparse.Namespace) -> int:
     if not args.verbose:
         # El motor cuenta cada senal en el log; aca solo importa el resumen.
         logging.getLogger("tct").setLevel(logging.WARNING)
+    if getattr(args, "chat", None):
+        # Otro grupo, sin tocar el .env: para medirlo ANTES de conectarlo a un
+        # bot (16/10). El resto -lote, filtros, simbolos, precios- sigue siendo
+        # el de ese .env.
+        import dataclasses
+
+        otros = [c.strip() for c in args.chat.split(",") if c.strip()]
+        settings = dataclasses.replace(settings, telegram_source_chats=otros)
     if not settings.telegram_source_chats:
         print("No hay ningun chat configurado en TELEGRAM_SOURCE_CHATS.")
         return 1
@@ -2393,7 +2401,14 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
     print("\n  Telegram usa una sesion aparte, para no tocar la del bot. La")
     print("  PRIMERA vez te pide el telefono y el codigo que llega a la app.\n")
 
-    mensajes = await fetch_history(settings, dias)
+    from tct.telegram.reader import TelefonoInvalido
+
+    try:
+        mensajes = await fetch_history(settings, dias)
+    except TelefonoInvalido:
+        print("  No se entro a Telegram: el telefono no fue aceptado. Volve a correr el")
+        print("  comando y escribilo completo, con + y el codigo de pais.")
+        return 1
     if not mensajes:
         print("  No llego ningun mensaje de ese rango.")
         return 1
@@ -3178,6 +3193,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Lotes para comparar el resultado y la peor caida")
     repaso.add_argument("--detalle", action="store_true",
                         help="Mostrar cada senal con como habria terminado")
+    repaso.add_argument("--chat", default=None,
+                        help="Otro grupo en vez del del .env: su numero (de 'tct chats') o "
+                             "@nombre. Para medirlo antes de conectarlo")
     run = sub.add_parser("run", parents=[comunes], help="Arranca el bot")
     run.add_argument(
         "--esperar-mt5", type=int, default=0, dest="esperar_mt5", metavar="SEGUNDOS",

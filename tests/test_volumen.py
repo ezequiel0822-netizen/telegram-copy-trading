@@ -119,8 +119,13 @@ def test_con_el_bot_andando_no_corre(tmp_path, monkeypatch, capsys):
     import tct.lockfile
 
     settings = ajustes(tmp_path)
-    # El candado de Windows usa msvcrt: el candado corre como en Linux.
-    monkeypatch.setattr(tct.lockfile, "sys", types.SimpleNamespace(platform="linux"))
+    # El candado corre con el de la maquina que corre los tests: fcntl en
+    # Linux y Mac, msvcrt en Windows. Forzar fcntl en Windows fallaba siempre.
+    try:
+        import fcntl  # noqa: F401
+        monkeypatch.setattr(tct.lockfile, "sys", types.SimpleNamespace(platform="linux"))
+    except ImportError:
+        pass
     monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setattr(cli, "load_settings", lambda _ruta: settings)
     monkeypatch.setattr(cli, "_exigir_clave", lambda *_a: True)

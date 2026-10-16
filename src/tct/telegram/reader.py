@@ -296,6 +296,35 @@ async def fetch_recent_messages(
     return recolectados
 
 
+class TelefonoInvalido(RuntimeError):
+    """Telegram no acepto el telefono despues de varios intentos."""
+
+
+def _pedir_telefono() -> str:
+    return input("Telefono de la cuenta de Telegram, completo: con + y el codigo de "
+                 "pais, sin espacios (Mexico: +52 y los 10 digitos): ").strip()
+
+
+async def _entrar(client, intentos: int = 3) -> None:
+    """Abre la sesion; si el telefono esta mal escrito, lo explica y lo vuelve a pedir.
+
+    El 16/10 se escribio un numero sin el codigo de pais, y Telethon corto con
+    un 'PhoneNumberInvalidError' en ingles y treinta lineas de traceback.
+    Una sesion ya abierta no pide nada.
+    """
+    from telethon.errors import PhoneNumberInvalidError
+
+    for _ in range(intentos):
+        try:
+            await client.start(phone=_pedir_telefono)
+            return
+        except PhoneNumberInvalidError:
+            print("\n  Telegram no acepta ese telefono. Va COMPLETO: con + y el codigo de\n"
+                  "  pais, sin espacios ni guiones. Mexico: +52 y los 10 digitos.\n")
+    await client.disconnect()
+    raise TelefonoInvalido("Telegram no acepto el telefono.")
+
+
 async def fetch_history(settings, dias: int) -> list[tuple[str, dict[str, Any]]]:
     """Los mensajes de texto de los ultimos `dias` de los chats del .env, en orden.
 
@@ -316,7 +345,7 @@ async def fetch_history(settings, dias: int) -> list[tuple[str, dict[str, Any]]]
         settings.telegram_api_id,
         settings.telegram_api_hash,
     )
-    await client.start()
+    await _entrar(client)
 
     desde = datetime.now(timezone.utc) - timedelta(days=dias)
     recolectados: list[tuple[str, dict[str, Any]]] = []
