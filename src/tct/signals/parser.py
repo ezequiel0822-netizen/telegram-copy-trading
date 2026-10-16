@@ -59,12 +59,13 @@ _ALIASES_BY_LENGTH = sorted(SYMBOL_ALIASES, key=len, reverse=True)
 # texto hasta la etiqueta siguiente. Asi "TP: 2355 / 2365 / 2375" cae en un
 # solo chunk con 3 numeros, y "TP1 2355 TP2 2365" cae en dos chunks de 1.
 #
-# El `\d?(?![\d.,])` del indice de TP es deliberado y fragil de tocar: separa
-# "TP1 2355" (el 1 es el numero de target) de "TP 1.2700" y "TP 2330" (donde
-# ese digito es el precio). Solo se traga UN digito, y solo si despues no
-# sigue otro digito ni un separador decimal.
+# El `\d?(?![\d,]|\.\d)` del indice de TP es deliberado y fragil de tocar:
+# separa "TP1 2355" (el 1 es el numero de target) de "TP 1.2700" y "TP 2330"
+# (donde ese digito es el precio). Solo se traga UN digito, y solo si despues
+# no sigue otro digito ni un DECIMAL. Un punto suelto si: "TP1. 4154" (Gold
+# Signals 98% Sure, 16/10) no se leia como TP y la senal se rechazaba.
 _LABEL_RE = re.compile(
-    r"(?P<TP>\b(?:TAKE\s*PROFITS?|TARGETS?|OBJETIVOS?|TPS?|T/P)\s*\d?(?![\d.,]))"
+    r"(?P<TP>\b(?:TAKE\s*PROFITS?|TARGETS?|OBJETIVOS?|TPS?|T/P)\s*\d?(?![\d,]|\.\d))"
     r"|(?P<SL>\b(?:STOP\s*LOSS|STOPLOSS|SL|S/L|STOP)\b)"
     # El "@" solo cuenta como etiqueta si lo sigue un numero ("BUY @ 2345").
     # Sin ese lookahead, un @usuario del pie del mensaje ("@gold2345") pisaba
@@ -176,6 +177,9 @@ _RESULTADO_RE = re.compile(
     r"\b(?:CERRAD[AO]S?|RESULTADOS?|ALCANZAD[AO]S?|CONSEGUID[AO]S?|LOGRAD[AO]S?|"
     r"GANANCIAS?|PROFITS?|PERDIDAS?|HIT|REACHED|SECURED|CLOSED)\b"
     r"|[+-]\s*\d+\s*PIPS"
+    # "TARGET 1 COMPLETE 330+ PIPS DONE", "Gold Sell Running 260+ Pips": el
+    # resultado de una senal, no una nueva (16/10).
+    r"|\d+\s*\+\s*PIPS"
 )
 
 # Verbos que solo aparecen CONTANDO algo, nunca pidiendolo. Son primera
@@ -450,6 +454,14 @@ def parse_signal(
     if event_type is None:
         return None
 
+    # Una publicidad no es una orden. Los canales "gratis" que venden un VIP
+    # mezclan verbos de gestion en el texto ("aprender a ... cerrar posiciones
+    # como corresponde", 16/10) y se leian como CERRAR. Una orden de gestion
+    # es corta y no trae un @usuario ni un link para escribirle a alguien: hacen
+    # falta las DOS cosas (6+ lineas y el contacto) para no perder una orden.
+    if event_type in _GESTION_CON_DESTINO and _es_publicidad(text):
+        return None
+
     # La referencia solo sirve para gestionar. Si con todo el mensaje a la
     # vista no salio gestion, no se arrastra a otra cosa.
     if event_type not in _GESTION_CON_DESTINO:
@@ -496,6 +508,14 @@ def parse_signal(
         source=source,
         warnings=warnings,
     )
+
+
+_PUBLICIDAD_RE = re.compile(r"@\w{3,}|HTTPS?://|\bT\.ME/")
+
+
+def _es_publicidad(text: str) -> bool:
+    lineas = [linea for linea in text.splitlines() if linea.strip()]
+    return len(lineas) >= 6 and bool(_PUBLICIDAD_RE.search(text))
 
 
 _GESTION_CON_DESTINO = {
@@ -575,6 +595,9 @@ def _normalize(message: str) -> str:
     text = unicodedata.normalize("NFKD", message)
     text = "".join(ch for ch in text if ord(ch) < 128 or ch == "\n")
     text = text.upper()
+    # "DON,T CLOSE YOUR BUY": la coma en lugar del apostrofo cortaba la frase
+    # y el CLOSE quedaba sin negar (16/10).
+    text = re.sub(r"\b(DON|DOESN|DIDN|CAN|WON|ISN|AREN)[,`]\s?T\b", r"\1'T", text)
     text = re.sub(r"[*_`~|]+", " ", text)          # markdown
     text = re.sub(r"[–—]", "-", text)     # guiones largos
     text = re.sub(r"[ \t]+", " ", text)
@@ -679,10 +702,19 @@ def _mask_symbols(text: str) -> str:
     return masked
 
 
+# "LARGO" / "CORTO" como encabezado de la senal (Sebastian | Banco Plata,
+# 16/10). Solo SOLOS en su linea: en una frase son "a largo plazo" o "un
+# camino corto", y leerlos como lado inventaria senales.
+_LADO_EN_SU_LINEA_RE = re.compile(r"(?m)^\W*(LARGO|CORTO)\W*$")
+
+
 def _extract_side(text: str) -> Side | None:
     match = _SIDE_RE.search(text)
     if not match:
-        return None
+        encabezado = _LADO_EN_SU_LINEA_RE.search(text)
+        if encabezado is None:
+            return None
+        return Side.BUY if encabezado.group(1) == "LARGO" else Side.SELL
     token = match.group(1)
     return Side.SELL if token in {"SELL", "SHORT", "VENTA"} else Side.BUY
 

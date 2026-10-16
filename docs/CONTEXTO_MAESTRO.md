@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-16 · v2.7.0 · 1233 tests · el último commit que describe
+Actualizado: 2026-10-16 · v2.7.0 · 1252 tests · el último commit que describe
 es `17bb660`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
@@ -104,6 +104,39 @@ modela deslizamiento: el 14/10 calculó −57 y la real perdió −84.
   el formato (`+52` y los 10 dígitos) y lo vuelve a pedir.
 - `tests/test_volumen.py` forzaba el candado de Linux y fallaba siempre en
   Windows (ya fallaba en `main`): ahora usa el de la máquina.
+
+**Los 16 grupos medidos (repaso de 40 días, 16/10, con el umbral ya
+arreglado):** solo dos dieron positivo, **XAUUSD TRADING ZONE** (+79.50, pero
+operó 13 y dijo NO a 89) y **GOLD SIGNAL USA** (+48.81, 18 operadas / 44 NO, y
+sin señales en texto desde el 17/09). Los dos avisan primero "SELL NOW" sin
+precios y mandan la señal completa 2-3 minutos después, cuando el precio ya se
+fue: el filtro de entrada tardía la rechaza con razón (mide al borde de la zona,
+no al medio). **No son copiables tal como escriben.** Otros 7 grupos el bot no
+los entendía; con `tct mensajes` se vio por qué: 5 mandan las señales como
+IMAGEN o son pronósticos sin SL (SignalProvider, ProSignalsFx, TradingForexSP,
+Supply and Demand Snipper, ORO/DÓLAR) y no tiene arreglo leyendo texto. Los
+otros dos sí escriben todo en texto, con otra forma, y **ahora se leen**
+(`test_formatos_de_otros_grupos.py`):
+
+- **Gold Signals 98% Sure** (`-1001920682501`): "TP1. 4154". El punto después
+  del número de TP cortaba la etiqueta y no leía ningún TP. Ahora el índice
+  acepta un punto suelto, nunca un decimal ("TP 1.2700" sigue siendo el precio
+  1.27). También usa el "Sell Now" previo.
+- **Sebastián | Banco Plata** (`-1003831574671`): el lado es "LARGO" / "CORTO"
+  solo en la primera línea. Sin lado, el "Stop: 4158.26" se leía como UPDATE
+  del stop. Cuenta solo si está SOLO en su línea ("a largo plazo" no es lado).
+- Lo que mandan que no es señal: "TARGET 4 COMPLETE 330+ PIPS DONE" se leía
+  como apertura con TP 330 (ahora `\d+\+ PIPS` es un resultado); una publicidad
+  con "cerrar posiciones" adentro se leía como CERRAR (ahora una gestión con
+  6+ líneas Y un @usuario o link es publicidad; una orden corta con contacto
+  sigue siendo orden); "Don,t close" con coma por apóstrofo cerraba.
+- Comparado contra el parser anterior: de 2526 textos de los tests y los
+  corpus solo cambian estos casos, y de 240 mensajes reales de los 7 grupos, 25
+  (todos a propósito). El canal de David se lee igual.
+- **Ojo para el repaso de estos dos:** sus señales salen "(editado)" en
+  Telegram. El repaso ve la versión FINAL; en vivo el bot ve la primera y
+  después la corrección (dentro de `VENTANA_DE_CORRECCION`). Si la primera
+  versión no traía SL o TP, en vivo puede salir distinto.
 
 **Lo que quiere hacer después: dos grupos más en la demo de FxPro.** Tiene
 otros 2 grupos de Telegram (con la cuenta de Jezrel, la misma de los tres
