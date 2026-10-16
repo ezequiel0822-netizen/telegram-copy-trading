@@ -93,3 +93,33 @@ def test_despues_de_tres_intentos_corta_con_un_mensaje_claro(capsys):
 
     assert cliente.intentos == 3
     assert cliente.desconectado
+
+
+def correr_chats(monkeypatch, tmp_path, repaso):
+    settings = build_settings(tmp_path, telegram_session_name="tct_fxpro")
+    visto = {}
+
+    async def chats_falso(ajustes, limit):
+        visto["sesion"] = ajustes.telegram_session_name
+        return [{"id": -1001234567890, "type": "grupo", "title": "Otro grupo"}]
+
+    monkeypatch.setattr(cli, "load_settings", lambda _ruta: settings)
+    monkeypatch.setattr("tct.telegram.reader.list_available_chats", chats_falso)
+    codigo = cli.cmd_chats(argparse.Namespace(env_file=".env.segunda", verbose=False,
+                                              limit=60, repaso=repaso))
+    return codigo, visto
+
+
+def test_chats_con_repaso_entra_con_la_sesion_del_repaso(monkeypatch, tmp_path):
+    """La otra cuenta de Telegram, la que esta en los grupos a medir: un solo
+    login sirve para listar los grupos y para el repaso."""
+    codigo, visto = correr_chats(monkeypatch, tmp_path, True)
+
+    assert codigo == 0
+    assert visto["sesion"] == "tct_fxpro_repaso"
+
+
+def test_chats_sin_repaso_sigue_con_la_sesion_del_bot(monkeypatch, tmp_path):
+    _, visto = correr_chats(monkeypatch, tmp_path, False)
+
+    assert visto["sesion"] == "tct_fxpro"

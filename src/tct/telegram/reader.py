@@ -394,7 +394,7 @@ async def list_available_chats(settings, limit: int = 60) -> list[dict[str, Any]
         settings.telegram_api_id,
         settings.telegram_api_hash,
     )
-    await client.start()
+    await _entrar(client)
     try:
         rows: list[dict[str, Any]] = []
         async for dialog in client.iter_dialogs(limit=limit):

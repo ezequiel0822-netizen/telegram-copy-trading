@@ -1955,7 +1955,7 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_chats(args: argparse.Namespace) -> int:
-    from tct.telegram.reader import list_available_chats
+    from tct.telegram.reader import TelefonoInvalido, list_available_chats
 
     settings = load_settings(args.env_file)
     setup_logging(verbose=args.verbose)
@@ -1965,7 +1965,22 @@ def cmd_chats(args: argparse.Namespace) -> int:
         print("Se obtienen gratis en https://my.telegram.org -> API development tools")
         return 1
 
-    rows = asyncio.run(list_available_chats(settings, limit=args.limit))
+    if getattr(args, "repaso", False):
+        # La sesion del repaso, no la del bot: puede ser OTRA cuenta de
+        # Telegram, la que esta en los grupos que se quieren medir (16/10).
+        # Asi se entra una sola vez y sirve para los dos comandos.
+        import dataclasses
+
+        settings = dataclasses.replace(
+            settings, telegram_session_name=f"{settings.telegram_session_name}_repaso")
+        print("Con la sesion del repaso (la primera vez pide telefono y codigo).")
+
+    try:
+        rows = asyncio.run(list_available_chats(settings, limit=args.limit))
+    except TelefonoInvalido:
+        print("No se entro a Telegram: el telefono no fue aceptado. Volve a correr el")
+        print("comando y escribilo completo, con + y el codigo de pais.")
+        return 1
     print(f"\n{'ID':>16}  {'TIPO':<8}  TITULO")
     print("-" * 72)
     for row in rows:
@@ -3164,6 +3179,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     chats = sub.add_parser("chats", parents=[comunes], help="Lista tus chats de Telegram con sus IDs")
     chats.add_argument("--limit", type=int, default=60)
+    chats.add_argument("--repaso", action="store_true",
+                       help="Con la sesion de 'tct repaso' (puede ser otra cuenta de Telegram), "
+                            "para ver los grupos que se quieren medir")
 
     test = sub.add_parser("test", parents=[comunes], help="Prueba el parser con un mensaje")
     test.add_argument("message", nargs="*", help="Mensaje (si se omite, se lee de stdin)")

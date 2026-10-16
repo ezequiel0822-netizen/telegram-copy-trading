@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-16 · v2.7.0 · 1224 tests · el último commit que describe
+Actualizado: 2026-10-16 · v2.7.0 · 1226 tests · el último commit que describe
 es `17bb660`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
@@ -77,7 +77,12 @@ modela deslizamiento: el 14/10 calculó −57 y la real perdió −84.
 
 - `tct repaso --chat <numero o @nombre>`: mide OTRO grupo sin tocar el `.env`
   (para decidir antes de conectarlo). Usa el lote, filtros, símbolos y precios
-  del `.env` que se le pase.
+  del `.env` que se le pase. Si el número empieza con `-`, escribirlo pegado:
+  `--chat=-100...` (y sin `<` `>`: en cmd son redirecciones).
+- `tct chats --repaso`: lista los grupos con la sesión del repaso, no la del
+  bot. Los grupos a medir están en OTRO número de Telegram (no en Jezrel): con
+  `--env-file .env.segunda`, la sesión `_repaso` de la segunda quedó para ese
+  otro número, y la de `.env.real` sigue en Jezrel (para medir a David).
 - El teléfono mal escrito en la primera sesión del repaso (le pasó: puso un
   número sin código de país) ya no corta con un traceback en inglés: explica
   el formato (`+52` y los 10 dígitos) y lo vuelve a pedir.
