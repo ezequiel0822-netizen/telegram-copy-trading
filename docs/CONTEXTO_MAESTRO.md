@@ -161,6 +161,31 @@ otros dos sí escriben todo en texto, con otra forma, y **ahora se leen**
   Telegram. El repaso ve la versión FINAL; en vivo el bot ve la primera y
   después la corrección (dentro de `VENTANA_DE_CORRECCION`). Si la primera
   versión no traía SL o TP, en vivo puede salir distinto.
+- **Su repaso de 40 días (16/10, a 0.03, FxPro): ninguno de los dos.** Tres
+  revisores buscaron un error del repaso que los hiciera ver peor y no lo hay;
+  si algo, salen MEJOR que en vivo (sin deslizamiento, sin demora).
+  - Sebastián: 95 operadas, 64% ganadas contra 66.5% necesario, −82.80, peor
+    caída −297 (52% de los 570 de la demo). TP1 a ~4.3 puntos y SL a ~8.5: es
+    la forma del canal. Con 95 operaciones el 64 contra 66.5 está dentro del
+    ruido: en el mejor caso empata, en vivo probablemente pierde. Además sus
+    publicidades cortas ("se movió a breakeven", "cerrar posiciones como
+    corresponde" en menos de 6 líneas) se leerían como MOVE_SL / CLOSE sin
+    símbolo, y en un bot compartido tocarían las posiciones de los otros
+    grupos. Las "10 recuperadas de una edición" de esa corrida son
+    publicidades que `limpiar_resultado` convirtió en aperturas sin SL (todas
+    rechazadas): ninguna de las 95 operadas vino de ahí.
+  - Gold Signals: 17 operadas de 51 señales completas, 82% contra 82%, +4.17.
+    Las 34 rechazadas por "lejos del precio real" son reales (fecha original,
+    precio medio, zona bien leída, el NOW no deja estado), pero NO por llegar
+    tarde: las rechazadas llegaron 1.9 min después del NOW y las operadas 3.1.
+    Los precios del canal ya están detrás del de FxPro cuando los manda (o su
+    feed es otro). Entrar con el NOW no cambia la cuenta: desde el precio del
+    NOW, TP1 + SL = 17 puntos en 46 de 47 pares, ~3 para ganar contra ~14 para
+    perder, hace falta ~82% igual. Medirlo (~200 líneas, solo repaso) solo
+    podría descartarlo; la función en vivo serían ~400 líneas + la separación
+    por grupo. No se hizo.
+  Esa misma revisión encontró el bug del cambio de hora del servidor (arreglado
+  en `3f4be53`, ver más arriba).
 
 **Lo que quiere hacer después: dos grupos más en la demo de FxPro.** Tiene
 otros 2 grupos de Telegram (con la cuenta de Jezrel, la misma de los tres
