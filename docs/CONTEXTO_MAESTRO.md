@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-16 · v2.7.0 · 1252 tests · el último commit que describe
-es `17bb660`, más este mismo cambio
+Actualizado: 2026-10-16 · v2.7.0 · 1272 tests · el último commit que describe
+es `20c313d`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
 
@@ -91,6 +91,30 @@ modela deslizamiento: el 14/10 calculó −57 y la real perdió −84.
   100 del oro) y todo contaba como breakeven. Ahora cada posición usa el de
   su símbolo (`_umbral_de_breakeven` en `repaso.py`). Los RESULTADOS en plata
   de esa corrida sí estaban bien; el % de ganadas, no. Hay que repetirla.
+- **Bug latente del repaso, arreglado antes de que muerda: el cambio de hora
+  del servidor.** El repaso medía la hora del servidor de MT5 UNA vez (con la
+  última operación del bot, o el último tick) y usaba ese desfase para los 40
+  días. FxPro y Bullwaves van en UTC+3 en verano y UTC+2 en invierno, y cambian
+  con Europa (**25/10/2026**). Un repaso que cruzara esa fecha, o uno corrido
+  después sobre fechas de antes, habría leído los precios de parte de los
+  mensajes con una hora de error: rechazos por entrada tardía que no eran y
+  stops o TP que no fueron. **Los repasos corridos hasta hoy no están
+  afectados** (40 días hacia atrás desde el 16/10 son todos de verano). Ahora
+  el desfase depende de la fecha (`HoraDelServidor` en `repaso.py`): se mide
+  como antes y las demás fechas salen de la regla de horario de verano
+  (`--horario europa`, por defecto; `eeuu` para un broker que cambia con
+  Nueva York; `fijo` para uno que no cambia). Se usa en los pedidos de ticks,
+  en las velas de 1 minuto y en el caché por hora. Dos controles: si el bot
+  operó también del otro lado de un cambio de hora, esa operación lo confirma
+  o, si dio lo mismo, se pasa a `fijo` solo; y un UTC+0 medido en verano (o
+  UTC+3 en invierno) no es de ningún servidor que cambie con Europa, así que
+  tampoco se corrige. El encabezado del repaso dice qué usó, por ejemplo
+  `En las fechas de estos mensajes: UTC+3 hasta 25/10, UTC+2 desde 25/10.`
+  (`test_repaso_cambio_de_hora.py`). **Sin confirmar:** más arriba las
+  operaciones manuales de Bullwaves se anotaron "hora del servidor, UTC+0",
+  y este arreglo parte de que Bullwaves va en UTC+3/UTC+2 como FxPro. Mirar
+  la línea `Hora del servidor de MT5:` del próximo repaso de `.env.real`: si
+  dice UTC+0, el control de arriba ya lo trata como `fijo`.
 - `tct mensajes --env-file .env.segunda --chat=<id,id,...> [--cantidad 40]`:
   los últimos mensajes de cada grupo, con lo que entiende el bot debajo de
   cada uno y marcando los que son solo imagen. Para decidir si vale la pena
@@ -243,7 +267,8 @@ pisaría el suyo.
 **Comandos que dejó esta etapa** (todos solo leen, ninguno manda órdenes):
 `tct informe --env-file .env.real --horas 200 --con-resultados`,
 `tct evaluar-stop --env-file .env.real --horas 200`,
-`tct repaso --env-file .env.real --dias 40 [--detalle] [--lotes 0.05,0.07,0.10]`.
+`tct repaso --env-file .env.real --dias 40 [--detalle] [--lotes 0.05,0.07,0.10]
+[--horario europa|eeuu|fijo]`.
 
 **Reglas de seguridad que siguen vigentes:** no pegar en el chat el
 `TELEGRAM_API_HASH` ni el contenido de ningún `.env`; los `.env` nunca van al
@@ -288,7 +313,9 @@ Repositorio: https://github.com/ezequiel0822-netizen/telegram-copy-trading
   (`<sesión>_repaso`, no toca la del bot; la primera vez pide teléfono y
   código) y pasa cada mensaje, en su hora, por el MISMO `Engine` con un
   `BrokerDeRepaso` que vive en el pasado sobre los ticks de MT5. La hora del
-  servidor se mide con una operación del bot (`desfase_del_servidor`); las
+  servidor se mide con una operación del bot (`desfase_del_servidor`) y,
+  desde el 16/10, cambia con la fecha (`HoraDelServidor`, ver "Lo nuevo del
+  16/10"); las
   señales editadas con el resultado se recuperan sacando esas líneas. Imprime
   % ganadas, % de equilibrio, peor racha, y resultado y peor caída por lote.
   Tests: `test_evaluar_stop.py`, `test_repaso.py`.

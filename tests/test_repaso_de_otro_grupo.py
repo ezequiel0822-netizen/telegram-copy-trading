@@ -21,7 +21,7 @@ def correr_repaso(monkeypatch, tmp_path, chat):
     settings = build_settings(tmp_path, telegram_source_chats=["-1004363872187"])
     visto = {}
 
-    async def repaso_falso(ajustes, dias, lotes, detalle):
+    async def repaso_falso(ajustes, dias, lotes, detalle, horario="europa"):
         visto["chats"] = ajustes.telegram_source_chats
         visto["sesion"] = ajustes.telegram_session_name
         return 0
@@ -125,7 +125,7 @@ def test_varios_grupos_se_miden_cada_uno_por_separado(monkeypatch, tmp_path, cap
     settings = build_settings(tmp_path, telegram_source_chats=["-1004363872187"])
     medidos = []
 
-    async def repaso_falso(ajustes, dias, lotes, detalle, resumen=None):
+    async def repaso_falso(ajustes, dias, lotes, detalle, resumen=None, horario="europa"):
         medidos.append(list(ajustes.telegram_source_chats))
         chat = ajustes.telegram_source_chats[0]
         if chat == "-1003":
@@ -199,7 +199,7 @@ def test_todo_el_repaso_queda_en_un_archivo(monkeypatch, tmp_path):
     """El detalle son cientos de lineas: la consola no deja copiarlo (16/10)."""
     settings = build_settings(tmp_path)
 
-    async def repaso_falso(ajustes, dias, lotes, detalle, resumen=None):
+    async def repaso_falso(ajustes, dias, lotes, detalle, resumen=None, horario="europa"):
         print("        mensaje : XAUUSD BUY 2650 SL 2640 TP 2660 \U0001F680")
         return 0
 

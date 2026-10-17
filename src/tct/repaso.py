@@ -33,7 +33,7 @@ import itertools
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from tct.brokers.base import Broker, OrderResult
@@ -56,6 +56,106 @@ def a_ms(fecha: datetime | str) -> int:
     return int(fecha.timestamp() * 1000)
 
 
+# --------------------------------------------------------------------------
+# La hora del servidor de MT5
+# --------------------------------------------------------------------------
+
+# Como cambia de hora el reloj del servidor. FxPro y Bullwaves van en UTC+3 en
+# verano y UTC+2 en invierno, y cambian con Europa: el ultimo domingo de marzo
+# y el ultimo de octubre, a la 01:00 UTC. Los que siguen el cierre de Nueva
+# York cambian con EE.UU.: el segundo domingo de marzo y el primero de
+# noviembre, a las 2 de la manana de alla. Los dos caen con el mercado cerrado.
+REGLAS = {
+    "europa": "el horario de verano de Europa",
+    "eeuu": "el horario de verano de EE.UU.",
+    "fijo": "sin cambio de horario",
+}
+
+
+def _domingo(anio: int, mes: int, cual: int) -> datetime:
+    """El domingo numero `cual` del mes (-1: el ultimo), a las 00:00 UTC."""
+    if cual > 0:
+        primero = datetime(anio, mes, 1, tzinfo=timezone.utc)
+        return primero + timedelta(days=(6 - primero.weekday()) % 7 + 7 * (cual - 1))
+    ultimo = datetime(anio + mes // 12, mes % 12 + 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
+    return ultimo - timedelta(days=(ultimo.weekday() - 6) % 7)
+
+
+def _verano(anio: int, regla: str) -> tuple[int, int]:
+    """Desde y hasta cuando (ms UTC) va el horario de verano ese anio."""
+    if regla == "europa":
+        return (a_ms(_domingo(anio, 3, -1) + timedelta(hours=1)),
+                a_ms(_domingo(anio, 10, -1) + timedelta(hours=1)))
+    # Las 2 de Nueva York: 07:00 UTC en marzo (todavia en invierno), 06:00 en noviembre.
+    return (a_ms(_domingo(anio, 3, 2) + timedelta(hours=7)),
+            a_ms(_domingo(anio, 11, 1) + timedelta(hours=6)))
+
+
+def en_verano(t_ms: int, regla: str) -> bool:
+    if regla == "fijo":
+        return False
+    desde, hasta = _verano(datetime.fromtimestamp(t_ms / 1000, tz=timezone.utc).year, regla)
+    return desde <= t_ms < hasta
+
+
+def _utc(desfase_ms: int) -> str:
+    return f"UTC{round(desfase_ms / HORA_MS):+d}"
+
+
+def _dia(t_ms: int, formato: str = "%d/%m") -> str:
+    return datetime.fromtimestamp(t_ms / 1000, tz=timezone.utc).strftime(formato)
+
+
+@dataclass(frozen=True)
+class HoraDelServidor:
+    """Cuanto adelanta el reloj del servidor de MT5 respecto de UTC, segun la fecha.
+
+    Era un solo numero para todo el repaso, medido una vez. Con 40 dias que
+    cruzan el cambio de hora (25/10/2026), o un repaso corrido despues sobre
+    fechas de antes, una parte de los mensajes se media contra el precio de
+    una hora antes o despues: entradas tardias que no eran, y stops o TP que
+    no fueron. Ahora el desfase de cada fecha sale de una medicion y de la
+    regla con la que cambia de hora ese servidor.
+    """
+
+    base_ms: int = 0  # fuera del horario de verano (con "fijo", el de siempre)
+    regla: str = "fijo"
+
+    def __post_init__(self) -> None:
+        if self.regla not in REGLAS:
+            raise ValueError(f"Regla de horario desconocida: {self.regla}")
+
+    @classmethod
+    def medida(cls, desfase_ms: int, cuando_ms: int, regla: str) -> HoraDelServidor:
+        """La de todo el ano, a partir de lo que se midio en `cuando_ms`."""
+        return cls(desfase_ms - (HORA_MS if en_verano(cuando_ms, regla) else 0), regla)
+
+    def desfase_ms(self, t_ms: int) -> int:
+        return self.base_ms + (HORA_MS if en_verano(t_ms, self.regla) else 0)
+
+    def cambios(self, desde_ms: int, hasta_ms: int) -> list[int]:
+        """Los cambios de hora entre esas dos fechas, en ms UTC."""
+        if self.regla == "fijo":
+            return []
+        anios = range(datetime.fromtimestamp(desde_ms / 1000, tz=timezone.utc).year,
+                      datetime.fromtimestamp(hasta_ms / 1000, tz=timezone.utc).year + 1)
+        return sorted(c for anio in anios for c in _verano(anio, self.regla)
+                      if desde_ms < c <= hasta_ms)
+
+    def describir(self, desde_ms: int, hasta_ms: int) -> str:
+        """Lo que se usa en esas fechas: "UTC+3 hasta 25/10, UTC+2 desde 25/10"."""
+        cambios = self.cambios(desde_ms, hasta_ms)
+        if not cambios:
+            return f"{_utc(self.desfase_ms(desde_ms))} en todo el repaso"
+        formato = "%d/%m" if _dia(desde_ms, "%Y") == _dia(hasta_ms, "%Y") else "%d/%m/%Y"
+        partes = [f"{_utc(self.desfase_ms(desde_ms))} hasta {_dia(cambios[0], formato)}"]
+        for cambio, siguiente in zip(cambios, cambios[1:]):
+            partes.append(f"{_utc(self.desfase_ms(cambio))} del {_dia(cambio, formato)} "
+                          f"al {_dia(siguiente, formato)}")
+        partes.append(f"{_utc(self.desfase_ms(cambios[-1]))} desde {_dia(cambios[-1], formato)}")
+        return ", ".join(partes)
+
+
 class FuenteDePrecios(Protocol):
     """Ticks (ms, bid, ask) ordenados, de `desde_ms` a `hasta_ms` inclusive."""
 
@@ -71,13 +171,14 @@ class PreciosDeMT5:
     asi (`horas_con_velas`) para decirlo en el resultado.
     """
 
-    def __init__(self, mt5: Any, simbolo: str, desfase_ms: int = 0) -> None:
+    def __init__(self, mt5: Any, simbolo: str, hora: HoraDelServidor | None = None) -> None:
         self._mt5 = mt5
         self.simbolo = simbolo
         # Los tiempos de MT5 son la hora del SERVIDOR contada como si fuera
-        # UTC. Los de Telegram son UTC de verdad. `desfase_ms` es la
-        # diferencia (servidor - UTC): se suma para pedir y se resta al leer.
-        self.desfase_ms = desfase_ms
+        # UTC. Los de Telegram son UTC de verdad. La diferencia (servidor -
+        # UTC) depende de la fecha: se suma para pedir y se resta al leer.
+        self.hora = hora or HoraDelServidor()
+        # Por hora UTC: el desfase ya esta aplicado a lo que se guarda.
         self._cache: dict[int, list[tuple[int, float, float]]] = {}
         self.horas_con_ticks = 0
         self.horas_con_velas = 0
@@ -102,9 +203,11 @@ class PreciosDeMT5:
 
     def _leer_hora(self, hora: int) -> list[tuple[int, float, float]]:
         mt5 = self._mt5
-        desde = datetime.fromtimestamp((hora * HORA_MS + self.desfase_ms) / 1000, tz=timezone.utc)
-        hasta = datetime.fromtimestamp(((hora + 1) * HORA_MS + self.desfase_ms) / 1000,
-                                       tz=timezone.utc)
+        # El cambio de hora es siempre en punto (01:00 UTC en Europa, 06:00 o
+        # 07:00 UTC en EE.UU.): dentro de una hora UTC el desfase es uno solo.
+        desfase = self.hora.desfase_ms(hora * HORA_MS)
+        desde = datetime.fromtimestamp((hora * HORA_MS + desfase) / 1000, tz=timezone.utc)
+        hasta = datetime.fromtimestamp(((hora + 1) * HORA_MS + desfase) / 1000, tz=timezone.utc)
         crudos = None
         # La terminal baja el historial de ticks a pedido: la primera vez
         # puede contestar vacio. Un segundo intento, corto.
@@ -122,7 +225,7 @@ class PreciosDeMT5:
             for t in crudos:
                 bid, ask = float(t["bid"]), float(t["ask"])
                 if bid > 0 and ask > 0:
-                    ticks.append((int(t["time_msc"]) - self.desfase_ms, bid, ask))
+                    ticks.append((int(t["time_msc"]) - desfase, bid, ask))
         if ticks:
             self.horas_con_ticks += 1
             return ticks
@@ -137,7 +240,7 @@ class PreciosDeMT5:
             return []
         self.horas_con_velas += 1
         for v in velas:
-            inicio = int(v["time"]) * 1000 - self.desfase_ms
+            inicio = int(v["time"]) * 1000 - desfase
             spread = float(v["spread"]) * self._punto
             apertura, cierre = float(v["open"]), float(v["close"])
             alto, bajo = float(v["high"]), float(v["low"])
@@ -149,20 +252,71 @@ class PreciosDeMT5:
 
 
 def desfase_del_servidor(mt5: Any, simbolo: str, eventos: list[dict[str, Any]],
-                         ahora_s: float) -> tuple[int, str]:
-    """Cuanto adelanta el reloj del servidor de MT5 respecto de UTC, en ms.
+                         ahora_s: float, regla: str = "europa") -> tuple[HoraDelServidor, str, str]:
+    """Cuanto adelanta el reloj del servidor de MT5 respecto de UTC, segun la fecha.
 
     Equivocarse aca corre TODO el repaso unas horas: cada senal se mediria
     contra el precio de otro momento. Por eso se mide con algo conocido: una
     operacion del propio bot, cuya hora UTC esta en el registro y cuya hora de
     servidor esta en el historial de MT5. Si no hay ninguna, el ultimo tick
     (solo sirve con el mercado abierto).
+
+    Se mide en UN momento; las demas fechas salen de `regla`. Si el bot opero
+    tambien del otro lado de un cambio de hora, esa operacion lo confirma o
+    lo desmiente: un servidor que no cambia de hora se nota ahi, y entonces se
+    usa la misma para todo.
+
+    Devuelve la hora, como se midio y que se supone del cambio de hora.
     """
     from tct.informe import tickets_operados
 
-    for operada in reversed(tickets_operados(eventos)):
-        if not operada.get("ticket") or not operada.get("ts"):
-            continue
+    operadas = [o for o in reversed(tickets_operados(eventos)) if o.get("ticket") and o.get("ts")]
+    medida = _medir_con_operaciones(mt5, operadas)
+    if medida is not None:
+        cuando, horas = medida
+        como = f"{_utc(horas * HORA_MS)} el {_dia(cuando)} (medido con una operacion del bot)"
+    else:
+        tick = mt5.symbol_info_tick(simbolo)
+        diferencia = (int(getattr(tick, "time", 0) or 0) - ahora_s) / 3600 if tick else 99
+        if abs(diferencia) > 14:
+            return (HoraDelServidor(),
+                    "desconocida: se toma UTC+0 y las horas pueden estar corridas", "")
+        cuando, horas = int(ahora_s * 1000), round(diferencia)
+        como = f"UTC{horas:+d} (medido con el ultimo precio)"
+
+    hora = HoraDelServidor.medida(horas * HORA_MS, cuando, regla)
+    # Con Europa, el invierno es UTC+0, +1 o +2 (Londres, Paris, Atenas). Un
+    # UTC+0 medido en verano daria UTC-1 en invierno: ese servidor no cambia.
+    if regla == "europa" and not 0 <= hora.base_ms <= 2 * HORA_MS:
+        return (HoraDelServidor(horas * HORA_MS), como,
+                f"{_utc(horas * HORA_MS)} en {'verano' if en_verano(cuando, regla) else 'invierno'}"
+                " no es la hora de un servidor que cambie con Europa: se usa la misma para todo")
+    if medida is None:
+        return hora, como, _supuesto(regla)
+
+    # Las mas nuevas del otro lado del cambio de hora (con "fijo" no hay otro
+    # lado). Pocas: si esas no estan en el historial, las demas tampoco.
+    verano = en_verano(cuando, regla)
+    otro_lado = [o for o in operadas if en_verano(a_ms(o["ts"]), regla) != verano][:5]
+    cruce = _medir_con_operaciones(mt5, otro_lado)
+    if cruce is None:
+        return hora, como, _supuesto(regla)
+    t, otras = cruce
+    esperada = hora.desfase_ms(t)
+    if otras * HORA_MS == esperada:
+        return hora, como, (f"Otra operacion, del {_dia(t)}, dio {_utc(esperada)}: "
+                            f"cambia con {REGLAS[regla]}")
+    if otras == horas:
+        return (HoraDelServidor(horas * HORA_MS), como,
+                f"Otra operacion, del {_dia(t)}, tambien dio {_utc(horas * HORA_MS)}: "
+                "este servidor no cambia de hora")
+    return hora, como, (f"OJO: otra operacion, del {_dia(t)}, dio {_utc(otras * HORA_MS)} "
+                        f"y se esperaba {_utc(esperada)}. Se supone {REGLAS[regla]}")
+
+
+def _medir_con_operaciones(mt5: Any, operadas: list[dict[str, Any]]) -> tuple[int, int] | None:
+    """(cuando en ms UTC, horas de desfase) de la primera que esta en el historial de MT5."""
+    for operada in operadas:
         try:
             deals = mt5.history_deals_get(position=operada["ticket"])
         except Exception:
@@ -171,15 +325,16 @@ def desfase_del_servidor(mt5: Any, simbolo: str, eventos: list[dict[str, Any]],
                         if getattr(d, "entry", None) == getattr(mt5, "DEAL_ENTRY_IN", 0)), None)
         if entrada is None:
             continue
-        horas = round((int(entrada.time) - a_ms(operada["ts"]) / 1000) / 3600)
-        return horas * HORA_MS, f"UTC{horas:+d} (medido con una operacion del bot)"
+        cuando = a_ms(operada["ts"])
+        return cuando, round((int(entrada.time) - cuando / 1000) / 3600)
+    return None
 
-    tick = mt5.symbol_info_tick(simbolo)
-    diferencia = (int(getattr(tick, "time", 0) or 0) - ahora_s) / 3600 if tick else 99
-    if abs(diferencia) <= 14:
-        horas = round(diferencia)
-        return horas * HORA_MS, f"UTC{horas:+d} (medido con el ultimo precio)"
-    return 0, "desconocida: se toma UTC+0 y las horas pueden estar corridas"
+
+def _supuesto(regla: str) -> str:
+    if regla == "fijo":
+        return "Sin cambio de horario (--horario fijo)"
+    return (f"Se supone que cambia con {REGLAS[regla]} "
+            "(si este broker no cambia de hora: --horario fijo)")
 
 
 @dataclass

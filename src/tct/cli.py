@@ -2416,10 +2416,12 @@ def cmd_repaso(args: argparse.Namespace) -> int:
     except ValueError:
         print(f"--lotes tiene que ser una lista de numeros, como 0.05,0.07,0.10 ({args.lotes})")
         return 1
+    horario = getattr(args, "horario", None) or "europa"
     with _consola_sin_seleccion(), _tambien_a_un_archivo("repaso"):
         if getattr(args, "chat", None) and len(settings.telegram_source_chats) > 1:
-            return _repaso_de_cada_grupo(settings, args.dias, lotes, args.detalle)
-        return asyncio.run(_repaso_async(settings, args.dias, lotes, args.detalle))
+            return _repaso_de_cada_grupo(settings, args.dias, lotes, args.detalle, horario)
+        return asyncio.run(_repaso_async(settings, args.dias, lotes, args.detalle,
+                                         horario=horario))
 
 
 def cmd_mensajes(args: argparse.Namespace) -> int:
@@ -2525,7 +2527,7 @@ def _tambien_a_un_archivo(prefijo: str):
 
 
 def _repaso_de_cada_grupo(settings: Settings, dias: int, lotes: list[float],
-                          detalle: bool) -> int:
+                          detalle: bool, horario: str = "europa") -> int:
     """`--chat a,b,c`: cada grupo por separado y una tabla para compararlos.
 
     Juntos en un solo motor, el "cerrar" o el "mover SL" de un grupo tocaria
@@ -2541,7 +2543,7 @@ def _repaso_de_cada_grupo(settings: Settings, dias: int, lotes: list[float],
         resumen: dict = {}
         ajustes = dataclasses.replace(settings, telegram_source_chats=[chat])
         try:
-            asyncio.run(_repaso_async(ajustes, dias, lotes, detalle, resumen))
+            asyncio.run(_repaso_async(ajustes, dias, lotes, detalle, resumen, horario=horario))
         except Exception as exc:  # noqa: BLE001 - un grupo roto no corta los demas
             print(f"  No se pudo medir este grupo: {exc}")
         filas.append((chat, resumen))
@@ -2644,9 +2646,10 @@ def _tabla_de_grupos(filas: list[tuple[str, dict]], lote_del_env: float,
 
 
 async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detalle: bool,
-                        resumen: dict | None = None) -> int:
+                        resumen: dict | None = None, horario: str = "europa") -> int:
     """El repaso de los chats de `settings`. Si se pasa `resumen`, ademas lo
-    llena con los numeros del final, para la tabla de varios grupos."""
+    llena con los numeros del final, para la tabla de varios grupos. `horario`
+    es como cambia de hora el servidor de MT5 (`repaso.REGLAS`)."""
     import dataclasses
     import tempfile
     import time as reloj
@@ -2654,8 +2657,8 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
     from tct.brokers.mt5_native import MT5NativeBroker
     from tct.engine import Engine
     from tct.informe import hora_local, precio
-    from tct.repaso import (BrokerDeRepaso, PreciosDeMT5, a_ms, desfase_del_servidor,
-                            repasar, resumir)
+    from tct.repaso import (BrokerDeRepaso, HoraDelServidor, PreciosDeMT5, a_ms,
+                            desfase_del_servidor, repasar, resumir)
     from tct.store import Store
     from tct.telegram.reader import fetch_history
 
@@ -2690,21 +2693,26 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
         store_del_bot = Store(settings.events_path, settings.paper_trades_path,
                               settings.state_path, solo_lectura=True)
         precios, contratos = {}, {}
-        desfase, como = 0, ""
+        hora, como, cambio_de_hora = HoraDelServidor(), "", ""
         for canonico in sorted(settings.allowed_symbols):
             nombre = mt5_broker._resolver_contra_broker(canonico)
             info = mt5.symbol_info(nombre) if nombre else None
             if info is None:
                 continue
             if not como:
-                desfase, como = desfase_del_servidor(
-                    mt5, nombre, store_del_bot.read_events(), reloj.time())
-            precios[canonico] = PreciosDeMT5(mt5, nombre, desfase)
+                hora, como, cambio_de_hora = desfase_del_servidor(
+                    mt5, nombre, store_del_bot.read_events(), reloj.time(), horario)
+            precios[canonico] = PreciosDeMT5(mt5, nombre, hora)
             contratos[canonico] = float(getattr(info, "trade_contract_size", 0) or 0) or 100.0
         if not precios:
             print("\n  MetaTrader no tiene ninguno de los simbolos de ALLOWED_SYMBOLS.")
             return 1
+        fin = a_ms(datetime.now(timezone.utc))
         print(f"  Hora del servidor de MT5: {como}.")
+        if cambio_de_hora:
+            print(f"  {cambio_de_hora}.")
+        print(f"  En las fechas de estos mensajes: "
+              f"{hora.describir(a_ms(mensajes[0][1]['date']), fin)}.")
         print("  Pasando cada mensaje por el bot, en su hora... (puede tardar unos minutos)\n")
 
         cuenta = mt5.account_info()
@@ -2722,7 +2730,7 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
                 paper_trades_path=base / "paper_trades.jsonl", state_path=base / "state.json")
             store = Store(ajustes.events_path, ajustes.paper_trades_path, ajustes.state_path)
             engine = Engine(ajustes, store, broker)
-            filas = await repasar(engine, broker, mensajes, a_ms(datetime.now(timezone.utc)))
+            filas = await repasar(engine, broker, mensajes, fin)
     finally:
         await mt5_broker.disconnect()
 
@@ -3482,6 +3490,10 @@ def build_parser() -> argparse.ArgumentParser:
     repaso.add_argument("--chat", default=None,
                         help="Otro grupo en vez del del .env: su numero (de 'tct chats') o "
                              "@nombre. Para medirlo antes de conectarlo")
+    repaso.add_argument("--horario", choices=["europa", "eeuu", "fijo"], default="europa",
+                        help="Como cambia de hora el servidor de MT5: europa (UTC+3 en verano, "
+                             "UTC+2 en invierno, como FxPro y Bullwaves), eeuu (con Nueva "
+                             "York) o fijo (la misma todo el ano). Por defecto: europa")
     run = sub.add_parser("run", parents=[comunes], help="Arranca el bot")
     run.add_argument(
         "--esperar-mt5", type=int, default=0, dest="esperar_mt5", metavar="SEGUNDOS",
