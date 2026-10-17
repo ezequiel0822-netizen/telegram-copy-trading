@@ -17,6 +17,7 @@ from tct.engine import Engine
 from tct.repaso import BrokerDeRepaso, a_ms, limpiar_resultado, repasar, resumir
 from tct.store import Store
 from tests.test_engine import build_settings
+from tests.test_repaso_cambio_de_hora import desfase_de_atenas
 
 T0 = datetime(2026, 9, 1, 5, 0, tzinfo=timezone.utc)
 
@@ -151,10 +152,11 @@ def test_el_resumen_cuenta_ganadas_equilibrio_racha_y_caida(tmp_path):
 
 
 class TerminalConHistoria:
-    """MT5 con ticks de historial en hora de SERVIDOR (UTC+3), como Bullwaves."""
+    """MT5 con ticks de historial en hora de SERVIDOR, como Bullwaves: UTC+3 en
+    verano y UTC+2 en invierno. Asi el test vale cualquier dia que se corra,
+    tambien cerca del cambio de hora."""
 
     DEAL_ENTRY_IN, COPY_TICKS_ALL, TIMEFRAME_M1 = 0, -1, 1
-    DESFASE_MS = 3 * 3_600_000
 
     def __init__(self, camino: Camino, ticket_del_bot: int, ts_del_bot: str):
         self._camino = camino
@@ -175,17 +177,17 @@ class TerminalConHistoria:
     def history_deals_get(self, position=None, **_k):
         if position != self._ticket:
             return []
-        hora_servidor = a_ms(self._ts) // 1000 + 3 * 3600 + 1
+        t = a_ms(self._ts)
+        hora_servidor = (t + desfase_de_atenas(t)) // 1000 + 1
         return [type("D", (), {"entry": 0, "time": hora_servidor})()]
 
     def symbol_info_tick(self, _name):
         return None
 
     def copy_ticks_range(self, _simbolo, desde, hasta, _flags):
-        d = int(desde.timestamp() * 1000) - self.DESFASE_MS
-        h = int(hasta.timestamp() * 1000) - self.DESFASE_MS
-        return [{"time_msc": t + self.DESFASE_MS, "bid": b, "ask": a}
-                for t, b, a in self._camino.ticks(d, h)]
+        d, h = a_ms(desde), a_ms(hasta)
+        en_el_servidor = ((t + desfase_de_atenas(t), b, a) for t, b, a in self._camino._ticks)
+        return [{"time_msc": s, "bid": b, "ask": a} for s, b, a in en_el_servidor if d <= s <= h]
 
     def copy_rates_range(self, *_a):
         return []
@@ -241,7 +243,11 @@ def test_el_comando_mide_con_la_hora_del_servidor_y_resume(tmp_path, monkeypatch
 
     salida = capsys.readouterr().out
     assert codigo == 0, salida
-    assert "UTC+3 (medido con una operacion del bot)" in salida
+    medido = a_ms(ts_del_bot)
+    assert (f"UTC+{desfase_de_atenas(medido) // 3_600_000} el "
+            f"{datetime.fromtimestamp(medido / 1000, tz=timezone.utc):%d/%m} "
+            "(medido con una operacion del bot)") in salida
+    assert "En las fechas de estos mensajes: UTC+" in salida
     assert "2 senales operadas, 0 que el bot no habria abierto" in salida
     assert "Ganadas      : 1 de 2  (50%)" in salida
     assert "Lote 0.10" in salida and "% de 563)" in salida
