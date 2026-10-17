@@ -23,6 +23,7 @@ from typing import Any
 
 from tct.brokers.base import Broker, OrderResult
 from tct.config import Settings
+from tct.grupos import clave_de_grupo
 from tct.risk import (
     evaluate_management,
     evaluate_open,
@@ -272,6 +273,15 @@ class Engine:
         # Las consultas a la IA que corren de fondo (ver `_ia_de_fondo`).
         self._tareas_ia: set[asyncio.Task] = set()
 
+    @property
+    def _varios_grupos(self) -> bool:
+        """True si este bot copia mas de un grupo (la demo de FxPro, 17/10).
+
+        Lo que solo hace falta con varios grupos se activa con esto, para que
+        un bot de un solo grupo (la real) decida exactamente lo de antes.
+        """
+        return len({clave_de_grupo(c) for c in self.settings.telegram_source_chats}) > 1
+
     # -- Entrada principal -------------------------------------------------
 
     async def handle_message(self, text: str, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -516,7 +526,8 @@ class Engine:
             return {"status": "rechazada", "reasons": decision.reasons, "signal": event.to_dict()}
 
         take_profits = usable_take_profits(event)
-        lot = self.settings.default_lot
+        # El lote de ESE grupo (LOT_PER_CHAT); sin eso, DEFAULT_LOT como siempre.
+        lot = self.settings.lote_para(event.telegram_chat_id)
 
         # Cuantas posiciones abre esta senal, y con que objetivo cada una.
         #
@@ -1582,9 +1593,18 @@ class Engine:
         topes (llegaron a quedar 4 de 0.05 con MAX_OPEN_TRADES=2). Se
         reconocen por la marca del bot (MAGIA); lo que abriste a mano no.
         """
+        por_ticket, _ = self._grupo_de_las_de_antes()
+        try:
+            await self._adoptar_las_desconocidas(por_ticket)
+        finally:
+            await self._avisar_las_sin_grupo()
+
+    async def _adoptar_las_desconocidas(self, por_ticket: dict[Any, tuple[str, Any]]) -> None:
+        """La parte de `reconciliar_al_arrancar` que mira MetaTrader."""
         listar = getattr(self.broker, "posiciones_propias", None)
         if listar is None:
             return
+        configurados = self._grupos_configurados
         async with self._turno:
             await self._sincronizar_posiciones()
             try:
@@ -1599,6 +1619,12 @@ class Engine:
             nuevas = [v for v in vivas if v["ticket"] not in conocidos]
             for viva in nuevas:
                 tp = viva.get("tp") or None
+                # Con varios grupos, el registro dice de que grupo y mensaje es
+                # el ticket: sin eso, el "cierren todo" de cualquier grupo la
+                # cerraria. Con uno solo queda como siempre (sin grupo ni mensaje).
+                origen = por_ticket.get(viva["ticket"]) if self._varios_grupos else None
+                if origen is not None and origen[0] not in configurados:
+                    origen = None
                 self.store.add_position(OpenPosition(
                     trade_id=uuid.uuid4().hex[:12],
                     symbol=viva["symbol"],
@@ -1608,12 +1634,13 @@ class Engine:
                     stop_loss=viva.get("sl") or None,
                     take_profits=[tp] if tp else [],
                     opened_at=utc_now_iso(),
-                    signal_message_id=None,
+                    signal_message_id=origen[1] if origen else None,
                     broker_ticket=viva["ticket"],
                     mode=self.settings.trading_mode,
                     entry_real=viva.get("price"),
                     tp_indice=1 if tp else None,
                     tp_objetivo=tp,
+                    grupo=origen[0] if origen else None,
                 ))
             if not nuevas:
                 return
@@ -1628,6 +1655,102 @@ class Engine:
             problema=True,
         )
 
+    @property
+    def _grupos_configurados(self) -> set[str | None]:
+        return {clave_de_grupo(c) for c in self.settings.telegram_source_chats}
+
+    def _origenes_de_las_aperturas(self) -> tuple[dict[Any, tuple[str, Any]],
+                                                  dict[str, tuple[str, Any]]]:
+        """De que grupo y mensaje es cada ticket (y cada trade_id), segun el registro.
+
+        Lo dicen los eventos que abrieron: "aceptada" y, para las que MetaTrader
+        confirmo tarde, "apertura_confirmada_tarde".
+        """
+        por_ticket: dict[Any, tuple[str, Any]] = {}
+        por_trade: dict[str, tuple[str, Any]] = {}
+        for evento in self.store.read_events():
+            if evento.get("kind") not in {"aceptada", "apertura_confirmada_tarde"}:
+                continue
+            senal = evento.get("signal") or {}
+            grupo = clave_de_grupo(senal.get("telegram_chat_id"))
+            if grupo is None:
+                continue
+            origen = (grupo, senal.get("telegram_message_id"))
+            if evento.get("trade_id"):
+                por_trade[evento["trade_id"]] = origen
+            ordenes = [evento.get("order") or {}, *(evento.get("orders") or []),
+                       *(evento.get("aperturas") or [])]
+            for orden in ordenes:
+                if isinstance(orden, dict) and orden.get("ticket") is not None:
+                    por_ticket[orden["ticket"]] = origen
+        return por_ticket, por_trade
+
+    def _grupo_de_las_de_antes(self) -> tuple[dict[Any, tuple[str, Any]],
+                                              dict[str, tuple[str, Any]]]:
+        """Al arrancar, deja el grupo de cada posicion de acuerdo con el .env.
+
+        - La de un grupo que ya NO esta en TELEGRAM_SOURCE_CHATS queda sin
+          grupo, como antes de este cambio: si no, nadie la gestionaria (el
+          bot que paso de un canal a otro con posiciones abiertas, o el grupo
+          que se saco de la lista). Lo encontro la revision del 17/10.
+        - La guardada antes del 17/10 (sin grupo) recupera el suyo del evento
+          que la abrio: si no, el "cierren todo" de Sebastian cerraria una de
+          David abierta desde antes. Se busca por trade_id y por ticket, y el
+          numero de mensaje tiene que coincidir; la que no aparece queda sin
+          grupo.
+
+        Devuelve los origenes leidos, para las posiciones que se adopten.
+        """
+        configurados = self._grupos_configurados
+        cambiadas = 0
+        for posicion in self.store.open_positions():
+            if posicion.grupo is not None and posicion.grupo not in configurados:
+                posicion.grupo = None
+                cambiadas += 1
+        sin_grupo = [p for p in self.store.open_positions()
+                     if p.grupo is None and p.signal_message_id is not None]
+        adoptar = self._varios_grupos and hasattr(self.broker, "posiciones_propias")
+        if not sin_grupo and not adoptar:
+            if cambiadas:
+                self.store.save_state()
+            return {}, {}
+        por_ticket, por_trade = self._origenes_de_las_aperturas()
+        for posicion in sin_grupo:
+            candidatos = [por_trade.get(posicion.trade_id)]
+            if posicion.broker_ticket is not None:
+                candidatos.append(por_ticket.get(posicion.broker_ticket))
+            origen = next((c for c in candidatos
+                           if c and c[1] == posicion.signal_message_id
+                           and c[0] in configurados), None)
+            if origen is not None:
+                posicion.grupo = origen[0]
+                cambiadas += 1
+        if cambiadas:
+            self.store.save_state()
+            logger.info("Grupo de %s posicion(es) puesto al dia con TELEGRAM_SOURCE_CHATS.",
+                        cambiadas)
+        return por_ticket, por_trade
+
+    async def _avisar_las_sin_grupo(self) -> None:
+        """Con varios grupos, las posiciones que no se sabe de que grupo son.
+
+        Las gestiona cualquier grupo del bot (un "cierren todo" de uno las
+        cierra), asi que se dice cuales son. Con un solo grupo da lo mismo.
+        """
+        if not self._varios_grupos:
+            return
+        sin_grupo = [p for p in self.store.open_positions() if p.grupo is None]
+        if not sin_grupo:
+            return
+        await self._avisar(
+            "Hay posiciones abiertas que no se sabe de que grupo vinieron. Cualquiera "
+            "de los grupos del bot las puede cerrar o mover; si no queres eso, "
+            "manejalas a mano:\n"
+            + "\n".join(f"  {p.symbol} {p.side} {p.lot} entrada {p.entry} ticket "
+                         f"{p.broker_ticket}" for p in sin_grupo),
+            problema=True,
+        )
+
     async def _corregir_sl(self, event: SignalEvent, message_id: Any) -> dict[str, Any] | None:
         """El canal edito una senal que ya abrio y cambio el SL: se aplica.
 
@@ -1636,8 +1759,12 @@ class Engine:
         si el SL nuevo queda del lado correcto de la entrada. None si no hay
         nada que corregir: el que llama sigue como antes (edicion ignorada).
         """
-        propias = [p for p in self.store.open_positions()
-                   if p.signal_message_id == message_id]
+        # Del mismo grupo: el mensaje 1111 de David no es el 1111 de Sebastian.
+        # Con varios grupos, tampoco una posicion sin grupo con ese numero.
+        grupo = clave_de_grupo(event.telegram_chat_id)
+        propias = [p for p in self.store.find_positions(grupo=grupo)
+                   if p.signal_message_id == message_id
+                   and (grupo is None or p.grupo == grupo or not self._varios_grupos)]
         nuevo = event.stop_loss
         if (not propias or nuevo is None
                 or any(p.symbol != (event.symbol or "").upper()
@@ -1700,9 +1827,14 @@ class Engine:
             event = pendiente["event"]
             conocidos = {p.broker_ticket for p in self.store.open_positions()
                          if p.broker_ticket is not None}
+            # Con varios grupos, el lote ayuda a no quedarse con la orden de
+            # OTRO grupo (David a 0.03, los demas a 0.04): la busqueda mira solo
+            # simbolo y lado. Con uno solo, la busqueda de siempre.
+            por_lote = {"lote": pendiente["lot"]} if self._varios_grupos else {}
             try:
                 order = await buscar(symbol=event.symbol or "",
-                                     side=event.side or Side.BUY, conocidos=conocidos)
+                                     side=event.side or Side.BUY, conocidos=conocidos,
+                                     **por_lote)
             except Exception:
                 logger.warning("No se pudo buscar la orden sin confirmar", exc_info=True)
                 continue
@@ -1716,14 +1848,37 @@ class Engine:
             position = self._nueva_posicion(
                 event, pendiente["trade_id"], order, order.lot or pendiente["lot"],
                 pendiente["take_profits"], pendiente["indice"], pendiente["objetivo"])
+            # Otra orden sin confirmar de OTRO grupo, mismo simbolo, lado y lote:
+            # no hay forma de saber de cual es. Sin grupo la gestionan todos,
+            # que es lo de antes, y se avisa abajo.
+            ambigua = any(
+                otra["event"].symbol == event.symbol and otra["event"].side == event.side
+                and abs(otra["lot"] - pendiente["lot"]) < 1e-9
+                and clave_de_grupo(otra["event"].telegram_chat_id) != position.grupo
+                for otra in self._sin_confirmar)
+            if ambigua:
+                position.grupo = None
             self.store.add_position(position)
+            # Ya opero: una edicion de este mensaje (el canal corrige el SL) es
+            # una correccion, no una senal nueva. Sin esto abria una SEGUNDA
+            # posicion (lo encontro la revision del 17/10; pasaba desde antes).
+            # Y cuenta en el cupo del dia, una vez por mensaje, como cualquier
+            # senal que entro.
+            mensaje = event.telegram_message_id
+            if mensaje is not None and not self.store.ya_opero(event.telegram_chat_id, mensaje):
+                self.store.marcar_que_opero(event.telegram_chat_id, mensaje)
+                self.store.bump_daily_counter()
+            self.store.save_state()
             self.store.append_event("apertura_confirmada_tarde", {
                 "signal": event.to_dict(), "order": order.to_dict(),
                 "trade_id": pendiente["trade_id"],
             })
             await self._avisar(
                 f"La orden de {event.symbol} que MetaTrader no confirmo SI entro "
-                f"(ticket {order.ticket}). Ahora la gestiona el bot.",
+                f"(ticket {order.ticket}). Ahora la gestiona el bot."
+                + ("\nHabia otra igual de otro grupo sin confirmar: no se sabe de cual "
+                   "es, asi que la puede gestionar cualquier grupo. Revisala a mano."
+                   if ambigua else ""),
                 problema=True,
             )
 
@@ -1751,6 +1906,8 @@ class Engine:
             # y sin este dato no hay forma de saber cual es.
             tp_indice=indice if objetivo is not None else None,
             tp_objetivo=objetivo,
+            # De que grupo vino: la gestion de otro grupo no la toca.
+            grupo=clave_de_grupo(event.telegram_chat_id),
         )
 
     async def esperar_la_ia(self) -> None:

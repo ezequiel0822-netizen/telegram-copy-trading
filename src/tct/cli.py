@@ -1869,6 +1869,17 @@ async def _probar_async(settings: Settings, args: argparse.Namespace) -> int:
                 aviso = "" if volumen == settings.default_lot else f"  (se ajusta a {volumen})"
                 print(f"      OK    {canonico:<8} lote {settings.default_lot}{aviso} "
                       f"| min={info.volume_min} paso={info.volume_step}")
+            # Los lotes de LOT_PER_CHAT, con la misma regla: el broker los
+            # redondea al paso sin avisar, y un 0.035 operaria 0.04.
+            for lote in sorted(set(settings.lot_per_chat.values()) - {settings.default_lot}):
+                volumen = broker._normalize_volume(info, lote)
+                if volumen is None or (settings.max_lot and volumen > settings.max_lot + 1e-9):
+                    print(f"      FALLA {canonico}: el lote {lote} de LOT_PER_CHAT no se "
+                          f"puede operar (queda en {volumen})")
+                    fallos.append(f"Lote {lote} de LOT_PER_CHAT invalido para {canonico}")
+                elif volumen != lote:
+                    print(f"      AVISO {canonico:<8} el lote {lote} de LOT_PER_CHAT "
+                          f"se ajusta a {volumen}")
 
         # --- 5. Orden real -------------------------------------------------
         paso("5/5", "Prueba de orden real")
@@ -2301,6 +2312,30 @@ async def _informar_desenlaces(settings: Settings, eventos: list) -> None:
     if r["sin_datos"]:
         print(f"  {r['sin_datos']} sin datos: siguen abiertas, o MetaTrader no")
         print("  tiene ese tramo del historial cargado.")
+    _resultado_por_grupo(settings, filas)
+
+
+def _resultado_por_grupo(settings: Settings, filas: list[dict]) -> None:
+    """Con varios grupos en el bot, el resultado de cada uno (17/10)."""
+    from tct.grupos import clave_de_grupo
+    from tct.informe import resumir_por_grupo
+
+    if len({f.get("grupo") for f in filas if f.get("grupo")}) < 2:
+        return
+    # El grupo como esta escrito en el .env (el numero que dio `tct chats`);
+    # uno que ya no esta en el .env, con la misma forma -100...
+    nombres = {clave_de_grupo(c): c for c in settings.telegram_source_chats}
+    resumenes = resumir_por_grupo(filas)
+    # Los mensajes sin chat (tct simular) van al final, fuera del ranking.
+    resumenes = [x for x in resumenes if x[0]] + [x for x in resumenes if not x[0]]
+    etiquetas = [nombres.get(g, f"-100{g}" if (g or "").isdigit() else g) if g else "sin chat"
+                 for g, _ in resumenes]
+    ancho = max(len(e) for e in etiquetas)
+    print("\n  POR GRUPO (del mejor al peor):")
+    for etiqueta, (_, r) in zip(etiquetas, resumenes):
+        conteo = ", ".join(f"{veces} {resultado}" for resultado, veces in r["por_resultado"])
+        print(f"      {etiqueta:<{ancho}} {r['conocidos']:>3} terminadas  "
+              f"neto {r['neto_total']:+9.2f}" + (f"   ({conteo})" if conteo else ""))
 
 
 def cmd_evaluar_stop(args: argparse.Namespace) -> int:
@@ -2530,9 +2565,10 @@ def _repaso_de_cada_grupo(settings: Settings, dias: int, lotes: list[float],
                           detalle: bool, horario: str = "europa") -> int:
     """`--chat a,b,c`: cada grupo por separado y una tabla para compararlos.
 
-    Juntos en un solo motor, el "cerrar" o el "mover SL" de un grupo tocaria
-    las posiciones de otro, y el resultado no seria de ninguno (16/10: eran 16
-    grupos para elegir cuales conectar a la demo de FxPro).
+    Cada uno con su propio motor: es lo que dice cuanto da ESE grupo, solo
+    (16/10: eran 16 grupos para elegir cuales conectar a la demo de FxPro).
+    Desde el 17/10 un motor con varios grupos ya no mezcla la gestion de uno
+    con las posiciones de otro, pero comparte MAX_OPEN_TRADES y el cupo diario.
     """
     import dataclasses
 
@@ -2645,12 +2681,28 @@ def _tabla_de_grupos(filas: list[tuple[str, dict]], lote_del_env: float,
         pass
 
 
+def _ajustes_del_repaso(settings: Settings, base: Path) -> Settings:
+    """Los ajustes del bot, como los necesita el motor del repaso."""
+    import dataclasses
+
+    return dataclasses.replace(
+        settings, dry_run=False, enable_ollama=False,
+        # El cupo diario se cuenta con el reloj de HOY: en el repaso,
+        # 40 dias de senales caerian todas en el mismo dia.
+        max_signals_per_day=10**6,
+        # Todo a DEFAULT_LOT: el resumen pasa los montos de ese lote a los de
+        # --lotes. Con LOT_PER_CHAT, un grupo a 0.03 se habria contado como si
+        # fuera de DEFAULT_LOT (17/10).
+        lot_per_chat={},
+        data_dir=base, events_path=base / "events.jsonl",
+        paper_trades_path=base / "paper_trades.jsonl", state_path=base / "state.json")
+
+
 async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detalle: bool,
                         resumen: dict | None = None, horario: str = "europa") -> int:
     """El repaso de los chats de `settings`. Si se pasa `resumen`, ademas lo
     llena con los numeros del final, para la tabla de varios grupos. `horario`
     es como cambia de hora el servidor de MT5 (`repaso.REGLAS`)."""
-    import dataclasses
     import tempfile
     import time as reloj
 
@@ -2720,14 +2772,7 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
 
         broker = BrokerDeRepaso(precios, contratos)
         with tempfile.TemporaryDirectory() as carpeta:
-            base = Path(carpeta)
-            ajustes = dataclasses.replace(
-                settings, dry_run=False, enable_ollama=False,
-                # El cupo diario se cuenta con el reloj de HOY: en el repaso,
-                # 40 dias de senales caerian todas en el mismo dia.
-                max_signals_per_day=10**6,
-                data_dir=base, events_path=base / "events.jsonl",
-                paper_trades_path=base / "paper_trades.jsonl", state_path=base / "state.json")
+            ajustes = _ajustes_del_repaso(settings, Path(carpeta))
             store = Store(ajustes.events_path, ajustes.paper_trades_path, ajustes.state_path)
             engine = Engine(ajustes, store, broker)
             filas = await repasar(engine, broker, mensajes, fin)

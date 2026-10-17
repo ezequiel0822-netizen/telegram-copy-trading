@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-16 · v2.7.0 · 1272 tests · el último commit que describe
-es `20c313d`, más este mismo cambio
+Actualizado: 2026-10-17 · v2.7.0 · 1321 tests · el último commit que describe
+es `90e0965`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
 
@@ -135,7 +135,84 @@ operó 13 y dijo NO a 89) y **GOLD SIGNAL USA** (+48.81, 18 operadas / 44 NO, y
 sin señales en texto desde el 17/09). Los dos avisan primero "SELL NOW" sin
 precios y mandan la señal completa 2-3 minutos después, cuando el precio ya se
 fue: el filtro de entrada tardía la rechaza con razón (mide al borde de la zona,
-no al medio). **No son copiables tal como escriben.** Otros 7 grupos el bot no
+no al medio). **Corrección del 17/10:** eso NO los hace incopiables. El
+resultado del repaso ya es lo que el bot copia DESPUÉS del filtro: de TRADING
+ZONE copia ~1 de cada 4 señales completas, y esas dieron +79.50. GOLD SIGNAL
+USA sí está muerto para el bot (sin señales en texto desde el 17/09). Por
+ventanas (a 0.03, del detalle del repaso): TRADING ZONE últimos 14 días 6 de 6
+(+81.00), 21 días 7 de 7 (+94.35); su única pérdida (~−70) fue la semana del
+11/09 y se come ~6 ganadas (hace falta 85%). Sebastián últimos 14 días 72%
+contra 66% (+59.94), 21 días 68% contra 67% (+26.61), después de 3 semanas
+muy malas. Gold Signals peor en lo reciente (−74.22 en 21 días). Con tan
+pocas operaciones nada de eso separa suerte de ventaja: con 85% de verdad
+(empatar), 7 de 7 sale 1 de cada 3 veces.
+
+**Los 9 grupos que el bot lee, por ventana (17/10, a 0.03, del detalle de los
+repasos del 16-17/10; los totales de 40 días coinciden con el repaso):**
+
+| Grupo | 14 días | 21 días | 40 días |
+|---|---|---|---|
+| XAUUSD TRADING ZONE | 6/6, +81.00 | 7/7, +94.35 | 12/13, +79.50 |
+| Sebastián | 72% vs 66%, +59.94 | 68% vs 67%, +26.61 | 64% vs 66%, −82.80 |
+| GTMoFx | 62% vs 64%, −5.87 | −121.28 | 62% vs 72%, −101.60 |
+| Gold Signals 98% | −20.70 | −74.22 | 82% vs 82%, +4.17 |
+| Fx Broker Signals | −21.78 | −21.54 | 62% vs 60%, −20.16 |
+| Gold Trader Mo | −42.09 | −156.57 | 59% vs 74%, −132.66 |
+| GiltStone | −96.27 | −95.49 | 64% vs 81%, −74.30 |
+| **PRO FOREX DAVID** | **61% vs 72%, −119.97** | 63% vs 67%, −63.24 | 62% vs 65%, −83.61 |
+| GOLD SIGNAL USA | nada | nada | +48.81 (muerto desde 17/09) |
+
+Gold Trader Mo y GTMoFx son el mismo canal (mismos mensajes y horas). El de
+David, el que copia la real, fue el PEOR de las últimas 2 semanas (la última
+semana sola −164.04 en 13 operaciones). TRADING ZONE es el único positivo en
+las tres ventanas, pero con 13 operaciones: sin ninguna ventaja (85% de
+verdad) un 12 de 13 sale el 40% de las veces. Para separar suerte de ventaja
+hacen falta ~45 operaciones (~150 días de ese canal): se le pidió
+`tct repaso --env-file .env.segunda --dias 150 --lotes 0.03 --detalle
+--chat=-1001666520346,-1003952254051` (TRADING ZONE y David).
+
+**El repaso de 150 días (17/10, FxPro, a 0.03; verificado por 4 revisores):**
+- **TRADING ZONE** (21/05-16/10): 29 operadas, 27 TP y 2 SL (93% contra 81.3%),
+  **+250.44**, peor caída −69.90; positivo todos los meses salvo septiembre
+  (−1.50). No se le pidió nada al repaso que lo infle: todo con ticks reales,
+  sin entradas "a favor" fuera de la zona, sin posiciones encimadas, los 113
+  "lejos del precio" todos en contra. Pero es el MEJOR caso (sin demora, sin
+  deslizamiento, sin mensajes borrados). Gana ~4.6 puntos y pierde ~19.8: un
+  grupo sin ventaja ganaría ~81% solo por la geometría. Las 16 operaciones que
+  no se vieron al elegirlo (18/06-26/08) dieron 15 de 16 (+170.94): sin
+  ventaja eso sale 1 de cada 6-10 veces. Estimación honesta para 150 días:
+  +120 a +190, con ~5-10% de chance de que no tenga ventaja. Con 1 punto peor
+  por operación: +163.44. Cada stop de más cuesta ~73. Copia solo ~1 de cada 5
+  señales completas (142 NOW sin SL + 113 tardías). Escribe mal precios a
+  veces (14/08 SELL 4348/4355 con SL 4465: no entró solo porque llegó tarde).
+  Para separar ventaja de suerte hacen falta ~54 operaciones más (~9 meses).
+  Regla para cortar una prueba en demo (SPRT 81.3% vs 93%): 2 stops en las
+  primeras 5, 3 en 13, 4 en 21, 5 en 30.
+- **"PRO FOREX DAVID" de este repaso (`-1003952254051`) es la versión EN INGLÉS
+  del canal** (la del otro número). La real copia la española
+  (`-1004363872187`): las señales coinciden, la gestión en inglés no siempre
+  se entiende. 27/05-16/10: 288 operadas, 69% contra 70%, **−141.53**, peor
+  caída **−467.10**. Esa caída es casi toda UNA operación: 02/06 BUY 4530 con
+  SL 4417 (113 puntos), −339.06 a 0.03, más que sus 304.88 propios. Sin ella,
+  +197.53 en 150 días, pero ~0.23 puntos de costo por operación lo borran (y
+  Bullwaves cuesta ~0.1-0.2 por operación más los deslizamientos de stops).
+  Desde mediados de julio el canal achicó los stops (mediana 15 → 5-8
+  puntos); octubre los volvió a abrir. Las últimas 5 semanas devolvieron lo
+  ganado de julio a septiembre. Para medir el canal exacto de la real:
+  `tct repaso --env-file .env.real --dias 150 --lotes 0.03 --detalle`.
+- **Cómo probar TRADING ZONE en demo sin tocar código:** la demo de MetaQuotes
+  (`.env`) copiando SOLO ese grupo (un grupo por bot evita el problema de la
+  separación). La cuenta de Telegram del bot (Jezrel) tiene que unirse al
+  canal; bot cerrado y sin posiciones en MetaQuotes; `tct chats --limit 200`
+  para ver la fila `-1001666520346`; `tct cambiar --env-file .env
+  TELEGRAM_SOURCE_CHATS=-1001666520346 ALLOWED_SYMBOLS=XAUUSD
+  MAX_SPREAD_FROM_ENTRY_PCT=0.05 DEFAULT_LOT=0.03 MAX_LOT=0.03` (el 0.05 es
+  obligatorio: con el 0.5 de `.env` entrarían las 113 tardías que el repaso no
+  midió); `tct check` y arrancar. Se pierde la demo de MetaQuotes como control
+  de David. Una demo prueba la mecánica, no la ventaja ni el deslizamiento de
+  Bullwaves; antes de plata real, `tct repaso --env-file .env.real --dias 150
+  --lotes 0.03 --detalle --chat=-1001666520346`. No se hizo nada de esto
+  todavía: es decisión de él. Otros 7 grupos el bot no
 los entendía; con `tct mensajes` se vio por qué: 5 mandan las señales como
 IMAGEN o son pronósticos sin SL (SignalProvider, ProSignalsFx, TradingForexSP,
 Supply and Demand Snipper, ORO/DÓLAR) y no tiene arreglo leyendo texto. Los
@@ -195,16 +272,52 @@ bots) que operan varios símbolos. Plan acordado, en orden:
    <id>` (precios de FxPro y sus 12 símbolos; la sesión `_repaso` de la
    segunda pide teléfono y código la primera vez). Los ids salen de `tct chats
    --env-file .env.segunda`.
-2. **Antes de conectar más de un grupo a un mismo bot hace falta un cambio de
-   código que todavía NO está:** las posiciones no guardan de qué grupo vinieron
-   (`OpenPosition` no tiene chat), `find_positions` filtra solo por símbolo, y
-   las respuestas se buscan solo por número de mensaje (`risk.py`,
-   `evaluate_management`), que se repite entre grupos. Con tres grupos, un
-   "cerrar" o un "mover SL" de uno tocaría las posiciones de los otros, y el
-   informe tampoco separa por grupo.
-3. Solo los que den bien, a `TELEGRAM_SOURCE_CHATS` de `.env.segunda`, con el
-   lote de esa demo en 0.03 (`tct cambiar --env-file .env.segunda
-   DEFAULT_LOT=0.03 MAX_LOT=0.03`, con ese bot cerrado).
+2. ~~Antes de conectar más de un grupo a un mismo bot hace falta un cambio de
+   código~~ **Hecho el 17/10: varios grupos en un bot.** Cada posición guarda
+   su grupo (`OpenPosition.grupo`, la clave de `tct/grupos.py`: el
+   `-1001666520346` del `.env`, el `-100...` que da Telethon en vivo y el
+   `1666520346` del historial del repaso son la misma). La gestión (cerrar,
+   parcial, mover SL/TP, breakeven, respuestas, la corrección por edición)
+   toca solo las posiciones de su grupo y las que no tienen grupo; el tope por
+   símbolo y la "misma señal" se cuentan dentro del grupo; `MAX_OPEN_TRADES` y
+   el cupo diario siguen siendo de todo el bot. Al arrancar
+   (`_grupo_de_las_de_antes`): la posición de antes del cambio recupera su
+   grupo del evento que la abrió ("aceptada" o "apertura_confirmada_tarde"),
+   la de un grupo que ya no está en el `.env` queda sin grupo (si no, al
+   cambiar de canal con posiciones abiertas nadie las gestionaba), y con
+   varios grupos la adoptada recupera grupo y mensaje por su ticket. Sin grupo
+   = la gestiona cualquiera, como antes; con varios grupos se avisa cuáles
+   son, y una respuesta o una corrección por edición no caen en ellas. **Lote
+   por grupo:** `LOT_PER_CHAT=<chat>:<lote>,...` (chat de
+   `TELEGRAM_SOURCE_CHATS`, numérico, ≤ `MAX_LOT`); el que no está usa
+   `DEFAULT_LOT`; se ve al arrancar, en `/estado` y en `tct probar`. Con
+   varios grupos, la orden sin confirmar se busca también por lote (David
+   0.03 no se queda con la de 0.04 de otro), y si dos grupos tienen el mismo
+   lote, la que aparece queda sin grupo y se avisa. El repaso sigue midiendo
+   todo a `DEFAULT_LOT` (`_ajustes_del_repaso`). `tct informe
+   --con-resultados` agrega el resultado POR GRUPO; `/posiciones` dice el
+   grupo. **Revisado por 4 revisores (17/10)**: con un solo grupo (la real)
+   decide lo mismo que antes en 20 escenarios (vivo, simular, ensayo, estado
+   viejo, adoptadas, SL reintentados, cambio de canal), salvo un arreglo que
+   encontraron y que venía de antes: **una orden que MetaTrader confirmaba
+   tarde no quedaba como "ya operó"**, y si el canal editaba esa señal para
+   corregir el SL, el bot abría una SEGUNDA posición. Ahora corrige el SL y la
+   señal cuenta en el cupo del día (`tests/test_varios_grupos.py`,
+   `tests/test_varios_grupos_revision.py`).
+3. **Pedido del 17/10:** en `.env.segunda` los tres, David (`-1004363872187`)
+   a 0.03 y Sebastián (`-1003831574671`) y TRADING ZONE (`-1001666520346`) a
+   0.04: `tct cambiar --env-file .env.segunda
+   TELEGRAM_SOURCE_CHATS=-1004363872187,-1003831574671,-1001666520346
+   DEFAULT_LOT=0.04 MAX_LOT=0.04
+   LOT_PER_CHAT=-1004363872187:0.03,-1003831574671:0.04,-1001666520346:0.04`
+   con ese bot cerrado, después de que la cuenta de Telegram de ESE bot se
+   una a los canales que le falten y `tct chats --env-file .env.segunda
+   --limit 200` muestre los tres. Con Jezrel (la de hoy) faltan Sebastián y
+   TRADING ZONE. Con su número nuevo (se le explicó la opción) falta el David
+   en ESPAÑOL (ese número está en la versión en inglés), hay que darle una
+   sesión nueva (`TELEGRAM_SESSION_NAME=telegram_copy_trading_fxpro_nuevo`,
+   nunca la `_repaso`), y los comandos por Telegram de esa demo pasan a
+   mandarse desde ese número. Pendiente que elija.
 
 **ESTADO AL 12/10.**
 

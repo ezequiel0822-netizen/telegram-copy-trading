@@ -33,6 +33,8 @@ import logging
 import time
 from typing import Any
 
+from tct.grupos import clave_de_grupo
+
 logger = logging.getLogger(__name__)
 
 # Cuanto vive una confirmacion de cierre pendiente, en segundos.
@@ -305,6 +307,9 @@ class ControlTelegram:
             f"Abiertas  : {len(abiertas)}",
             f"Senales   : {self.store.signals_today()}/{self.settings.max_signals_per_day} hoy",
             f"Lote      : {self.settings.default_lot}",
+            # Con LOT_PER_CHAT, el de cada grupo: "Lote 0.04" a secas hacia
+            # creer que David tambien operaba 0.04.
+            *self.settings._describe_lote_por_grupo(),
         ]
         return "\n".join(lineas)
 
@@ -333,10 +338,14 @@ class ControlTelegram:
         if not abiertas:
             return f"{self._cabecera()}\nSin posiciones abiertas."
         lineas = [self._cabecera(), f"{len(abiertas)} posicion(es):"]
+        # Con varios grupos, de cual es cada una (el numero como esta en el .env).
+        fuentes = {clave_de_grupo(c): c for c in self.settings.telegram_source_chats}
+        varios = len(fuentes) > 1
         for p in abiertas:
+            grupo = f" grupo={fuentes.get(p.grupo, p.grupo or '?')}" if varios else ""
             lineas.append(
                 f"  {p.symbol} {p.side} lote={p.lot} entrada={p.entry} "
-                f"SL={p.stop_loss} ({p.remaining_fraction:.0%} restante)"
+                f"SL={p.stop_loss} ({p.remaining_fraction:.0%} restante){grupo}"
             )
         return "\n".join(lineas)
 

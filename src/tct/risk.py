@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tct.config import Settings
+from tct.grupos import clave_de_grupo
 from tct.signals.models import EventType, OrderType, SignalEvent, Side
 from tct.store import Store
 
@@ -64,8 +65,17 @@ def evaluate_open(
         reasons.append(f"Simbolo {symbol} fuera de ALLOWED_SYMBOLS")
 
     # --- Tamano ----------------------------------------------------------
+    # Con LOT_PER_CHAT cada grupo tiene el suyo; sin eso, DEFAULT_LOT.
+    lote = settings.lote_para(event.telegram_chat_id)
     if settings.default_lot > settings.max_lot:
         reasons.append(f"DEFAULT_LOT {settings.default_lot} supera MAX_LOT {settings.max_lot}")
+    elif lote > settings.max_lot:
+        reasons.append(f"El lote de este grupo ({lote}) supera MAX_LOT {settings.max_lot}")
+
+    # Con varios grupos en el bot, los topes por simbolo y la "misma senal"
+    # se miran dentro del grupo: cada uno se comporta como si estuviera solo,
+    # que es como lo midio el repaso. Con uno solo, es lo de siempre.
+    grupo = clave_de_grupo(event.telegram_chat_id)
 
     # --- Coherencia geometrica -------------------------------------------
     # Un SL del lado equivocado no es una senal conservadora: es una senal
@@ -97,7 +107,7 @@ def evaluate_open(
     # Reenviada o re-posteada con otro numero de mensaje, pasaba el
     # deduplicado (que es por mensaje) y abria una segunda posicion: doble
     # exposicion en una sola senal, y los dos lugares de la real ocupados.
-    for abierta in store.find_positions(symbol):
+    for abierta in store.find_positions(symbol, grupo=grupo):
         if (abierta.side == (event.side.value if event.side else "")
                 and abierta.entry == event.entry
                 and abierta.stop_loss == event.stop_loss
@@ -130,7 +140,7 @@ def evaluate_open(
     # antes de que exista ninguna de ellas.
     tope_por_simbolo = getattr(settings, "max_positions_per_symbol", 1)
     if tope_por_simbolo:
-        abiertas_aca = len(store.find_positions(symbol))
+        abiertas_aca = len(store.find_positions(symbol, grupo=grupo))
         if abiertas_aca >= tope_por_simbolo:
             # En singular cuando es una. El motivo lo lee alguien que no
             # programa, en una notificacion de Telegram, y "1 posicion(es)"
@@ -491,6 +501,11 @@ def usable_take_profits(event: SignalEvent) -> list[float]:
     return [tp for tp in event.take_profits if tp < entry]
 
 
+def _varios_grupos(settings: Settings) -> bool:
+    """True si el bot copia mas de un grupo (ver `Engine._varios_grupos`)."""
+    return len({clave_de_grupo(c) for c in settings.telegram_source_chats}) > 1
+
+
 def evaluate_management(
     settings: Settings, store: Store, event: SignalEvent
 ) -> tuple[RiskDecision, list]:
@@ -499,8 +514,16 @@ def evaluate_management(
     Devuelve la decision y las posiciones a las que aplica. Un mensaje de
     gestion sin simbolo ("close all") aplica a todo lo abierto; con simbolo,
     solo a ese instrumento.
+
+    Y siempre solo a las posiciones del MISMO grupo (17/10). Con David,
+    Sebastian y TRADING ZONE en un bot, un "cierren todo" de uno cerraba las
+    de los tres, y una respuesta al mensaje 1111 de un grupo podia caer en la
+    posicion que abrio el mensaje 1111 de otro: los numeros de mensaje se
+    repiten entre grupos. Las posiciones sin grupo (de antes de este cambio)
+    las sigue gestionando cualquiera.
     """
-    targets = store.find_positions(event.symbol)
+    grupo = clave_de_grupo(event.telegram_chat_id)
+    targets = store.find_positions(event.symbol, grupo=grupo)
 
     # Si RESPONDE a una senal, aplica solo a esa senal. Con dos posiciones de
     # oro a la vez (la real: 2), un "cerrar" o un "mover a breakeven" que el
@@ -508,7 +531,12 @@ def evaluate_management(
     # A ya cerro sola (en su TP o SL), el unico destino que quedaba era B.
     respuesta = event.reply_to_message_id
     if respuesta is not None:
-        de_esa = [p for p in store.open_positions() if p.signal_message_id == respuesta]
+        # Un numero de mensaje solo dice algo dentro de su grupo: con varios
+        # grupos, la respuesta no cae en una posicion sin grupo que casualmente
+        # salio de un mensaje con ese numero en OTRO chat.
+        de_esa = [p for p in store.find_positions(grupo=grupo)
+                  if p.signal_message_id == respuesta
+                  and (grupo is None or p.grupo == grupo or not _varios_grupos(settings))]
         if de_esa:
             targets = de_esa
         elif store.ya_opero(event.telegram_chat_id, respuesta):

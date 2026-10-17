@@ -91,6 +91,13 @@ class OpenPosition:
     # motor NO las mueve: adivinar podria llevarle el TP a la del TP3.
     tp_indice: int | None = None
     tp_objetivo: float | None = None
+    # De que grupo de Telegram vino (la clave de `tct.grupos.clave_de_grupo`).
+    # Con varios grupos en un bot, un "cerrar" o un "mover SL" de uno no puede
+    # tocar las posiciones de otro (17/10). None cuando no se sabe: una de antes
+    # de este campo cuyo evento no aparece, una adoptada sin registro, o una de
+    # un grupo que se saco del .env (ver `Engine._grupo_de_las_de_antes`). Esas
+    # las puede gestionar cualquier grupo, como siempre.
+    grupo: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,6 +116,7 @@ class OpenPosition:
             "mode": self.mode,
             "tp_indice": self.tp_indice,
             "tp_objetivo": self.tp_objetivo,
+            "grupo": self.grupo,
         }
 
     @classmethod
@@ -129,6 +137,7 @@ class OpenPosition:
             mode=data.get("mode") or "paper",
             tp_indice=data.get("tp_indice"),
             tp_objetivo=data.get("tp_objetivo"),
+            grupo=data.get("grupo"),
         )
 
 
@@ -300,15 +309,22 @@ class Store:
                 return self.state.open_positions.pop(index)
         return None
 
-    def find_positions(self, symbol: str | None = None) -> list[OpenPosition]:
-        """Posiciones vivas, opcionalmente filtradas por simbolo.
+    def find_positions(self, symbol: str | None = None,
+                       grupo: str | None = None) -> list[OpenPosition]:
+        """Posiciones vivas, opcionalmente filtradas por simbolo y por grupo.
 
         Sin simbolo devuelve todas: un "close all" del grupo no menciona
         ningun instrumento.
+
+        Con `grupo`, solo las de ese grupo y las que no tienen grupo (de antes
+        del 17/10, o adoptadas al arrancar). Con un solo grupo en el bot da lo
+        mismo que antes: todas sus posiciones son de ese grupo o de ninguno.
         """
-        if symbol is None:
-            return self.open_positions()
-        return [p for p in self.state.open_positions if p.symbol == symbol.upper()]
+        posiciones = (self.open_positions() if symbol is None else
+                      [p for p in self.state.open_positions if p.symbol == symbol.upper()])
+        if grupo is None:
+            return posiciones
+        return [p for p in posiciones if p.grupo is None or p.grupo == grupo]
 
     # -- Cupo diario -------------------------------------------------------
 

@@ -1125,26 +1125,41 @@ class MT5NativeBroker(Broker):
         return propias
 
     async def buscar_sin_registrar(self, *, symbol: str, side: Side,
-                                   conocidos: set[int]) -> OrderResult | None:
+                                   conocidos: set[int],
+                                   lote: float | None = None) -> OrderResult | None:
         """Una posicion de ESTE bot en el simbolo y el lado pedidos que el motor
         no tiene registrada, o None. Es como aparece despues una orden que
-        order_send no confirmo."""
+        order_send no confirmo.
+
+        Con `lote`, solo una de ese volumen (ajustado al paso del broker): con
+        varios grupos en el bot, es lo que distingue la orden de David (0.03)
+        de la de otro grupo (0.04)."""
         if not await self.is_ready():
             return None
         return await asyncio.to_thread(self._buscar_sin_registrar_sync, symbol, side,
-                                       conocidos)
+                                       conocidos, lote)
 
-    def _buscar_sin_registrar_sync(self, symbol: str, side: Side,
-                                   conocidos: set[int]) -> OrderResult | None:
+    def _buscar_sin_registrar_sync(self, symbol: str, side: Side, conocidos: set[int],
+                                   lote: float | None = None) -> OrderResult | None:
         broker_symbol = self._resolver_contra_broker(symbol) or to_broker_symbol(
             symbol, self.settings.mt5_broker_profile)
         try:
             posiciones = self._mt5.positions_get(symbol=broker_symbol)
         except Exception:
             return None
+        esperado = None
+        if lote is not None:
+            try:
+                info = self._mt5.symbol_info(broker_symbol)
+            except Exception:
+                info = None
+            esperado = self._normalize_volume(info, lote) or lote
         tipo = (self._mt5.POSITION_TYPE_BUY if side is Side.BUY
                 else self._mt5.POSITION_TYPE_SELL)
         for p in posiciones or ():
+            if esperado is not None and abs(
+                    float(getattr(p, "volume", 0) or 0) - esperado) > 1e-6:
+                continue
             if (getattr(p, "magic", None) == MAGIA and getattr(p, "type", None) == tipo
                     and int(p.ticket) not in conocidos):
                 return OrderResult(

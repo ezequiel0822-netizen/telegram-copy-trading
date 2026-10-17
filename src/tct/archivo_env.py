@@ -109,6 +109,7 @@ VARIABLES_DEL_ENV: dict[str, str] = {
     "MAX_PENDING_DISTANCE_PCT": "float",
     "MAX_DAILY_LOSS_PCT": "float",
     "BREAKEVEN_USES_REAL_ENTRY": "bool",
+    "LOT_PER_CHAT": "list",
     # Funcionamiento
     "ENABLE_OCR": "bool",
     "DRY_RUN": "bool",

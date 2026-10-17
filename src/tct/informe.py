@@ -33,6 +33,8 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
 
+from tct.grupos import clave_de_grupo
+
 # Eventos que representan una senal de APERTURA que el bot vio y decidio algo.
 # El resto son gestion (mover el stop, cerrar) o ruido informativo.
 APERTURAS = {
@@ -422,6 +424,8 @@ def tickets_operados(eventos: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "take_profits": objetivos,
                 "tp_indice": indice,
                 "tp_movido_a": tp_movido.get(ticket),
+                # De que grupo vino, para el resumen por grupo (17/10).
+                "grupo": clave_de_grupo(senal.get("telegram_chat_id")),
             })
     return operadas
 
@@ -582,6 +586,20 @@ def resumir_desenlaces(desenlaces: list[dict[str, Any]]) -> dict[str, Any]:
         "profit_total": neto,
         "costos_desconocidos": sin_costos,
     }
+
+
+def resumir_por_grupo(desenlaces: list[dict[str, Any]]) -> list[tuple[str | None, dict]]:
+    """El mismo resumen, uno por grupo, del mejor neto al peor.
+
+    Con varios grupos en un bot (17/10) es la pregunta que importa: cual de
+    los tres esta ganando. Las filas sin grupo (operaciones de antes de que se
+    guardara) van juntas, con grupo None.
+    """
+    por_grupo: dict[str | None, list[dict[str, Any]]] = {}
+    for fila in desenlaces:
+        por_grupo.setdefault(fila.get("grupo"), []).append(fila)
+    resumenes = [(grupo, resumir_desenlaces(filas)) for grupo, filas in por_grupo.items()]
+    return sorted(resumenes, key=lambda par: -par[1]["neto_total"])
 
 
 # --------------------------------------------------------------------------

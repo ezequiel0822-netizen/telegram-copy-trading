@@ -19,6 +19,9 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+from tct.grupos import clave_de_grupo
 
 try:
     from dotenv import dotenv_values
@@ -266,9 +269,18 @@ class Settings:
     # verdad, no al numero del mensaje. Ver `engine._destino_del_stop`, que es
     # donde estan las tres operaciones reales que lo motivaron.
     breakeven_uses_real_entry: bool = True
+    # Un lote para cada grupo, cuando el bot copia varios (17/10: la demo de
+    # FxPro con David a 0.03 y Sebastian y TRADING ZONE a 0.04). La clave es
+    # `tct.grupos.clave_de_grupo` del id. El grupo que no esta aca usa
+    # DEFAULT_LOT. Vacio = el comportamiento de siempre. Ver `lote_para`.
+    lot_per_chat: dict[str, float] = field(default_factory=dict)
     configured_mode: str = ""
 
     warnings: list[str] = field(default_factory=list)
+
+    def lote_para(self, chat: Any) -> float:
+        """El lote de una senal de este chat: el suyo, o DEFAULT_LOT."""
+        return self.lot_per_chat.get(clave_de_grupo(chat) or "", self.default_lot)
 
     # -- Ayudas de lectura -------------------------------------------------
 
@@ -305,6 +317,17 @@ class Settings:
         # de los mensajes siguientes hace cola. Sin verlo al arrancar, cambiarlo
         # en el .env es cambiar un numero a ciegas.
         return f"{self.ollama_model} ({rol}, max {self.ollama_timeout_seconds}s)"
+
+    def _describe_lote_por_grupo(self) -> list[str]:
+        """Una linea por grupo con su lote propio, solo si LOT_PER_CHAT esta puesto."""
+        if not self.lot_per_chat:
+            return []
+        lineas = []
+        for chat in self.telegram_source_chats:
+            lote = self.lot_per_chat.get(clave_de_grupo(chat) or "")
+            lineas.append(f"  lote de {chat}: {lote if lote is not None else self.default_lot}"
+                          + ("" if lote is not None else " (DEFAULT_LOT)"))
+        return lineas
 
     def _describe_por_senal(self) -> str:
         """Cuantas posiciones abre una senal y cuantas tolera por instrumento.
@@ -375,6 +398,7 @@ class Settings:
             f"Broker          : {self.broker_kind}",
             f"Dry run         : {self.dry_run}",
             f"Lote / max lote : {self.default_lot} / {self.max_lot}",
+            *self._describe_lote_por_grupo(),
             f"Simbolos        : {', '.join(sorted(self.allowed_symbols))}",
             f"Max abiertas    : {self.max_open_trades}",
             f"Max senales/dia : {self.max_signals_per_day}",
@@ -569,6 +593,7 @@ def load_settings(env_file: str | Path | None = None,
         max_pending_distance_pct=env.float("MAX_PENDING_DISTANCE_PCT", 3.0),
         max_stop_distance_pct=max(0.0, env.float("MAX_STOP_DISTANCE_PCT", 0.0)),
         breakeven_uses_real_entry=env.bool("BREAKEVEN_USES_REAL_ENTRY", True),
+        lot_per_chat=_lote_por_grupo(env.list("LOT_PER_CHAT"), source_chats, max_lot),
         allow_live_trading=allow_live,
         enable_ocr=env.bool("ENABLE_OCR", False),
         dry_run=env.bool("DRY_RUN", False),
@@ -631,6 +656,54 @@ def _avisos_de_varias_instancias(settings: Settings) -> list[str]:
         "                MT5_PATH=C:\\Program Files\\MetaTrader 5\\terminal64.exe\n"
         "            Y mira siempre la linea 'MT5 listo | servidor=...' del arranque."
     ]
+
+
+def _lote_por_grupo(items: list[str], source_chats: list[str],
+                    max_lot: float) -> dict[str, float]:
+    """LOT_PER_CHAT=-1004363872187:0.03,-1003831574671:0.04 -> {clave: lote}.
+
+    Se niega a arrancar ante cualquier cosa rara, porque un lote mal leido es
+    plata: un grupo que no esta en TELEGRAM_SOURCE_CHATS (un numero mal
+    copiado haria que ese grupo use DEFAULT_LOT sin que nadie lo note), un
+    @nombre (las senales traen el numero, no el nombre), un lote que no es un
+    numero, que no es positivo o que supera MAX_LOT, o el mismo grupo dos veces.
+    """
+    fuentes = {clave_de_grupo(c) for c in source_chats}
+    lotes: dict[str, float] = {}
+    for item in items:
+        chat, separador, lote_txt = item.rpartition(":")
+        chat = chat.strip()
+        if not separador or not chat:
+            raise ConfigError(
+                f"LOT_PER_CHAT: '{item}' tiene que ser <numero del grupo>:<lote>, "
+                "por ejemplo -1004363872187:0.03")
+        clave = clave_de_grupo(chat)
+        if not (clave or "").isdigit():
+            raise ConfigError(
+                f"LOT_PER_CHAT: '{chat}' tiene que ser el NUMERO del grupo (el que muestra "
+                "'tct chats', como -1004363872187), no un @nombre")
+        if clave not in fuentes:
+            raise ConfigError(
+                f"LOT_PER_CHAT: el grupo {chat} no esta en TELEGRAM_SOURCE_CHATS. "
+                "Revisa que el numero sea el mismo en las dos lineas.")
+        if clave in lotes:
+            raise ConfigError(f"LOT_PER_CHAT: el grupo {chat} aparece dos veces")
+        # "0,03" llega partido en dos por la coma que separa los grupos.
+        coma = " (con punto, no coma: 0.03; y los grupos separados por comas)"
+        try:
+            lote = float(lote_txt.strip())
+        except ValueError as exc:
+            raise ConfigError(
+                f"LOT_PER_CHAT: el lote de {chat} tiene que ser un numero, llego "
+                f"'{lote_txt.strip()}'{coma}") from exc
+        if not lote > 0:  # tambien ataja un 'nan'
+            raise ConfigError(
+                f"LOT_PER_CHAT: el lote de {chat} tiene que ser mayor que cero{coma}")
+        if lote > max_lot:
+            raise ConfigError(
+                f"LOT_PER_CHAT: el lote de {chat} ({lote}) no puede superar MAX_LOT ({max_lot})")
+        lotes[clave] = lote
+    return lotes
 
 
 def _resolver_roster(env: _Env, instance_name: str) -> tuple[str, ...]:
