@@ -295,3 +295,41 @@ def test_un_lado_agregado_al_final_en_una_edicion_no_cambia_la_entrada():
                      "🟢TP2: 4058\n🟢TP3: 4060\n🔴SL: 4043\n\nBUY ✅\n+210")
 
     assert e.entry == 4050
+
+
+# --------------------------------------------------------------------------
+# "Salir" en los mensajes reales de David (17/10)
+# --------------------------------------------------------------------------
+#
+# En 295 mensajes del canal (07/09-16/10) "salir" nunca fue una orden de cerrar,
+# y estas tres frases cerraban todo el oro. La del 13/10 paso en la real: el
+# canal anunciaba que abria una SEGUNDA posicion y el bot cerro las dos compras
+# recien abiertas.
+
+@pytest.mark.parametrize("mensaje", [
+    "Y chicos, una vez más, muchas gracias y gracias por su comprensión 🙏\n"
+    "Voy a descansar, intentaré salir a internet lo mínimo posible hoy, quiero disfrutar",
+    "Bueno, no es el comienzo más agradable de la semana de trading\n"
+    "Bueno, no es gran cosa, me conoces y sabes que somos capaces de salir de una "
+    "situación así\nIncluso cuando la primera operación toca el SL",
+    "CHICOS, ESTAMOS ABIRIENDO LA SEGUNDA POSICIÓN EN PARALELO\n"
+    "EL PRECIO ESTÁ COMENZANDO A SALIR DEL DESBALANCE Y HAY BUENAS POSIBILIDADES DE UN "
+    "AUMENTO DE PRECIO",
+    "Chicos, una vez más, os entiendo a todos por completo, pero es importante que "
+    "mantengamos la calma y la cabeza fría. Lo más importante es no salir de la posición",
+])
+def test_salir_en_los_mensajes_de_david_que_no_son_cerrar(mensaje):
+    e = parse_signal(mensaje)
+
+    assert e is None or e.event_type is not EventType.CLOSE
+
+
+@pytest.mark.parametrize("mensaje", [
+    "SALIR DE LAS DOS POSICIONES",
+    "SALIR DEL ORO",
+    "SALIR A MERCADO",
+    "Chicos, es hora de salir",
+    "Les recomiendo salir de esa operación",
+])
+def test_salir_de_la_operacion_con_otras_palabras_cierra(mensaje):
+    assert parse_signal(mensaje).event_type is EventType.CLOSE

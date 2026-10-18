@@ -374,7 +374,49 @@ dijo que antes del 14/10 la real iba en positivo, no en −34. Tenía razón:
   pidieron `tct informe --env-file .env.segunda --horas 720 --con-resultados`
   + `tct repaso --env-file .env.segunda --dias 30 --lotes 0.05 --detalle
   --chat=-1004363872187`, y lo mismo de la real (`.env.real`, `--horas 480`,
-  `--dias 20 --lotes 0.03`). Pendiente compararlos.
+  `--dias 20 --lotes 0.03`). **Comparados (17/10), operación por operación, en
+  puntos** (`scratchpad/vivo_vs_repaso/comparar.py` de esa sesión):
+  - Real (Bullwaves, 29/09-15/10): 35 en vivo, todas en el repaso; 30 terminan
+    igual (±1.5 puntos). En vivo −28.7 puntos, repaso −33.2: −4.4 de diferencia.
+    En plata, con los lotes que tuvo: antes del 14/10 **+78.29 en vivo** (el
+    repaso +60.64); 14-15/10 −158.82 en vivo. Las que difieren: 12/10 SELL 4156
+    (vivo cerrada a −8.4, repaso −29: siguió el "MOVER SL A 4175 / 4185" del
+    canal), 14/10 (vivo 9 puntos peor por deslizamiento), 29/09 y 30/09 (TP
+    cambiados a mano por él en MT5) y 05/10 12:06.
+  - Demo FxPro (22/09-15/10): 48 en vivo, todas en el repaso; 45 igual. En vivo
+    +23.4 puntos, repaso −0.1: casi todo es el 12/10 y el 09/10 04:30 (en vivo
+    corría el parser viejo, que no entendía "PARA LA OPERACIÓN ... ESTABLECER SL"
+    y la operación llegó al TP; el repaso, con el de hoy, la cerró en BE).
+  - Conclusión: el repaso reproduce bien lo real; no hace falta rehacer los
+    grupos. Lo que no modela: deslizamiento en caídas rápidas, lo que él toca a
+    mano, y algún mensaje de gestión que en vivo se leyó distinto. Falta saber
+    POR QUÉ en vivo se cerró la del 12/10 (¿el mensaje de las 07:02 "la posición
+    puede parecer aterradora..." leído como CERRAR por el parser viejo, el de
+    antes del arreglo de las negaciones?): se le pidió `tct mensajes --env-file
+    .env.real --chat=-1004363872187 --cantidad 300`.
+  - **Resuelto con esos mensajes (17/10):** el de las 07:02 dice "Lo más
+    importante es NO SALIR de [la posición]": el parser viejo (antes del arreglo
+    de las negaciones del 16/10) lo leyó como SALIR y cerró. Fue suerte: el canal
+    pedía aguantar y después movió el SL a 4175 y 4185, y la operación terminó
+    en 4185 (−29 puntos, −85 a 0.03). Con el bot de hoy habría seguido al canal:
+    **de los +78.29 de antes del 14/10, ~+62 fueron esa suerte**; siguiendo a
+    David tal cual, ~+16 hasta el 13/10 y ~−143 hasta el 15/10. El repaso hacía
+    lo que hace el bot de hoy.
+  - En esos 295 mensajes (07/09-16/10) SALIR nunca fue una orden y cerró todo
+    3 veces: "salir a internet" (17/09), "capaces de salir de una situación así"
+    (12/10, sin posiciones abiertas) y **13/10 05:34 "estamos abriendo la segunda
+    posición... el precio está comenzando a salir del desbalance"**: la real
+    cerró las dos compras recién abiertas (4184 y 4185, +2.55 y −3.12). SALIR
+    sigue cerrando como siempre, con más excepciones: "a internet", "de una
+    situación", "del desbalance/desequilibrio" (`_SALIR_QUE_NO_CIERRA`). Se
+    probó una regla más cerrada (que SALIR cierre solo "de la posición"...) y
+    dos revisores (760 + 362 mensajes armados) encontraron órdenes perdidas
+    ("SALIR", "SALIR DE AMBAS", 'PARA EL NEGOCIO "COMPRA 4184" SALIR') y cierres
+    nuevos ("ayer salimos de la operación"): no se subió. Con la regla final,
+    en los 295 reales cambian solo esas 3 y de los 358 casos de la revisión,
+    9 (todos esas frases). Sigue cerrando en falso lo que ya cerraba ("saber
+    cuándo salir de la operación", "no vamos a salir de la posición"): el NO
+    solo niega si está pegado, y entre medio hay un verbo.
 
 **ESTADO AL 12/10.**
 

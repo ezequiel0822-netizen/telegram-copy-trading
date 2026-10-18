@@ -119,17 +119,27 @@ _ANALISIS_DE_CIERRE = (
     r"(?!\s+(?:" + _UN_NIVEL + r"|LA\s+(?:SEMANA|VELA|SESION)|H\d|\d+H|D1|W1))"
 )
 # SALIR cierra, como siempre ("salir del negocio", "salir en BE", "hay que
-# salir"), salvo cuando lo que sale es el PRECIO de una figura o es un plan
-# de fin de semana: "queriamos salir todos juntos" (un testimonio de Genesis,
-# 17/10) cerraba las posiciones del grupo, y "el precio puede salir del rango"
-# o "vamos a salir de la zona de 4400" tambien. Se probo primero al reves (que
-# SALIR cerrara solo con "de la operacion"...) y se perdian ordenes de David,
-# que escribe "negocio", "ambas", "en BE" (revision del 17/10).
+# salir", "SALIR" solo), salvo cuando lo que sale es el PRECIO de una figura
+# o es la vida del que escribe. En los mensajes reales de David (295, del 07/09
+# al 16/10) "salir" nunca fue una orden y tres veces cerro todo el oro: "intentare
+# salir a internet lo minimo posible", "somos capaces de salir de una situacion
+# asi" y, el 13/10, "estamos abriendo la segunda posicion... el precio esta
+# comenzando a salir del desbalance": la real cerro las dos compras recien
+# abiertas. Antes, "queriamos salir todos juntos" (un testimonio de Genesis) y
+# "el precio puede salir del rango" tambien cerraban.
+#
+# Se probaron dos veces reglas mas cerradas ("salir" cierra solo con "de la
+# posicion"...) y las dos revisiones del 17/10 encontraron ordenes perdidas
+# ("SALIR", "SALIR DE AMBAS", 'PARA EL NEGOCIO "COMPRA 4184" SALIR') y cierres
+# nuevos ("ayer salimos de la operacion"). Por eso quedo asi: lo de siempre,
+# con estas excepciones, que son las que se vieron.
 _SALIR_QUE_NO_CIERRA = (
-    r"(?!\s+(?:TODOS\s+JUNTOS|JUNTOS|DE\s+VACACIONES|DE\s+PASEO|"
-    r"A\s+(?:PASEAR|CENAR|COMER|CAMINAR|DISFRUTAR)|"
+    r"(?!\s+(?:TODOS\s+JUNTOS|JUNTOS|DE\s+VACACIONES|DE\s+PASEO|DE\s+VIAJE|"
+    r"A\s+(?:PASEAR|CENAR|COMER|CAMINAR|DISFRUTAR|CORRER|CELEBRAR|INTERNET|LA\s+CALLE)|"
+    r"DE\s+(?:(?:UNA|ESTA|ESA|LA|ESTAS|ESAS|LAS)\s+)?SITUACION(?:ES)?\b|"
     r"DEL?\s+(?:(?:LA|EL|UN|UNA|ESTE|ESTA|ESE|ESA)\s+)?(?:RANGO|ZONA|CANAL|TRIANGULO|"
-    r"CONSOLIDACION|ACUMULACION|LATERAL|LATERALIDAD|CUNA|BANDERA)\b))"
+    r"CONSOLIDACION|ACUMULACION|LATERAL|LATERALIDAD|CUNA|BANDERA|DESBALANCE|"
+    r"DESEQUILIBRIO|IMBALANCE)\b))"
 )
 _CLOSE_RE = re.compile(
     r"\b(?:CLOSE|CLOSED|CERRAR)\b" + _ANALISIS_DE_CIERRE +
