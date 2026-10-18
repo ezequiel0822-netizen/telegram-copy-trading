@@ -343,6 +343,38 @@ bots) que operan varios símbolos. Plan acordado, en orden:
    sesión nueva (`TELEGRAM_SESSION_NAME=telegram_copy_trading_fxpro_nuevo`,
    nunca la `_repaso`), y los comandos por Telegram de esa demo pasan a
    mandarse desde ese número. Pendiente que elija.
+   **Al final (17/10, noche):** eligió Jezrel para todo lo de FxPro (la sesión
+   `_repaso` de `.env.segunda` se volvió a loguear con Jezrel) y pidió CUATRO
+   grupos, un punto menos cada uno: David 0.02, Sebastián 0.03, TRADING ZONE
+   0.03 y Genesis 0.01 (aunque su repaso dio 65% contra 71%, −69.28 a 0.04):
+   `tct cambiar --env-file .env.segunda
+   TELEGRAM_SOURCE_CHATS=-1004363872187,-1003831574671,-1001666520346,-1003729772063
+   DEFAULT_LOT=0.03 MAX_LOT=0.03
+   LOT_PER_CHAT=-1004363872187:0.02,-1003831574671:0.03,-1001666520346:0.03,-1003729772063:0.01`
+   (probado sobre una copia del `.env.segunda.example`).
+
+**El repaso de David contra lo que pasó en vivo (17/10, a pedido suyo).** Él
+dijo que antes del 14/10 la real iba en positivo, no en −34. Tenía razón:
+- 29/09-09/10: el repaso (español, Bullwaves) da 15 de 22 (68%), lo MISMO que
+  la real en vivo, pero +99.70 a 0.05 contra +56.85 reales: el repaso es
+  optimista en plata (sin deslizamiento ni spread de más).
+- 12/10 06:38 SELL 4156 (SL 4168): en vivo el bot la CERRÓ a −7 puntos (la
+  demo de FxPro: "la cerro el bot −36.01" a 0.05); en el repaso perdió −28
+  puntos (−84.81 a 0.03; también en el de inglés). El repaso lee el historial
+  DESPUÉS: no ve los mensajes que el canal borró y ve los editados en su versión
+  final. David manda mucha gestión, así que es el canal donde más pesa; TRADING
+  ZONE y Sebastián casi no mandan gestión. Corregida esa sola, antes del 14/10
+  la real iba en ~+80 (lo que él decía).
+- Del 14 al 16/10 David perdió −116 a −120 a 0.03 (1 de 4); TRADING ZONE,
+  Sebastián, Gold Signals y Genesis GANARON esos días.
+- Para medir cuánto se separa el repaso de lo real, operación por operación:
+  `tct informe` ahora también queda en `informe_<fecha>.txt`, y el `--detalle`
+  del repaso muestra debajo de cada operación la gestión que le aplicó (`gestion
+  : 12/10 07:02 movio el SL a 4184 <- texto`) y cuándo cerró (`cerro :`). Se le
+  pidieron `tct informe --env-file .env.segunda --horas 720 --con-resultados`
+  + `tct repaso --env-file .env.segunda --dias 30 --lotes 0.05 --detalle
+  --chat=-1004363872187`, y lo mismo de la real (`.env.real`, `--horas 480`,
+  `--dias 20 --lotes 0.03`). Pendiente compararlos.
 
 **ESTADO AL 12/10.**
 

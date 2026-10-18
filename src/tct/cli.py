@@ -2075,6 +2075,22 @@ def cmd_test(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
+def _guardado_tambien_en(prefijo: str):
+    """Que todo lo que imprime el comando quede ademas en <prefijo>_<fecha>.txt."""
+    import functools
+
+    def decorar(comando):
+        @functools.wraps(comando)
+        def envuelto(*args, **kwargs):
+            with _tambien_a_un_archivo(prefijo):
+                return comando(*args, **kwargs)
+        return envuelto
+    return decorar
+
+
+# Con --con-resultados son cientos de lineas y la consola no deja copiar tanto
+# (17/10: para comparar lo que hizo el bot en vivo con el repaso).
+@_guardado_tambien_en("informe")
 def cmd_informe(args: argparse.Namespace) -> int:
     """Que hizo el bot y POR QUE, leido de lo que quedo registrado.
 
@@ -2681,6 +2697,46 @@ def _tabla_de_grupos(filas: list[tuple[str, dict]], lote_del_env: float,
         pass
 
 
+_GESTION_DEL_REPASO = {
+    "mover_sl": "movio el SL", "sl_corregido": "corrigio el SL", "mover_tp": "movio el TP",
+    "cierre": "la cerro", "cierre_parcial": "cerro una parte",
+}
+
+
+def _gestion_por_ticket(eventos: list[dict], mensajes: list) -> dict:
+    """Las lineas "gestion :" del detalle del repaso, por ticket.
+
+    El 17/10 una venta del 12/10 en el repaso perdio 28 puntos y en vivo el bot
+    la habia cerrado a 7: sin ver que mensaje le movio el stop o la cerro, no
+    habia forma de saber donde se separaba el repaso de lo que paso. La hora es
+    la del MENSAJE (el evento del repaso lleva la hora de la PC al correrlo).
+    """
+    from tct.informe import hora_local, precio
+
+    fechas = {meta.get("message_id"): meta.get("date") for _texto, meta in mensajes}
+    lineas: dict = {}
+    for evento in eventos:
+        que = _GESTION_DEL_REPASO.get(evento.get("kind", ""))
+        if que is None:
+            continue
+        senal = evento.get("signal") or {}
+        cuando = fechas.get(senal.get("telegram_message_id"))
+        hora = hora_local(cuando) if cuando else "?"
+        texto = " ".join(str(senal.get("raw_message") or "").split())
+        texto = texto[:70] + "..." if len(texto) > 70 else texto
+        ordenes = list(evento.get("orders") or [])
+        if evento.get("order"):
+            ordenes.append(evento["order"])
+        for orden in ordenes:
+            if not isinstance(orden, dict) or orden.get("ticket") is None:
+                continue
+            a = f" a {precio(orden.get('price'))}" if orden.get("price") is not None else ""
+            ok = "" if orden.get("ok", True) else " (NO se pudo)"
+            lineas.setdefault(orden["ticket"], []).append(
+                f"        gestion : {hora} {que}{a}{ok}  <- {texto}")
+    return lineas
+
+
 def _ajustes_del_repaso(settings: Settings, base: Path) -> Settings:
     """Los ajustes del bot, como los necesita el motor del repaso."""
     import dataclasses
@@ -2776,6 +2832,7 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
             store = Store(ajustes.events_path, ajustes.paper_trades_path, ajustes.state_path)
             engine = Engine(ajustes, store, broker)
             filas = await repasar(engine, broker, mensajes, fin)
+            gestion = _gestion_por_ticket(store.read_events(), mensajes)
     finally:
         await mt5_broker.disconnect()
 
@@ -2810,6 +2867,17 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
             # mensaje a Telegram (16/10): que decia, y que entendio.
             for linea in _mensaje_y_lo_que_entendio(senal):
                 print(linea)
+            # Y que le hizo la gestion del canal, y cuando cerro (17/10): para
+            # comparar con lo que paso en vivo y ver donde se separan.
+            if f.get("posicion") is not None:
+                for linea in gestion.get(f.get("ticket"), []):
+                    print(linea)
+                cierre = f["posicion"].cerrada
+                if cierre is not None:
+                    hora_cierre = hora_local(datetime.fromtimestamp(
+                        cierre["cerrada_ms"] / 1000, tz=timezone.utc).isoformat())
+                    print(f"        cerro   : {hora_cierre} a {precio(cierre.get('precio'))}"
+                          f" ({cierre['motivo']})")
         print()
 
     print("  " + "-" * 62)
