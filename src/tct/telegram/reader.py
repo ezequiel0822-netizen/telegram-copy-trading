@@ -326,6 +326,26 @@ async def _entrar(client, intentos: int = 3) -> None:
     raise TelefonoInvalido("Telegram no acepto el telefono.")
 
 
+async def _abrir_el_chat(client, crudo: str) -> Any:
+    """La entidad de un chat del .env, o la excepcion de por que no se pudo.
+
+    Un canal al que la cuenta se unio hace poco no esta todavia en el cache de
+    la sesion, y Telethon no lo encuentra por numero: el repaso de Genesis
+    (17/10) dijo "no llego ningun mensaje" sin decir por que. Recorrer los
+    chats de la cuenta (lo que hace `tct chats`) lo carga; se prueba una vez.
+    """
+    candidato: Any = int(crudo) if crudo.lstrip("-").isdigit() else crudo
+    try:
+        return await client.get_entity(candidato)
+    except Exception:
+        pass
+    try:
+        await client.get_dialogs()
+        return await client.get_entity(candidato)
+    except Exception as exc:
+        return exc
+
+
 async def fetch_history(settings, dias: int) -> list[tuple[str, dict[str, Any]]]:
     """Los mensajes de texto de los ultimos `dias` de los chats del .env, en orden.
 
@@ -352,11 +372,15 @@ async def fetch_history(settings, dias: int) -> list[tuple[str, dict[str, Any]]]
     recolectados: list[tuple[str, dict[str, Any]]] = []
     try:
         for crudo in settings.telegram_source_chats:
-            candidato: Any = int(crudo) if crudo.lstrip("-").isdigit() else crudo
-            try:
-                entidad = await client.get_entity(candidato)
-            except Exception as exc:
-                logger.error("No se pudo resolver el chat '%s': %s", crudo, exc)
+            entidad = await _abrir_el_chat(client, crudo)
+            if isinstance(entidad, Exception):
+                logger.error("No se pudo resolver el chat '%s': %s", crudo, entidad)
+                # A la salida (y al archivo del repaso), no solo al log: el
+                # usuario ve "no llego ningun mensaje" y no sabe por que.
+                print(f"\n  No se pudo abrir el grupo {crudo} con la cuenta del repaso.\n"
+                      "  Casi siempre es que ESA cuenta (la de la sesion _repaso, que puede\n"
+                      "  ser otro numero) no esta unida al canal. 'tct chats --repaso'\n"
+                      "  (con el mismo --env-file) lista los grupos que ve.")
                 continue
             async for mensaje in client.iter_messages(entidad, limit=None):
                 if mensaje.date and mensaje.date < desde:
@@ -402,11 +426,9 @@ async def ultimos_mensajes(settings, chats: list[str], cantidad: int) -> list[di
     grupos: list[dict[str, Any]] = []
     try:
         for crudo in chats:
-            candidato: Any = int(crudo) if crudo.lstrip("-").isdigit() else crudo
-            try:
-                entidad = await client.get_entity(candidato)
-            except Exception as exc:
-                grupos.append({"chat": crudo, "titulo": None, "error": str(exc),
+            entidad = await _abrir_el_chat(client, crudo)
+            if isinstance(entidad, Exception):
+                grupos.append({"chat": crudo, "titulo": None, "error": str(entidad),
                                "mensajes": []})
                 continue
             mensajes = []

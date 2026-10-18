@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-17 · v2.7.0 · 1321 tests · el último commit que describe
-es `90e0965`, más este mismo cambio
+Actualizado: 2026-10-17 · v2.7.0 · 1352 tests · el último commit que describe
+es `04ab958`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
 
@@ -212,7 +212,32 @@ hacen falta ~45 operaciones (~150 días de ese canal): se le pidió
   de David. Una demo prueba la mecánica, no la ventaja ni el deslizamiento de
   Bullwaves; antes de plata real, `tct repaso --env-file .env.real --dias 150
   --lotes 0.03 --detalle --chat=-1001666520346`. No se hizo nada de esto
-  todavía: es decisión de él. Otros 7 grupos el bot no
+  todavía: es decisión de él.
+- **Academia de Trading Genesis (`-1003729772063`, 17/10)**: la quiso sumar a
+  la demo de FxPro. `tct mensajes` + repaso con `.env.real` (su `_repaso` está
+  en Jezrel; solo cuenta oro) dieron 0 operaciones: (1) sus señales de EURUSD y
+  plata ("🟢 BUY XAGUSD / 🚀 56.895 / SL: / TP 1..5" y un párrafo de análisis)
+  se leían con la entrada del análisis ("entrada 22" por el "(21/23)" del
+  estocástico) y TP falsos ("M5"); **arreglado**: la entrada es el número solo
+  en la línea que sigue al lado, en la cabecera y sin otra etiqueta de entrada
+  (`_ENTRADA_EN_SU_LINEA_RE`), y un párrafo (6+ palabras) o un @usuario debajo
+  de una etiqueta corta su bloque una vez que ya tiene su precio
+  (`_solo_lineas_de_precio`, que de paso saca el "2024" de "@vipsignals2024" de
+  los TP). La primera versión cortaba antes y una revisión de 21.000 mensajes
+  encontró que perdía el precio de "ESTABLEZCA AMBOS SL
+EN LA MARCA 4170" (David
+  con salto de línea): quedó corregido y con test; (2) su oro llega
+  SIN TP ("SELL XAU/USD 📍 4155 - 4157 ❗️ Stop loss: 4169") y no se puede copiar
+  con `REQUIRE_TAKE_PROFIT` (que vale para todo el bot); (3) un testimonio
+  ("...queríamos salir todos juntos") se leía CERRAR: SALIR sigue cerrando
+  como siempre (David escribe "salir del negocio", "en BE", "de ambas"), salvo
+  "todos juntos", "de paseo" o salir DEL rango / DE LA zona (`_SALIR_QUE_NO_CIERRA`).
+  Su
+  forma: TP1 ~5.5 pips contra SL ~16 en EURUSD, ~12 contra ~32 centavos en
+  plata: con solo el TP1 hace falta ~73% antes del spread; dicen 67-74%. Canal
+  de venta de un VIP. Para medirlo: el otro número se une al canal y `tct
+  repaso --env-file .env.segunda --dias 40 --lotes 0.04 --detalle
+  --chat=-1003729772063`. Otros 7 grupos el bot no
 los entendía; con `tct mensajes` se vio por qué: 5 mandan las señales como
 IMAGEN o son pronósticos sin SL (SignalProvider, ProSignalsFx, TradingForexSP,
 Supply and Demand Snipper, ORO/DÓLAR) y no tiene arreglo leyendo texto. Los

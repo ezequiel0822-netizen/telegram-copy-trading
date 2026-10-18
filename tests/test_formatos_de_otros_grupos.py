@@ -153,3 +153,145 @@ def test_don_t_con_coma_es_una_negacion(mensaje):
     e = parse_signal(mensaje)
 
     assert e is None or e.event_type is not EventType.CLOSE
+
+
+# --------------------------------------------------------------------------
+# Academia de Trading Genesis (17/10)
+# --------------------------------------------------------------------------
+#
+# "🟢 BUY XAGUSD / 🚀 56.895 / SL: ... / TP 1..5" y debajo un parrafo de
+# analisis. La entrada no tiene etiqueta (es el numero solo en la linea del 🚀),
+# y el analisis trae "zona" y "precio": se leia entrada 22, por el "(21/23)"
+# del estocastico, y el "M5" del final quedaba como otro TP.
+
+GENESIS_PLATA = (
+    "🟢 BUY XAGUSD\n"
+    "🚀 56.895\n"
+    "SL: 56.722\n"
+    "TP 1: 56.970\n"
+    "TP 2: 57.050\n"
+    "TP 3: 57.130\n"
+    "TP 4: 57.210\n"
+    "TP 5: 57.300\n"
+    "El Estocástico en M5 se encuentra en zona de sobreventa (21/23) con el precio "
+    "consolidando por encima de 56.88, lo que sugiere un rebote inminente"
+)
+
+GENESIS_EURO = (
+    "🔴 SELL EURUSD\n"
+    "🚀 1.12094\n"
+    "SL: 1.12268\n"
+    "TP 1: 1.12070\n"
+    "TP 2: 1.12045\n"
+    "TP 3: 1.12020\n"
+    "TP 4: 1.12003\n"
+    "TP 5: 1.11995\n"
+    "El estocástico en M5 está en 76.69/%K girando a la baja desde zona sobrecomprada "
+    "y el precio lleva 12 velas empujando desde 1.12004 hasta 1.12094"
+)
+
+
+@pytest.mark.parametrize("mensaje, simbolo, lado, entrada, sl, tps", [
+    (GENESIS_PLATA, "XAGUSD", Side.BUY, 56.895, 56.722,
+     [56.97, 57.05, 57.13, 57.21, 57.3]),
+    (GENESIS_EURO, "EURUSD", Side.SELL, 1.12094, 1.12268,
+     [1.1207, 1.12045, 1.1202, 1.12003, 1.11995]),
+])
+def test_genesis_la_entrada_es_el_numero_del_cohete(mensaje, simbolo, lado, entrada, sl, tps):
+    e = parse_signal(mensaje)
+
+    assert e.event_type is EventType.OPEN
+    assert (e.symbol, e.side) == (simbolo, lado)
+    assert (e.entry_low, e.entry_high, e.stop_loss) == (entrada, entrada, sl)
+    assert e.take_profits == tps
+
+
+@pytest.mark.parametrize("mensaje, entrada", [
+    # Un numero solo en la linea que sigue al lado: es la entrada.
+    ("BUY XAUUSD\n2345\nSL 2335\nTP 2360", 2345),
+    # Si no esta justo debajo del lado, no: queda la regla de siempre.
+    ("XAUUSD BUY 2345\nSL 2335\nTP 2360", 2345),
+    ("GOLD BUY LIMIT 2340\nSL 2330\nTP 2360", 2340),
+])
+def test_la_entrada_en_su_linea_no_cambia_los_otros_formatos(mensaje, entrada):
+    assert parse_signal(mensaje).entry == entrada
+
+
+@pytest.mark.parametrize("mensaje, tps", [
+    # Las listas de precios en varias lineas siguen enteras.
+    ("XAUUSD BUY 2345\nSL 2335\nTP:\n2355\n2365", [2355, 2365]),
+    ("XAUUSD BUY 2345\nSL 2335\nTP 2355\n- 2365", [2355, 2365]),
+    # Lo que viene debajo del ultimo TP y no es un precio, no.
+    ("GOLD BUY 2345\nSL 2335\nTP 2360\n@vipsignals2024", [2360]),
+    ("GOLD BUY 2345\nSL 2335\nTP 2360\nEl analisis en M5 sugiere un rebote desde la zona",
+     [2360]),
+    # Un renglon corto debajo de la etiqueta sigue siendo parte del bloque.
+    ("XAUUSD BUY 2345\nSL 2335\nTP:\nFirst one at 2355\nSecond one at 2365", [2355, 2365]),
+])
+def test_el_texto_debajo_de_los_tp_no_agrega_tps(mensaje, tps):
+    assert parse_signal(mensaje).take_profits == tps
+
+
+@pytest.mark.parametrize("mensaje", [
+    "Ha sido una buena semana, gané bastante bien\nAhora puedo empezar el finde con "
+    "tranquilidad. Voy a llevar a la familia al bosque, hace tiempo que queríamos "
+    "salir todos juntos.",
+    "El precio puede salir del rango en cualquier momento",
+    "Vamos a salir de la zona de 4400 pronto",
+])
+def test_salir_suelto_no_es_cerrar(mensaje):
+    e = parse_signal(mensaje)
+
+    assert e is None or e.event_type is not EventType.CLOSE
+
+
+@pytest.mark.parametrize("mensaje", [
+    "Salir ya del oro",
+    "Vamos a salir de la operacion",
+    "SALIR DEL TRADE AHORA",
+    "Hay que salir de todas las posiciones",
+])
+def test_salir_de_la_operacion_si_es_cerrar(mensaje):
+    assert parse_signal(mensaje).event_type is EventType.CLOSE
+
+
+@pytest.mark.parametrize("mensaje, sl", [
+    # David escribe el pedido y el precio en renglones distintos: el bloque del
+    # SL no se corta antes de tener su numero (revision del 17/10).
+    ("ESTABLEZCA AMBOS SL\nEN LA MARCA 4170", 4170),
+    ("MUEVAN SU SL\nA LA MARCA DE 4170", 4170),
+    ("MUEVAN EL SL\nPOR DEBAJO DE 4170", 4170),
+])
+def test_el_precio_del_sl_en_el_renglon_de_abajo_se_lee(mensaje, sl):
+    e = parse_signal(mensaje)
+
+    assert e.event_type is EventType.MOVE_SL
+    assert e.stop_loss == sl
+
+
+@pytest.mark.parametrize("mensaje", [
+    # Las palabras de David para cerrar: siguen siendo un cierre.
+    "SALIR DEL NEGOCIO AHORA",
+    "SALIR EN BE",
+    "SALIR DE AMBAS POSICIONES",
+    "Hay que salir",
+    "RECOMIENDO SALIR CON GANANCIAS AHORA",
+])
+def test_salir_con_las_palabras_de_david_sigue_cerrando(mensaje):
+    assert parse_signal(mensaje).event_type is EventType.CLOSE
+
+
+@pytest.mark.parametrize("mensaje, entrada", [
+    # Con una etiqueta de entrada en la cabecera, el numero suelto no la pisa.
+    ("SELL XAUUSD\n17\nEntry 4510\nSL 4520\nTP 4500", 4510),
+    ("XAUUSD BUY\n0.05\nEntry: 2345\nSL: 2335\nTP: 2360", 2345),
+])
+def test_el_numero_suelto_no_pisa_una_entrada_con_etiqueta(mensaje, entrada):
+    assert parse_signal(mensaje).entry == entrada
+
+
+def test_un_lado_agregado_al_final_en_una_edicion_no_cambia_la_entrada():
+    e = parse_signal("DEAL | GOLD (XAU/USD) BUY XAUUSD 4050\nParameters:\n🟢TP1: 4055\n"
+                     "🟢TP2: 4058\n🟢TP3: 4060\n🔴SL: 4043\n\nBUY ✅\n+210")
+
+    assert e.entry == 4050

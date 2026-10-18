@@ -118,9 +118,22 @@ _UN_NIVEL = (r"(?:POR\s+(?:ENCIMA|DEBAJO)|ARRIBA|ABAJO|ABOVE|BELOW)(?:\s+DE)?\s+
 _ANALISIS_DE_CIERRE = (
     r"(?!\s+(?:" + _UN_NIVEL + r"|LA\s+(?:SEMANA|VELA|SESION)|H\d|\d+H|D1|W1))"
 )
+# SALIR cierra, como siempre ("salir del negocio", "salir en BE", "hay que
+# salir"), salvo cuando lo que sale es el PRECIO de una figura o es un plan
+# de fin de semana: "queriamos salir todos juntos" (un testimonio de Genesis,
+# 17/10) cerraba las posiciones del grupo, y "el precio puede salir del rango"
+# o "vamos a salir de la zona de 4400" tambien. Se probo primero al reves (que
+# SALIR cerrara solo con "de la operacion"...) y se perdian ordenes de David,
+# que escribe "negocio", "ambas", "en BE" (revision del 17/10).
+_SALIR_QUE_NO_CIERRA = (
+    r"(?!\s+(?:TODOS\s+JUNTOS|JUNTOS|DE\s+VACACIONES|DE\s+PASEO|"
+    r"A\s+(?:PASEAR|CENAR|COMER|CAMINAR|DISFRUTAR)|"
+    r"DEL?\s+(?:(?:LA|EL|UN|UNA|ESTE|ESTA|ESE|ESA)\s+)?(?:RANGO|ZONA|CANAL|TRIANGULO|"
+    r"CONSOLIDACION|ACUMULACION|LATERAL|LATERALIDAD|CUNA|BANDERA)\b))"
+)
 _CLOSE_RE = re.compile(
     r"\b(?:CLOSE|CLOSED|CERRAR)\b" + _ANALISIS_DE_CIERRE +
-    r"|\b(?:CIERREN|EXIT|SALIR|CANCEL|CANCELAR)\b"
+    r"|\b(?:CIERREN|EXIT|CANCEL|CANCELAR)\b|\bSALIR\b" + _SALIR_QUE_NO_CIERRA +
     r"|(?<!UN )(?<!EL )(?<!DEL )(?<!AL )(?<!SU )(?<!ESTE )(?<!BUEN )(?<!OTRO )"
     r"(?<!NUESTRO )\bCIERRE\b"
     r"(?!\s+(?:DE\s+(?:LA\s+|UNA\s+|\d+\s*)?(?:VELA|SEMANA|MERCADO|SESION|DIA|MES|ANO|H\b)"
@@ -433,6 +446,23 @@ def parse_signal(
     sin_simbolos = _mask_symbols(masked)
     entry_low, entry_high, stop_loss, take_profits = _extract_prices(sin_simbolos)
 
+    # "🟢 BUY XAGUSD / 🚀 56.895 / SL: ..." (Academia de Trading Genesis,
+    # 17/10): la entrada es el numero SOLO en la linea que sigue al lado. No
+    # tiene etiqueta, y el analisis del final ("en zona de sobreventa (21/23)
+    # con el precio...") trae ZONA y PRECIO, que si lo son: se leia entrada 22.
+    # Solo en la cabecera (antes del primer SL o TP) y si no hay una etiqueta
+    # de entrada ahi: "SELL XAUUSD / 17 / Entry 4510" sigue siendo 4510, y un
+    # "BUY ✅ / +210" que el canal agrega al final al editar no pisa nada.
+    sola = _ENTRADA_EN_SU_LINEA_RE.search(sin_simbolos)
+    if sola is not None and side is not None:
+        etiquetas = list(_LABEL_RE.finditer(sin_simbolos))
+        primer_sl_tp = next((m.start() for m in etiquetas if m.lastgroup in ("SL", "TP")),
+                            len(sin_simbolos))
+        etiqueta_de_entrada = any(m.lastgroup == "ENTRY" and m.start() < primer_sl_tp
+                                  for m in etiquetas)
+        if sola.end() <= primer_sl_tp and not etiqueta_de_entrada:
+            entry_low = entry_high = _to_float(sola.group(1))
+
     # Fallback: "GOLD BUY 2345" no tiene etiqueta "Entry". Si hay lado y no se
     # encontro entrada, tomamos el primer numero suelto que no sea SL ni TP.
     if entry_low is None and side is not None:
@@ -724,10 +754,45 @@ def _extract_side(text: str) -> Side | None:
 # --------------------------------------------------------------------------
 
 
+# La linea del lado ("BUY", con el simbolo ya borrado y sin numeros) y, en la
+# linea siguiente, un numero solo: la entrada de Genesis. Las dos condiciones
+# juntas: un numero suelto en cualquier otro lugar no es una entrada.
+_ENTRADA_EN_SU_LINEA_RE = re.compile(
+    r"(?m)^\W*(?:BUY|SELL|COMPRA|VENTA|LONG|SHORT)\b[^\n\d]*\n\W*(\d+(?:[.,]\d+)?)\W*$"
+)
+
+
+def _solo_lineas_de_precio(chunk: str) -> str:
+    """El bloque de una etiqueta, sin el parrafo o el contacto que vienen despues.
+
+    "TP 5: 57.300 / El Estocastico en M5 ..." (Genesis, 17/10): el analisis
+    pegado debajo del ultimo TP se leia entero, y el "5" de "M5" quedaba como
+    otro take profit; igual el "2024" de un "@vipsignals2024" del pie.
+
+    Se corta recien cuando el bloque YA tiene su precio, y solo en una linea
+    que no empieza con un numero y es un parrafo (seis palabras o mas) o un
+    @usuario / link. Con menos se perdian precios reales: "ESTABLEZCA AMBOS
+    SL\\nEN LA MARCA 4170" (David, con el salto de linea) dejaba el SL sin
+    precio y el stop no se movia; "TP:\\nFirst one at 2355\\nSecond one at
+    2365" perdia el segundo (lo encontro la revision del 17/10).
+    """
+    lineas = chunk.split("\n")
+    quedan = [lineas[0]]
+    for linea in lineas[1:]:
+        ya_tiene_precio = _NUMBER_RE.search("\n".join(quedan)) is not None
+        if ya_tiene_precio and not re.match(r"^\W*\d", linea) and (
+                len(re.findall(r"[A-Z]{2,}", linea)) >= 6 or "@" in linea
+                or "HTTP" in linea):
+            break
+        quedan.append(linea)
+    return "\n".join(quedan)
+
+
 def _extract_prices(text: str) -> tuple[float | None, float | None, float | None, list[float]]:
     """Reparte los numeros del mensaje entre entrada, SL y TPs.
 
-    Cada etiqueta se queda con el texto hasta la etiqueta siguiente.
+    Cada etiqueta se queda con el texto hasta la etiqueta siguiente, y de
+    ese texto, solo su linea y las de precios que la siguen.
     """
     matches = list(_LABEL_RE.finditer(text))
     entry_low = entry_high = stop_loss = None
@@ -742,6 +807,7 @@ def _extract_prices(text: str) -> tuple[float | None, float | None, float | None
         corte = chunk.find("\n\n")
         if corte != -1:
             chunk = chunk[:corte]
+        chunk = _solo_lineas_de_precio(chunk)
         kind = match.lastgroup
         numbers = _extract_numbers(chunk)
         if not numbers:
