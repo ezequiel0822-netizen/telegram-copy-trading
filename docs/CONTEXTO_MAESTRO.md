@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-19 · v2.7.0 · 1372 tests · el último commit que describe
-es `122555e`, más este mismo cambio
+Actualizado: 2026-10-19 · v2.7.0 · 1390 tests · el último commit que describe
+es `f58d21e`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
 
@@ -420,23 +420,42 @@ dijo que antes del 14/10 la real iba en positivo, no en −34. Tenía razón:
 
 **19/10.** La real (David, 0.03) perdió otra vez: BUY 4175 y BUY 4173, las dos al
 stop en 4159.93, **−92.16**. En 3 días de mercado (14, 15 y 19/10) −251; el repaso
-de la real ya calcula sobre **~220** propios. Él dijo que TRADING ZONE ganó en la
+de la real ya calcula sobre **~220** propios. Avisó que TRADING ZONE ganó en la
 demo. **TRADING ZONE con precios de Bullwaves** (`tct repaso --env-file .env.real
 --dias 150 --lotes 0.03 --detalle --chat=-1001666520346`, 24/05-19/10): 27 de 29
 (93%) contra 82%, **+237.78**, peor caída −69.30: casi igual que en FxPro
 (+250.44); Bullwaves cuesta ~13 más en 29 operaciones. Su regla de lote (riesgo
 constante, más arriba) con ~220 propios da ~0.02.
 Ese día TRADING ZONE mandó una señal que cumplió todos sus TP y la demo no la abrió
-(tardía: el canal la manda 1-3 min después del "NOW", con el precio ya ido). Él
-entiende que no es lentitud del bot. **Nuevo en el repaso (19/10):** al final, "LAS
+(tardía: el canal la manda 1-3 min después del "NOW", con el precio ya ido). Ya
+sabe que no es lentitud del bot. **Nuevo en el repaso (19/10):** al final, "LAS
 N QUE LLEGARON TARDE: QUÉ HABRÍA PASADO", para las rechazadas SOLO por el filtro
-de entrada tarde (`repaso.simular_tardias`): (1) entrando igual a mercado con el SL
-y el TP1 del canal; (2) una orden límite en el borde de la zona del canal (BUY en
-el de arriba, SELL en el de abajo) que entra si el precio vuelve antes de tocar el
-TP1, y vence a los 15 o 60 min. Sin gestión del canal, sin topes, sin
-deslizamiento; con `--detalle`, una por una. El bot no hace ninguna de las dos:
-es para decidir. Pedido: `tct repaso --env-file .env.real --dias 150 --lotes 0.03
---detalle --chat=-1001666520346`.
+de entrada tarde (`repaso.simular_tardias`), tres formas: (1) entrar igual a
+mercado con el SL del canal y el **primer TP que todavía queda por delante** del
+precio de entrada (TP2 si ya pasó el TP1; si pasó todos, no entra); (2) una orden
+límite en el borde de la zona más cercano al precio (BUY en el de arriba, SELL en
+el de abajo) con el primer TP más allá de ese borde (en TZ, el TP1), que vence a
+los 15 o 60 min y se cancela si antes llega al TP (si ya había llegado cuando
+llegó la señal, ni se pone); (3) la misma orden sin cancelar, solo vence. "Ya
+llegó al TP" es lo mismo en todos lados: el TP ya no está estrictamente por
+delante del ask (BUY) o el bid (SELL). Sin gestión del canal, sin topes, sin
+deslizamiento; el detalle (`--detalle`) va al lote del detalle del bot. El bot no
+hace ninguna: es para decidir.
+**Primera corrida (TZ en FxPro, 150 días, `repaso_20261019_1022`): 111 tardías,
+en 77 el precio ya había llegado al TP1** cuando llegó la señal completa. La
+primera versión entraba "igual" con ese TP1: −77.70 y "76 perdidas" que eran
+pérdidas del tamaño del spread que en MetaTrader no existen (un BUY con el TP
+debajo del precio se rechaza). **Ese −77.70 no vale**; corregido (y una revisión
+de 3 revisores + 1 verificador: la orden con el TP dentro de la zona, BUY sin
+tests, dos reglas distintas de "ya llegó"; 12 mutaciones, las 12 cazadas). Lo
+que sí valía de esa corrida: (a) las 34 con el TP1 todavía adelante, entrando
+igual, −39.21 a 0.03 (el TP1 a 0.85 puntos de mediana, el SL a ~23); (b) la orden
+que se cancela en el TP1, 60 min: 12 de 111, 10 ganadas, **+13.11**; 15 min:
++0.75. La del 19/10 (SELL 4180/4186, llegó con el precio en 4176.6 y el TP1 en
+4176): entrando igual, +0.6 puntos (+1.80 a 0.03); el precio no volvió a 4180. El
+bot toma solo el TP1 (`POSITIONS_PER_SIGNAL=1`): que "se dieron todos los TP" no
+cambia lo que habría ganado. Falta la corrida con la versión corregida (pedida:
+el mismo comando, `.env.segunda`).
 
 **ESTADO AL 12/10.**
 
@@ -912,7 +931,7 @@ anterior rechazaba. Esos scripts vivían en el scratchpad de la sesión del
 venv de la máquina de desarrollo, vio un `main` local viejo (`f4983e6`) y
 concluyó que los bots del usuario corrían el código del 19/09 y que nada del
 22/09 en adelante había llegado a `main`. Las dos cosas eran falsas: **son dos
-máquinas distintas**, y GitHub `main` ya tenía todo (`7f39c81`). Él lo confirmó
+máquinas distintas**, y GitHub `main` ya tenía todo (`7f39c81`). Lo confirmó
 en su ventana: su `tct` sale de
 `C:\Users\Administrator\Documents\Copytrading\telegram-copy-trading-main\src\tct\`,
 su propia carpeta, que se actualiza con `git pull`. Ese traspaso quedó en un
@@ -1152,7 +1171,7 @@ después el canal escribió *"mi error, escribí SELL en lugar de BUY"*.
 
 ### La auditoría del 26/09, antes de fondear
 
-Él avisó *"ya tengo el dinero y todo listo para fondear"* y pidió una auditoría
+Avisó *"ya tengo el dinero y todo listo para fondear"* y pidió una auditoría
 del camino de la cuenta real. **Se encontraron y arreglaron dos cosas capaces de
 costar plata**, las dos reproducidas ejecutando el código:
 
@@ -1385,7 +1404,7 @@ razonamiento de entonces:
 
 | | Elegido | Por qué |
 |---|---|---|
-| Freno diario | **5%** (25 sobre 500) | Él lo pidió como *"que a partir del 4to-5to stop loss ya tenga freno"*. Con 0.01 de oro, 1 punto = 1 dólar y cada stop cuesta 4 a 8: 5% frena en el 4º stop grande o el 6º chico. Había marcado 10%, que frena recién en el 6º al 12º —o sea casi nunca con un bot que abre 7 por día—; se le mostró la cuenta y eligió el número que hace lo que había descrito. |
+| Freno diario | **5%** (25 sobre 500) | Lo pidió como *"que a partir del 4to-5to stop loss ya tenga freno"*. Con 0.01 de oro, 1 punto = 1 dólar y cada stop cuesta 4 a 8: 5% frena en el 4º stop grande o el 6º chico. Había marcado 10%, que frena recién en el 6º al 12º —o sea casi nunca con un bot que abre 7 por día—; se le mostró la cuenta y eligió el número que hace lo que había descrito. |
 | Señales/día | **10** | Medido son ~3. Con los 5 de la plantilla vieja, la 6ª se rechazaba sin haber perdido nada: el día lo tiene que cortar el freno de plata, no un contador. |
 | Avisos | **apagados**, y el control también | Lo pidió así. El 18/09 había elegido `problems`, y al ver que eso implicaba token y chat id lo corrigió: no quiere que ningún bot le escriba. Sin control no hay `/pausa` desde el teléfono. |
 | Símbolos | **solo XAUUSD** | BTCUSD espera a ver su margen en la cuenta real. |
@@ -2153,7 +2172,7 @@ trading".
 
 Y la regla que salió del 27/09 (§2): **cuando el mensaje sugiere una línea,
 tiene que ser la línea ENTERA**, con todos los cambios que el usuario había
-escrito, no un ejemplo con la credencial sola. Él copia lo que ve: con el
+escrito, no un ejemplo con la credencial sola. Se copia lo que ve: con el
 ejemplo corto se guardaba el hash, se perdía el resto de la línea y el comando
 decía "Listo". Y **"sin `=`" no alcanza como instrucción**: le sacó el `=` y
 dejó el valor. El mensaje tiene que decir *"borralo"*. Lo que sigue a una

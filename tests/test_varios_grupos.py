@@ -8,7 +8,7 @@ posiciones no sabian de que grupo venian, y eso rompia tres cosas:
   de los otros dos (la gestion buscaba solo por simbolo).
 - Una respuesta al mensaje 1111 de un grupo podia caer en la posicion que abrio
   el mensaje 1111 de otro: los numeros de mensaje se repiten entre grupos.
-- Habia un solo lote para todo el bot, y el pidio David a 0.03 y los otros dos
+- Habia un solo lote para todo el bot, y se pidio David a 0.03 y los otros dos
   a 0.04 (LOT_PER_CHAT).
 
 Y lo que NO tiene que cambiar: con un solo grupo (la real), todo igual.

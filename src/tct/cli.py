@@ -2887,6 +2887,9 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
     print("  " + "-" * 62)
     if not r["cerradas"]:
         print("  Ninguna termino todavia: no hay nada que medir.")
+        # Las tardias igual: si el canal manda todo tarde, es justo lo que hay que ver.
+        _imprimir_tardias(tardias, sorted({settings.default_lot, *lotes}), detalle,
+                          settings.default_lot)
         return 0
     print(f"  Ganadas      : {r['ganadas']} de {r['ganadas'] + r['perdidas']}  "
           f"({r['pct_ganadas']:.0f}%)   breakeven: {r['breakeven']}")
@@ -2911,61 +2914,115 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
         print(f"  {con_velas} horas sin ticks en MT5 se midieron con velas de 1 minuto")
         print("  (menos exacto: no se sabe si el stop o el TP llego primero).")
     print("  Sin comision ni swap, igual que la cuenta real hoy.")
-    _imprimir_tardias(tardias, sorted({settings.default_lot, *lotes}), detalle)
+    _imprimir_tardias(tardias, sorted({settings.default_lot, *lotes}), detalle,
+                      settings.default_lot)
     return 0
 
 
-def _imprimir_tardias(casos: list, lotes: list[float], detalle: bool) -> None:
+def _imprimir_tardias(casos: list, lotes: list[float], detalle: bool,
+                      lote_del_detalle: float | None = None) -> None:
     """Las que el bot rechazo por llegar tarde, y que habria pasado (19/10).
 
-    Solo un "que habria pasado": el bot hoy no hace ninguna de las dos cosas.
+    Solo un "que habria pasado": el bot hoy no hace ninguna de estas cosas.
+    El detalle va al mismo lote que el detalle del bot (`lote_del_detalle`,
+    DEFAULT_LOT), para que los montos se puedan comparar fila con fila.
     """
     from tct.informe import hora_local, precio
     from tct.repaso import resumir_tardias
 
     if not casos:
         return
+    lote_del_detalle = lote_del_detalle or (lotes[0] if lotes else 1.0)
+
+    def cuantas(n: int, una: str, varias: str) -> str:
+        return f"{n} {una if n == 1 else varias}"
+
+    def cuenta(p: dict, de: int) -> str:
+        return (f"entraron {p['operadas']} de {de}, {cuantas(p['ganadas'], 'ganada', 'ganadas')}, "
+                f"{cuantas(p['perdidas'], 'perdida', 'perdidas')}"
+                + (f", {cuantas(p['abiertas'], 'sigue abierta', 'siguen abiertas')}"
+                   if p["abiertas"] else "")
+                + f"   resultado {p['total']:+.2f}")
+
+    def promedios(p: dict) -> str | None:
+        if not (p["ganadas"] or p["perdidas"]):
+            return None
+        return (f"gana {p['promedio_ganada']:.2f} y pierde {p['promedio_perdida']:.2f}"
+                " en promedio")
+
+    def como_le_fue(p: dict) -> str:
+        if not p["entro"]:
+            return p["motivo"]
+        if p["resultado"] is None:
+            return "sigue abierta"
+        return f"{p['motivo']} {p['resultado'] * lote_del_detalle:+.2f}"
+
+    n = len(casos)
+    ya_paso = sum(1 for c in casos if c.get("tp1_ya_paso"))
     print()
     print("  " + "-" * 62)
-    print(f"  LAS {len(casos)} QUE LLEGARON TARDE: QUE HABRIA PASADO")
+    print(f"  LA 1 QUE LLEGO TARDE: QUE HABRIA PASADO" if n == 1
+          else f"  LAS {n} QUE LLEGARON TARDE: QUE HABRIA PASADO")
     print("  " + "-" * 62)
     print("  El bot las rechazo porque cuando llego la senal el precio ya se habia")
-    print("  ido hacia el TP. Dos formas de no perderlas (hoy el bot no hace ninguna):")
-    print("  1) entrar igual, al precio de ese momento, con el SL y el TP1 del canal;")
-    print("  2) dejar una orden esperando en el precio del canal: entra solo si el")
-    print("     precio vuelve antes de tocar el TP1 y antes de que venza.")
+    print(f"  ido hacia el TP. En {ya_paso} de {n} ya habia llegado al TP1.")
+    print("  Tres formas de no perderlas (hoy el bot no hace ninguna):")
+    print("  1) entrar igual, al precio de ese momento, con el SL del canal y el")
+    print("     primer TP que todavia quedaba por delante (el TP2 si ya paso el TP1...);")
+    print("  2) dejar una orden en el borde de la zona del canal mas cercano al")
+    print("     precio (un BUY en el de arriba, un SELL en el de abajo), con el TP1:")
+    print("     entra si el precio vuelve antes de que venza, y se cancela si antes")
+    print("     llega al TP1 (si ya habia llegado, ni se pone);")
+    print("  3) la misma orden, pero sin cancelarla: espera hasta que vence.")
+    print("  Serian operaciones de mas: su resultado se sumaria al del bot, arriba.")
     for lote in lotes:
         r = resumir_tardias(casos, lote)
-        m = r["mercado"]
         print()
         print(f"  A lote {lote}:")
-        print(f"    1) Entrando igual:        {m['ganadas']} ganadas, {m['perdidas']} perdidas"
-              + (f", {m['abiertas']} siguen abiertas" if m["abiertas"] else "")
-              + f"   resultado {m['total']:+.2f}")
-        for espera, p in r["pendiente"].items():
-            print(f"    2) Orden en el precio del canal ({espera} min): entraron {p['operadas']}"
-                  f" de {r['senales']}, {p['ganadas']} ganadas, {p['perdidas']} perdidas"
-                  + (f", {p['abiertas']} siguen abiertas" if p["abiertas"] else "")
-                  + f"   resultado {p['total']:+.2f}")
+        print(f"    1) Entrando igual: {cuenta(r['mercado'], r['senales'])}")
+        if promedios(r["mercado"]):
+            print(f"         {promedios(r['mercado'])}")
+        for numero, clave, titulo in ((2, "pendiente", "Orden, se cancela en el TP1"),
+                                      (3, "sin_cancelar", "Orden sin cancelar")):
+            print(f"    {numero}) {titulo}:")
+            for espera, p in r[clave].items():
+                print(f"         espera {espera} min: {cuenta(p, r['senales'])}")
+                if promedios(p):
+                    print(f"                         {promedios(p)}")
     print()
     print("  No aplica la gestion del canal ni los topes del bot, y no tiene")
-    print("  deslizamiento: sirve para comparar las dos ideas, no como promesa.")
+    print("  deslizamiento: sirve para comparar las ideas, no como promesa.")
     if not detalle:
         return
     print()
-    print("  UNA POR UNA (montos a lote 1; el resultado es proporcional al lote)")
+    print(f"  UNA POR UNA (a lote {lote_del_detalle}, como el detalle del bot)")
     for c in casos:
         s = c["senal"]
         hora = hora_local(datetime.fromtimestamp(c["fecha_ms"] / 1000, tz=timezone.utc)
                           .isoformat())
         m = c["mercado"]
-        partes = [f"entrando igual a {precio(m['entrada'])}: {m['motivo']}"
-                  + (f" {m['resultado']:+.2f}" if m["resultado"] is not None else "")]
-        for espera, p in c["pendiente"].items():
-            partes.append(f"orden {espera} min: "
-                          + (f"{p['motivo']} {p['resultado']:+.2f}" if p["entro"]
-                             and p["resultado"] is not None
-                             else ("sigue abierta" if p["entro"] else "no volvio")))
+        if m.get("entro", True):
+            igual = f"1) entrando igual a {precio(m['entrada'])}"
+            if m.get("tp_numero"):
+                igual += f" con TP{m['tp_numero']} {precio(m['tp'])}"
+            partes = [f"{igual}: {como_le_fue(m)}"]
+        else:
+            partes = [f"1) entrando igual: no entra, a {precio(m['entrada'])} {m['motivo']}"]
+        orden = c.get("orden") or {}
+        donde = f" en {precio(orden['precio'])}" if orden.get("precio") is not None else ""
+        if orden.get("tp_numero") not in (None, 1):
+            donde += f" con TP{orden['tp_numero']} {precio(orden['tp'])}"
+        for numero, clave, titulo in ((2, "pendiente", "orden"), (3, "sin_cancelar", "sin cancelar")):
+            esperas = c.get(clave, {})
+            motivos = {p["motivo"] for p in esperas.values()}
+            ni_se_pone = len(motivos) == 1 and next(iter(motivos)).startswith(("ya habia", "ningun"))
+            if esperas and ni_se_pone and not any(p["entro"] for p in esperas.values()):
+                # Una orden que ni se pone no depende de cuanto iba a esperar.
+                partes.append(f"{numero}) {titulo}{donde if numero == 2 else ''}: no se pone, "
+                              f"{next(iter(motivos))}")
+                continue
+            partes.append(f"{numero}) {titulo}{donde if numero == 2 else ''}: " + ", ".join(
+                f"{espera} min {como_le_fue(p)}" for espera, p in esperas.items()))
         print(f"    {hora}  {s.side.value if s.side else '?':<4} {s.symbol} "
               f"{precio(s.entry_low)}/{precio(s.entry_high)}  | " + " | ".join(partes))
 
