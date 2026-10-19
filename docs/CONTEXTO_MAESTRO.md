@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-17 · v2.7.0 · 1352 tests · el último commit que describe
-es `04ab958`, más este mismo cambio
+Actualizado: 2026-10-19 · v2.7.0 · 1372 tests · el último commit que describe
+es `122555e`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
 
