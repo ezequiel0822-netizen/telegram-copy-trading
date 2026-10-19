@@ -2766,7 +2766,7 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
     from tct.engine import Engine
     from tct.informe import hora_local, precio
     from tct.repaso import (BrokerDeRepaso, HoraDelServidor, PreciosDeMT5, a_ms,
-                            desfase_del_servidor, repasar, resumir)
+                            desfase_del_servidor, repasar, resumir, simular_tardias)
     from tct.store import Store
     from tct.telegram.reader import fetch_history
 
@@ -2833,6 +2833,8 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
             engine = Engine(ajustes, store, broker)
             filas = await repasar(engine, broker, mensajes, fin)
             gestion = _gestion_por_ticket(store.read_events(), mensajes)
+            # Con MetaTrader todavia conectado: recorre sus ticks.
+            tardias = simular_tardias(filas, precios, contratos, fin)
     finally:
         await mt5_broker.disconnect()
 
@@ -2909,7 +2911,63 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
         print(f"  {con_velas} horas sin ticks en MT5 se midieron con velas de 1 minuto")
         print("  (menos exacto: no se sabe si el stop o el TP llego primero).")
     print("  Sin comision ni swap, igual que la cuenta real hoy.")
+    _imprimir_tardias(tardias, sorted({settings.default_lot, *lotes}), detalle)
     return 0
+
+
+def _imprimir_tardias(casos: list, lotes: list[float], detalle: bool) -> None:
+    """Las que el bot rechazo por llegar tarde, y que habria pasado (19/10).
+
+    Solo un "que habria pasado": el bot hoy no hace ninguna de las dos cosas.
+    """
+    from tct.informe import hora_local, precio
+    from tct.repaso import resumir_tardias
+
+    if not casos:
+        return
+    print()
+    print("  " + "-" * 62)
+    print(f"  LAS {len(casos)} QUE LLEGARON TARDE: QUE HABRIA PASADO")
+    print("  " + "-" * 62)
+    print("  El bot las rechazo porque cuando llego la senal el precio ya se habia")
+    print("  ido hacia el TP. Dos formas de no perderlas (hoy el bot no hace ninguna):")
+    print("  1) entrar igual, al precio de ese momento, con el SL y el TP1 del canal;")
+    print("  2) dejar una orden esperando en el precio del canal: entra solo si el")
+    print("     precio vuelve antes de tocar el TP1 y antes de que venza.")
+    for lote in lotes:
+        r = resumir_tardias(casos, lote)
+        m = r["mercado"]
+        print()
+        print(f"  A lote {lote}:")
+        print(f"    1) Entrando igual:        {m['ganadas']} ganadas, {m['perdidas']} perdidas"
+              + (f", {m['abiertas']} siguen abiertas" if m["abiertas"] else "")
+              + f"   resultado {m['total']:+.2f}")
+        for espera, p in r["pendiente"].items():
+            print(f"    2) Orden en el precio del canal ({espera} min): entraron {p['operadas']}"
+                  f" de {r['senales']}, {p['ganadas']} ganadas, {p['perdidas']} perdidas"
+                  + (f", {p['abiertas']} siguen abiertas" if p["abiertas"] else "")
+                  + f"   resultado {p['total']:+.2f}")
+    print()
+    print("  No aplica la gestion del canal ni los topes del bot, y no tiene")
+    print("  deslizamiento: sirve para comparar las dos ideas, no como promesa.")
+    if not detalle:
+        return
+    print()
+    print("  UNA POR UNA (montos a lote 1; el resultado es proporcional al lote)")
+    for c in casos:
+        s = c["senal"]
+        hora = hora_local(datetime.fromtimestamp(c["fecha_ms"] / 1000, tz=timezone.utc)
+                          .isoformat())
+        m = c["mercado"]
+        partes = [f"entrando igual a {precio(m['entrada'])}: {m['motivo']}"
+                  + (f" {m['resultado']:+.2f}" if m["resultado"] is not None else "")]
+        for espera, p in c["pendiente"].items():
+            partes.append(f"orden {espera} min: "
+                          + (f"{p['motivo']} {p['resultado']:+.2f}" if p["entro"]
+                             and p["resultado"] is not None
+                             else ("sigue abierta" if p["entro"] else "no volvio")))
+        print(f"    {hora}  {s.side.value if s.side else '?':<4} {s.symbol} "
+              f"{precio(s.entry_low)}/{precio(s.entry_high)}  | " + " | ".join(partes))
 
 
 def _informar_distancias(medidas: list, settings: Settings) -> None:

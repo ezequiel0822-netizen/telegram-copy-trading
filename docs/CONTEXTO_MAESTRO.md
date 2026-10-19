@@ -418,6 +418,26 @@ dijo que antes del 14/10 la real iba en positivo, no en −34. Tenía razón:
     cuándo salir de la operación", "no vamos a salir de la posición"): el NO
     solo niega si está pegado, y entre medio hay un verbo.
 
+**19/10.** La real (David, 0.03) perdió otra vez: BUY 4175 y BUY 4173, las dos al
+stop en 4159.93, **−92.16**. En 3 días de mercado (14, 15 y 19/10) −251; el repaso
+de la real ya calcula sobre **~220** propios. Él dijo que TRADING ZONE ganó en la
+demo. **TRADING ZONE con precios de Bullwaves** (`tct repaso --env-file .env.real
+--dias 150 --lotes 0.03 --detalle --chat=-1001666520346`, 24/05-19/10): 27 de 29
+(93%) contra 82%, **+237.78**, peor caída −69.30: casi igual que en FxPro
+(+250.44); Bullwaves cuesta ~13 más en 29 operaciones. Su regla de lote (riesgo
+constante, más arriba) con ~220 propios da ~0.02.
+Ese día TRADING ZONE mandó una señal que cumplió todos sus TP y la demo no la abrió
+(tardía: el canal la manda 1-3 min después del "NOW", con el precio ya ido). Él
+entiende que no es lentitud del bot. **Nuevo en el repaso (19/10):** al final, "LAS
+N QUE LLEGARON TARDE: QUÉ HABRÍA PASADO", para las rechazadas SOLO por el filtro
+de entrada tarde (`repaso.simular_tardias`): (1) entrando igual a mercado con el SL
+y el TP1 del canal; (2) una orden límite en el borde de la zona del canal (BUY en
+el de arriba, SELL en el de abajo) que entra si el precio vuelve antes de tocar el
+TP1, y vence a los 15 o 60 min. Sin gestión del canal, sin topes, sin
+deslizamiento; con `--detalle`, una por una. El bot no hace ninguna de las dos:
+es para decidir. Pedido: `tct repaso --env-file .env.real --dias 150 --lotes 0.03
+--detalle --chat=-1001666520346`.
+
 **ESTADO AL 12/10.**
 
 **Qué corre.** Tres bots en su PC Windows, cada uno con su `.env`, sus datos,

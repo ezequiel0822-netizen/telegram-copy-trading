@@ -626,3 +626,138 @@ def resumir(filas: list[dict[str, Any]], lote: float, lotes: list[float],
         "por_lote": [{"lote": x, "total": sum(resultados) * x / lote, "peor_caida": caida * x / lote}
                      for x in lotes],
     }
+
+
+# --------------------------------------------------------------------------
+# Las que llegaron tarde: que habria pasado (19/10)
+# --------------------------------------------------------------------------
+#
+# XAUUSD TRADING ZONE avisa "SELL NOW" sin SL y manda la senal completa 1 a 3
+# minutos despues, cuando el precio ya se fue hacia el TP: el filtro de entrada
+# tarde rechaza ~4 de cada 5. El 19/10 una de esas cumplio todos sus TP y el
+# pregunto si no convenia entrarles igual. Esto mide, sin cambiar nada del bot,
+# las dos formas de no perderlas: entrar igual al precio de ese momento, o
+# dejar una orden esperando en el precio del canal.
+
+ESPERAS_DE_LA_PENDIENTE_MIN = (15, 60)
+
+
+def _es_solo_tardia(motivos: list[str]) -> bool:
+    """El unico motivo del rechazo fue el filtro de entrada tarde, en contra."""
+    return bool(motivos) and all(
+        "del precio real" in m and "MAX_SPREAD_FROM_ENTRY_PCT" in m and "(a favor)" not in m
+        for m in motivos)
+
+
+def _hasta_el_final(fuente: FuenteDePrecios, desde_ms: int, fin_ms: int):
+    """Los ticks de `desde_ms` a `fin_ms`, de a una hora (el cache guarda 24)."""
+    t = desde_ms
+    while t <= fin_ms:
+        hasta = min(fin_ms, (t // HORA_MS + 1) * HORA_MS - 1)
+        yield from fuente.ticks(t, hasta)
+        t = hasta + 1
+
+
+def _como_termina(fuente: FuenteDePrecios, lado: Side, desde_ms: int, fin_ms: int,
+                  sl: float | None, tp: float) -> tuple[str, float | None]:
+    """Con las reglas del repaso: un BUY cierra con el bid, un SELL con el ask."""
+    for _t, bid, ask in _hasta_el_final(fuente, desde_ms + 1, fin_ms):
+        precio = bid if lado is Side.BUY else ask
+        if lado is Side.BUY:
+            if sl is not None and bid <= sl:
+                return "sl", precio
+            if bid >= tp:
+                return "tp", precio
+        else:
+            if sl is not None and ask >= sl:
+                return "sl", precio
+            if ask <= tp:
+                return "tp", precio
+    return "abierta", None
+
+
+def simular_tardias(filas: list[dict[str, Any]], precios: dict[str, FuenteDePrecios],
+                    usd_por_punto_y_lote: dict[str, float], fin_ms: int,
+                    esperas_min: tuple[int, ...] = ESPERAS_DE_LA_PENDIENTE_MIN,
+                    ) -> list[dict[str, Any]]:
+    """Por cada senal rechazada SOLO por llegar tarde, dos "que habria pasado".
+
+    - "mercado": entrar igual en ese instante (al ask un BUY, al bid un SELL),
+      con el SL y el TP1 del canal, como el bot abre las demas.
+    - "pendiente": una orden limite en el borde de la zona del canal mas
+      cercano al precio (un BUY en el de arriba, un SELL en el de abajo: el
+      precio ya paso por ahi yendo hacia el TP). Entra si el precio vuelve antes
+      de `espera` minutos y antes de tocar el TP1; si no, se cancela.
+
+    Los montos son por 1 lote (el resultado es lineal en el lote). No aplica la
+    gestion del canal ni los topes del bot: es para comparar, no para operar.
+    """
+    from tct.risk import usable_take_profits
+
+    salida = []
+    for fila in filas:
+        senal = fila.get("senal")
+        if senal is None or not _es_solo_tardia(fila.get("rechazo") or []):
+            continue
+        fuente = precios.get((senal.symbol or "").upper())
+        tps = usable_take_profits(senal)
+        if fuente is None or not tps or senal.side is None or senal.entry is None:
+            continue
+        lado, tp, sl, t = senal.side, tps[0], senal.stop_loss, fila["fecha_ms"]
+        valor = usd_por_punto_y_lote.get((senal.symbol or "").upper(), 100.0)
+        sentido = 1.0 if lado is Side.BUY else -1.0
+        previos = fuente.ticks(t - 600_000, t)
+        if not previos:
+            continue
+        _t0, bid0, ask0 = previos[-1]
+        caso: dict[str, Any] = {"fecha_ms": t, "senal": senal, "pendiente": {}}
+
+        entrada = ask0 if lado is Side.BUY else bid0
+        motivo, salida_precio = _como_termina(fuente, lado, t, fin_ms, sl, tp)
+        caso["mercado"] = {
+            "entrada": entrada, "motivo": motivo,
+            "resultado": (sentido * (salida_precio - entrada) * valor
+                          if salida_precio is not None else None),
+        }
+
+        borde = (senal.entry_high if lado is Side.BUY else senal.entry_low) or senal.entry
+        for espera in esperas_min:
+            vence = min(fin_ms, t + espera * 60_000)
+            entro = None
+            for tt, bid, ask in _hasta_el_final(fuente, t + 1, vence):
+                if (bid >= tp) if lado is Side.BUY else (ask <= tp):
+                    break  # se fue al TP sin volver: se cancela
+                if (ask <= borde) if lado is Side.BUY else (bid >= borde):
+                    entro = tt
+                    break
+            if entro is None:
+                caso["pendiente"][espera] = {"entro": False, "resultado": 0.0, "motivo": "-"}
+                continue
+            motivo, salida_precio = _como_termina(fuente, lado, entro, fin_ms, sl, tp)
+            caso["pendiente"][espera] = {
+                "entro": True, "entrada": borde, "motivo": motivo,
+                "resultado": (sentido * (salida_precio - borde) * valor
+                              if salida_precio is not None else None),
+            }
+        salida.append(caso)
+    return salida
+
+
+def resumir_tardias(casos: list[dict[str, Any]], lote: float) -> dict[str, Any]:
+    """Lo de `simular_tardias` en numeros, a `lote`."""
+    def contar(resultados: list[float | None]) -> dict[str, Any]:
+        cerradas = [r * lote for r in resultados if r is not None]
+        return {"operadas": len(resultados),
+                "ganadas": sum(1 for r in cerradas if r > 0),
+                "perdidas": sum(1 for r in cerradas if r < 0),
+                "abiertas": sum(1 for r in resultados if r is None),
+                "total": sum(cerradas)}
+
+    resumen = {"senales": len(casos),
+               "mercado": contar([c["mercado"]["resultado"] for c in casos])}
+    esperas = sorted({e for c in casos for e in c["pendiente"]})
+    resumen["pendiente"] = {
+        e: contar([c["pendiente"][e]["resultado"] for c in casos
+                   if c["pendiente"].get(e, {}).get("entro")])
+        for e in esperas}
+    return resumen
