@@ -6,7 +6,7 @@ seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
 Actualizado: 2026-10-19 · v2.7.0 · 1390 tests · el último commit que describe
-es `f58d21e`, más este mismo cambio
+es `99319ee`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
 
@@ -452,10 +452,30 @@ que sí valía de esa corrida: (a) las 34 con el TP1 todavía adelante, entrando
 igual, −39.21 a 0.03 (el TP1 a 0.85 puntos de mediana, el SL a ~23); (b) la orden
 que se cancela en el TP1, 60 min: 12 de 111, 10 ganadas, **+13.11**; 15 min:
 +0.75. La del 19/10 (SELL 4180/4186, llegó con el precio en 4176.6 y el TP1 en
-4176): entrando igual, +0.6 puntos (+1.80 a 0.03); el precio no volvió a 4180. El
+4176): entrando igual, +0.6 puntos (+1.80 a 0.03); no volvió a 4180 antes de tocar
+el TP1 (sí después: la orden sin cancelar de 60 min ganó +12.09). El
 bot toma solo el TP1 (`POSITIONS_PER_SIGNAL=1`): que "se dieron todos los TP" no
-cambia lo que habría ganado. Falta la corrida con la versión corregida (pedida:
-el mismo comando, `.env.segunda`).
+cambia lo que habría ganado.
+**Corrida corregida (`repaso_20261019_1213`, TZ en FxPro, 150 días, 0.03)**, contra
+el bot solo (+250.44, peor caída −69.90): (1) entrando igual, 111, 104/7,
+**+206.97** (gana 6.40, pierde 65.52; TP a ~2 puntos de mediana, SL a ~23), peor
+caída con el bot −175.86, meses malos mayo −99.60 y julio −91.08; (2) la orden
+que se cancela, +0.75 / +13.11; (3) la orden sin cancelar, 15 min +4.77, **60 min
+68 entradas, 58/10, +221.58** (gana 12.43, pierde 49.93), peor caída con el bot
+**−246.60**, meses malos mayo −83.40 y septiembre −107.22. Dos agentes
+(`wf_db505dc2-6a2`): uno rehízo todos los números desde el archivo (iguales); el
+otro buscó sesgos. Sin mirar al futuro, pero optimista: (1) entra en el segundo
+del mensaje sin latencia, cobra el TP en el tick que lo cruza (+37 de los +207;
+en (3) +22), precios de FxPro (Bullwaves ~0.15-0.2 peor por operación: −50 a −67
+en (1)); (1) se cae a ~+40 con medio punto peor por entrada y es negativo con
+uno; estimado realista (1) −50 a +130, (3) +130 a +180. (3) vive de lo que entra
+entre los 15 y 60 min (+216.81), 56 de sus 68 son re-entradas después de que ya
+tocó el TP1, y **todo lo gana con SELL** (BUY: (1) −137.16 en 24, (3) −108.66 en
+12). Ninguna se distingue de suerte (bootstrap: ~12-14% de terminar negativa).
+El 14/08 las dos tomaron un SL de 120 puntos (typo del canal) que, perdido,
+borraba todo. Los topes del usuario no bloquean nada. El bot no cambió; se le
+presentaron las opciones (dejarlo, probar (3) solo en la demo de FxPro, o medir
+antes con `.env.real` y una simulación más estricta).
 
 **ESTADO AL 12/10.**
 
