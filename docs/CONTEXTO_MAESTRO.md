@@ -549,6 +549,15 @@ quede sin grupo, un `<grupo>:0` apaga el SL artificial de ese grupo, las líneas
 cuánto suma una señal (TZ 8 × 0.04 = 0.32), el repaso con varios grupos da "Como está puesto
 (cada grupo a su lote)" y cada fila dice de qué grupo es, y `--chat @nombre` con modo por grupo
 se rechaza. 10 mutaciones, las 10 cazadas.
+**El repaso de esa configuración (`repaso_20261020_0611`, los 4 en un motor, 150 días, cada
+grupo a su lote):** "Como está puesto" **+2636.87, peor caída −2182.55 (411% de 531)**; el
+saldo mínimo partiendo de 531 fue 507.53 solo porque junio-julio ganaron antes de agosto
+(−1046 en el mes; TZ −1250). Por grupo: **TZ** (todas a 0.04, SL del canal) +2752.44, caída
+−1942.40, peor señal −745.60 (17/09, más que la cuenta); **David** (2 a 0.02, SL al 65%)
+−151.03; **Sebastián** (todas a 0.03, SL del canal) +53.43, caída −758.85; **Genesis** (todas a
+0.03, SL 90%) −17.97, caída −625.50. TZ al mismo tamaño (0.16 por señal): TP1 + SL del canal
++1335.68 / −372.80; todas + SL 90% +1262.34 / −373.50; todas + SL del canal +1376.22 / −971.20.
+Se le presentaron esos números (la decisión es suya).
 
 **ESTADO AL 12/10.**
 
