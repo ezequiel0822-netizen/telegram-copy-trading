@@ -507,8 +507,8 @@ David, Sebastián, Genesis y TZ. Hecho (el bot no cambia hasta que lo pongan en 
   las 16 cazadas. Límite conocido: si un canal manda los TP de lejos a cerca, la
   posición del "TP1" persigue el primero escrito (el SL se mide al más cercano).
 Pedido: `tct repaso --env-file .env.segunda --dias 150 --lotes 0.02 --detalle
---posiciones todas --sl-artificial 90 --chat=<los 4>`. Sin confirmar: "dos canales de
-twt ganaron otra vez" (no se sabe qué es "twt"; se le preguntó).
+--posiciones todas --sl-artificial 90 --chat=<los 4>`. "Dos canales de twt ganaron otra vez": quiso decir Telegram (aclaró que se
+confundió); no hace falta revisar nada de Twitter.
 **Resultado (`repaso_20261020_0059` + `repaso_grupos_20261020_0108`, FxPro, 150 días,
 0.02 por posición, todas + SL 90%):** TZ 29 señales/231 posiciones **+1262.34**, peor
 caída −373.50 (70% de 531); Genesis −11.98; Sebastián −214.82 (historia desde 27/07);
