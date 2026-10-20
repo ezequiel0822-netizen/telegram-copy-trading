@@ -65,7 +65,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tct.config import VALORES_SI, VARIABLES_OBSOLETAS
+from tct.config import PALABRAS_DE_TODAS, VALORES_SI, VARIABLES_OBSOLETAS
 
 # Las variables que lee `load_settings`, con el lector de `_Env` que usa cada
 # una. `tests/test_cambiar_env.py` compara esta tabla contra config.py: una
@@ -106,6 +106,7 @@ VARIABLES_DEL_ENV: dict[str, str] = {
     "REQUIRE_TAKE_PROFIT": "bool",
     "MAX_SPREAD_FROM_ENTRY_PCT": "float",
     "MAX_STOP_DISTANCE_PCT": "float",
+    "ARTIFICIAL_SL_PCT": "float",
     "MAX_PENDING_DISTANCE_PCT": "float",
     "MAX_DAILY_LOSS_PCT": "float",
     "BREAKEVEN_USES_REAL_ENTRY": "bool",
@@ -517,6 +518,16 @@ def _problema_con(nombre: str, valor: str, ruta: Path) -> str | None:
 
     if not valor:
         return None  # vacio es "el valor por defecto", que el bot sabe leer
+    if nombre == "POSITIONS_PER_SIGNAL" and valor.lower() in PALABRAS_DE_TODAS:
+        return None  # una por cada TP de la senal (config._posiciones_por_senal)
+    if nombre == "ARTIFICIAL_SL_PCT":
+        try:
+            pct = float(valor.replace(",", "."))
+        except ValueError:
+            pct = None
+        if pct is None or not math.isfinite(pct) or not 0 <= pct <= 500:
+            return ("ARTIFICIAL_SL_PCT es el SL al tanto % de la distancia al TP1: un numero\n"
+                    f"    de 0 a 500, como 90 (0 = el SL del canal). Llego {valor!r}.")
     if tipo in ("int", "float"):
         try:
             numero = int(valor) if tipo == "int" else float(valor.replace(",", "."))

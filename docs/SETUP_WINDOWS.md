@@ -847,7 +847,8 @@ Todo en el `.env`, y todo editable:
 | `REQUIRE_STOP_LOSS` | Rechazar señales sin SL. **Dejalo en true.** |
 | `MAX_SPREAD_FROM_ENTRY_PCT` | Cuánto puede alejarse la entrada del mensaje del precio **real** del instrumento, en órdenes a mercado. Ataja símbolos mal leídos y mensajes viejos. |
 | `MAX_PENDING_DISTANCE_PCT` | Lo mismo para órdenes pendientes, que se ponen lejos del mercado a propósito y necesitan más aire. |
-| `POSITIONS_PER_SIGNAL` | Cuántas operaciones abre **una** señal. Ver abajo. |
+| `POSITIONS_PER_SIGNAL` | Cuántas operaciones abre **una** señal: un número, o `todas` (una por cada TP). Ver abajo. |
+| `ARTIFICIAL_SL_PCT` | SL artificial: al X% de la distancia que le falta al precio para llegar al TP1 (`90` = casi 1 a 1). Nunca más lejos que el del canal; un "mover SL" que lo aleja no se aplica. `0` = el SL del canal. Medirlo antes: `tct repaso --sl-artificial 90`. |
 | `MAX_POSITIONS_PER_SYMBOL` | Cuántas puede haber abiertas a la vez en el mismo instrumento. `0` = sin tope. |
 | `BREAKEVEN_USES_REAL_ENTRY` | Dónde poner el stop cuando el grupo manda "mover a breakeven". **Dejalo en true.** |
 
@@ -867,9 +868,13 @@ acepta **un solo take profit por operación**. No es una limitación del bot.
 Entonces hay dos formas de trabajar:
 
 ```
-POSITIONS_PER_SIGNAL=1   <- una operación, cierra en el TP1
-POSITIONS_PER_SIGNAL=3   <- tres operaciones, una por objetivo
+POSITIONS_PER_SIGNAL=1      <- una operación, cierra en el TP1
+POSITIONS_PER_SIGNAL=3      <- tres operaciones, una por objetivo
+POSITIONS_PER_SIGNAL=todas  <- una por cada TP que traiga la señal
 ```
+
+Antes de cambiarlo, el repaso dice qué habría pasado, TP por TP:
+`tct repaso --dias 150 --posiciones todas` (no toca el `.env`).
 
 Con `3`, cada señal abre tres operaciones iguales salvo por el objetivo: una
 apunta al TP1, otra al TP2, otra al TP3. Las tres comparten el mismo stop loss.

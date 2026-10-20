@@ -15,6 +15,7 @@ archivo, util al correr en un servidor).
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -115,6 +116,12 @@ ROSTER_POR_DEFECTO = ("demo", "real", "papel", "paper")
 # Lo que cuenta como "si" en una variable de si/no. Cualquier otra cosa es "no",
 # asi que `tct cambiar` la usa para rechazar un "ture" antes de que llegue aca.
 VALORES_SI = frozenset({"1", "true", "yes", "y", "si", "on"})
+
+# POSITIONS_PER_SIGNAL=todas (19/10): una posicion por cada TP que traiga la
+# senal, sean 2 u 8. Se guarda como un numero mas alto que cualquier canal;
+# `Engine._objetivos_de_apertura` nunca abre mas posiciones que TPs.
+POSICIONES_TODAS = 99
+PALABRAS_DE_TODAS = frozenset({"todas", "todos", "all"})
 
 # Variables de un sistema que ya no existe: los avisos por Telegram.
 VARIABLES_OBSOLETAS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_NOTIFY_CHAT_ID",
@@ -236,6 +243,12 @@ class Settings:
     # geometria no ve. Ver risk.evaluate_open.
     max_stop_distance_pct: float = 0.0
 
+    # SL artificial (19/10): en vez del SL del canal, uno al X% de lo que le
+    # falta al precio de entrada para llegar al TP1. Con 90, una operacion que
+    # busca 5 puntos arriesga 4.5: casi 1 a 1. Nunca mas lejos que el del canal
+    # (si el del canal queda mas cerca, queda ese). 0 = apagado, el del canal.
+    artificial_sl_pct: float = 0.0
+
     # --- IA local opcional (Ollama) ---
     # Respaldo para mensajes que el parser de reglas no entiende. Nunca es el
     # camino principal: si el parser entendio, la IA ni se entera.
@@ -339,6 +352,11 @@ class Settings:
         """
         if self.positions_per_signal == 1:
             cuantas = "1 posicion (solo el TP mas cercano)"
+        elif self.positions_per_signal >= POSICIONES_TODAS:
+            cuantas = (f"una posicion por cada TP de la senal, de {self.default_lot} cada una"
+                       + (" (o el lote de su grupo)" if self.lot_per_chat else "")
+                       + f" (una de 8 TP = {round(self.default_lot * 8, 4)} de lote),"
+                       f" hasta {self.max_open_trades} abiertas en total (MAX_OPEN_TRADES)")
         else:
             total = round(self.default_lot * self.positions_per_signal, 4)
             cuantas = (
@@ -350,6 +368,13 @@ class Settings:
         else:
             tope = "sin tope por instrumento"
         return f"{cuantas}, {tope}"
+
+    def _describe_sl(self) -> str:
+        """De donde sale el SL de cada operacion: el del canal o el artificial."""
+        if self.artificial_sl_pct <= 0:
+            return "el del canal"
+        return (f"artificial, al {self.artificial_sl_pct:g}% de la distancia al TP1 "
+                "(el del canal si queda mas cerca)")
 
     def _describe_distancia(self) -> str:
         """Como se muestra el control contra el precio real al arrancar.
@@ -404,6 +429,7 @@ class Settings:
             f"Max senales/dia : {self.max_signals_per_day}",
             f"Por senal       : {self._describe_por_senal()}",
             f"Exige SL / TP   : {self.require_stop_loss} / {self.require_take_profit}",
+            f"SL              : {self._describe_sl()}",
             f"Dist. al mercado: {self._describe_distancia()}",
             f"Tope perdida dia: "
             + (f"{self.max_daily_loss_pct}%" if self.max_daily_loss_pct else "sin tope"),
@@ -585,13 +611,14 @@ def load_settings(env_file: str | Path | None = None,
         allowed_symbols={s.upper() for s in env.list("ALLOWED_SYMBOLS", _DEFAULT_SYMBOLS)},
         max_open_trades=env.int("MAX_OPEN_TRADES", 5),
         max_signals_per_day=env.int("MAX_SIGNALS_PER_DAY", 20),
-        positions_per_signal=max(1, env.int("POSITIONS_PER_SIGNAL", 1)),
+        positions_per_signal=_posiciones_por_senal(env),
         max_positions_per_symbol=max(0, env.int("MAX_POSITIONS_PER_SYMBOL", 1)),
         require_stop_loss=env.bool("REQUIRE_STOP_LOSS", True),
         require_take_profit=env.bool("REQUIRE_TAKE_PROFIT", True),
         max_spread_from_entry_pct=env.float("MAX_SPREAD_FROM_ENTRY_PCT", 0.5),
         max_pending_distance_pct=env.float("MAX_PENDING_DISTANCE_PCT", 3.0),
         max_stop_distance_pct=max(0.0, env.float("MAX_STOP_DISTANCE_PCT", 0.0)),
+        artificial_sl_pct=_sl_artificial(env),
         breakeven_uses_real_entry=env.bool("BREAKEVEN_USES_REAL_ENTRY", True),
         lot_per_chat=_lote_por_grupo(env.list("LOT_PER_CHAT"), source_chats, max_lot),
         allow_live_trading=allow_live,
@@ -656,6 +683,27 @@ def _avisos_de_varias_instancias(settings: Settings) -> list[str]:
         "                MT5_PATH=C:\\Program Files\\MetaTrader 5\\terminal64.exe\n"
         "            Y mira siempre la linea 'MT5 listo | servidor=...' del arranque."
     ]
+
+
+def _posiciones_por_senal(env: _Env) -> int:
+    """POSITIONS_PER_SIGNAL: un numero, o "todas" (una por cada TP de la senal)."""
+    if env.str("POSITIONS_PER_SIGNAL").strip().lower() in PALABRAS_DE_TODAS:
+        return POSICIONES_TODAS
+    return max(1, env.int("POSITIONS_PER_SIGNAL", 1))
+
+
+def _sl_artificial(env: _Env) -> float:
+    """ARTIFICIAL_SL_PCT: 0 (apagado) o el % de la distancia al TP1.
+
+    Un valor raro no se apaga en silencio: un "-90" o un "nan" dejaria el SL
+    del canal mientras el arranque dice que hay uno artificial, o al reves.
+    """
+    pct = env.float("ARTIFICIAL_SL_PCT", 0.0)
+    if not math.isfinite(pct) or pct < 0 or pct > 500:
+        raise ConfigError(
+            "ARTIFICIAL_SL_PCT tiene que ser un numero de 0 a 500: 0 es el SL del canal, 90 "
+            f"es el SL al 90% de la distancia al TP1. Llego {env.str('ARTIFICIAL_SL_PCT')!r}.")
+    return pct
 
 
 def _lote_por_grupo(items: list[str], source_chats: list[str],

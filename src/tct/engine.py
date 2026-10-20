@@ -15,6 +15,7 @@ perderia la unica evidencia de que la senal existio.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
 import logging
 import uuid
@@ -100,6 +101,50 @@ def _entrada_efectiva(position, usar_precio_real: bool) -> float | None:
     if usar_precio_real and position.entry_real:
         return position.entry_real
     return position.entry
+
+
+def _precio(valor: float | None) -> str:
+    """Precio legible: 4438.5 y no 4438.500000000001."""
+    if valor is None:
+        return "?"
+    return f"{valor:.5f}".rstrip("0").rstrip(".")
+
+
+# "No me lo pasaron", distinto de None ("el canal no mando SL").
+_SIN_DATO = object()
+
+
+def _con_el_sl_enviado(event: SignalEvent, order: OrderResult | None) -> SignalEvent:
+    """La senal con el SL que de verdad quedo en la orden.
+
+    Con SL artificial puede no ser el de `event`: una recotizacion lo vuelve a
+    medir (`Engine._send_open`), y MT5 lo redondea a los decimales del simbolo.
+    """
+    if order is None:
+        return event
+    sl = order.raw.get("sl_broker", order.raw.get("sl_enviado", event.stop_loss))
+    if sl is None or sl == event.stop_loss:
+        return event
+    return dataclasses.replace(event, stop_loss=sl)
+
+
+def _aleja_el_sl_artificial(settings: Settings, position, nuevo: float | None) -> str | None:
+    """Con SL artificial, por que este SL nuevo no se aplica, o None.
+
+    El SL artificial fija el riesgo de cada operacion (19/10). Un "mover SL" o
+    una correccion del canal que lo ACERCA a la entrada se aplica, como un
+    breakeven; uno que lo ALEJA volveria a poner el riesgo del canal, que es
+    justo lo que el SL artificial vino a cambiar.
+    """
+    if settings.artificial_sl_pct <= 0 or nuevo is None or position.stop_loss is None:
+        return None
+    lado = (position.side or "").upper()
+    aleja = nuevo < position.stop_loss if lado == "BUY" else (
+        nuevo > position.stop_loss if lado == "SELL" else False)
+    if not aleja:
+        return None
+    return (f"{_precio(nuevo)} aleja el stop (estaba en {_precio(position.stop_loss)}): con el "
+            "SL artificial (ARTIFICIAL_SL_PCT) el riesgo de cada operacion no se agranda")
 
 
 def _destino_del_stop(position, event: SignalEvent, usar_precio_real: bool) -> float | None:
@@ -526,6 +571,26 @@ class Engine:
             return {"status": "rechazada", "reasons": decision.reasons, "signal": event.to_dict()}
 
         take_profits = usable_take_profits(event)
+        # El SL artificial (ARTIFICIAL_SL_PCT, 19/10), con el precio de ESTE
+        # momento. Desde aca la senal lleva ese SL: la orden, la posicion y el
+        # registro dicen el mismo numero.
+        # El del canal se guarda: es el que reconoce una senal repetida, y el
+        # tope del SL artificial (nunca mas lejos que el del canal).
+        del_canal = event
+        if self.settings.artificial_sl_pct > 0:
+            sl, motivo, datos = await self._sl_artificial(event, take_profits)
+            if sl is not None:
+                event = dataclasses.replace(event, stop_loss=sl)
+                self.store.append_event("sl_artificial", datos)
+            if motivo is not None:
+                self.store.append_event("rechazada", {
+                    "signal": event.to_dict(), "reasons": [motivo],
+                    "precio_mercado": precio_mercado,
+                })
+                logger.info("Senal rechazada: %s", motivo)
+                await self._avisar(f"Senal RECHAZADA {event.symbol or '?'}\nMotivo: {motivo}",
+                                   problema=True)
+                return {"status": "rechazada", "reasons": [motivo], "signal": event.to_dict()}
         # El lote de ESE grupo (LOT_PER_CHAT); sin eso, DEFAULT_LOT como siempre.
         lot = self.settings.lote_para(event.telegram_chat_id)
 
@@ -538,6 +603,21 @@ class Engine:
         # valer el triple. Eso es una decision de riesgo, no un detalle: por eso
         # vive en POSITIONS_PER_SIGNAL, arranca en 1, y se imprime al arrancar.
         objetivos = self._objetivos_de_apertura(take_profits)
+        # Las que MAX_OPEN_TRADES dejo afuera (no las que POSITIONS_PER_SIGNAL no
+        # pidio): con "todas", una senal de 8 TP no entra entera si hay pocos
+        # lugares, y una que entra a medias tiene que decirlo (19/10).
+        pedidas = min(max(1, self.settings.positions_per_signal), len(take_profits) or 1)
+        sin_lugar = [
+            {"tp_indice": i, "tp": tp}
+            for i, tp in enumerate(take_profits[len(objetivos):pedidas], start=len(objetivos) + 1)
+        ]
+        recalcular = None
+        if self.settings.artificial_sl_pct > 0:
+            async def recalcular():
+                sl, motivo, datos = await self._sl_artificial(del_canal, take_profits)
+                if sl is not None:
+                    self.store.append_event("sl_artificial", {**datos, "por_recotizacion": True})
+                return sl, motivo
 
         aperturas: list[dict[str, Any]] = []
         papers: list[dict[str, Any]] = []
@@ -586,13 +666,27 @@ class Engine:
             # entrado antes de fallar, asi que se la busca en la cuenta.
             try:
                 order = await self._send_open(
-                    event, lot, [objetivo] if objetivo is not None else []
+                    event, lot, [objetivo] if objetivo is not None else [],
+                    recalcular_sl=recalcular,
                 )
             except Exception as exc:
                 logger.exception("Fallo al mandar la orden de %s (%s)", event.symbol, etiqueta)
                 order = OrderResult(False, "open", f"error al mandar la orden: {exc}",
                                     symbol=event.symbol, lot=lot,
                                     raw={"sin_respuesta": True, "sin_confirmar": True})
+
+            # Con SL artificial, una recotizacion lo vuelve a medir: las
+            # posiciones que siguen de esta senal salen con el nuevo, no con
+            # el del precio de antes (19/10).
+            event = _con_el_sl_enviado(event, order)
+            if order is not None and not order.ok and order.raw.get("sin_distancia"):
+                fallidas.append(f"{etiqueta}: {order.reason}")
+                ordenes_fallidas.append(order.to_dict())
+                fallidas.extend(
+                    f"TP{i}: no se mando, el precio ya habia llegado al TP1"
+                    for i in range(indice + 1, len(objetivos) + 1))
+                logger.error("No se abrio %s (%s): %s", event.symbol, etiqueta, order.reason)
+                break
 
             # Si el broker rechazo, NO se registra la posicion. Registrarla dejaria
             # una fantasma: existe en el estado y no en el broker, bloquea el
@@ -605,7 +699,9 @@ class Engine:
                     # pudo haber entrado. Se la sigue buscando; si aparece, se
                     # registra como esta posicion (`_confirmar_sin_respuesta`).
                     self._sin_confirmar.append({
-                        "event": event, "trade_id": trade_id, "lot": lot,
+                        "event": event,
+                        "trade_id": trade_id, "lot": lot,
+                        "sl_del_canal": del_canal.stop_loss,
                         "take_profits": take_profits, "indice": indice,
                         "objetivo": objetivo,
                         "hasta": datetime.now(timezone.utc) + BUSCAR_SIN_CONFIRMAR,
@@ -625,8 +721,9 @@ class Engine:
             # a los avisos y sobre todo a la matematica de los cierres parciales
             # trabajando sobre un lote que en MT5 no existe.
             lot_abierto = order.lot if (order is not None and order.lot) else lot
-            position = self._nueva_posicion(event, trade_id, order, lot_abierto,
-                                            take_profits, indice, objetivo)
+            position = self._nueva_posicion(event, trade_id, order,
+                                            lot_abierto, take_profits, indice, objetivo,
+                                            sl_del_canal=del_canal.stop_loss)
             self.store.add_position(position)
             # Marcada y guardada YA, con la primera que entra: si algo corta la
             # senal despues, una edicion de este mensaje no la vuelve a abrir.
@@ -636,6 +733,7 @@ class Engine:
             aperturas.append({
                 "trade_id": trade_id,
                 "tp": objetivo,
+                "sl": position.stop_loss,
                 "etiqueta": etiqueta,
                 "indice": indice if objetivo is not None else None,
                 "lot": lot_abierto,
@@ -706,6 +804,10 @@ class Engine:
             "orders": [a["order"] for a in aperturas],
             "fallidas": fallidas,
             "warnings": event.warnings,
+            # Con SL artificial, `signal.stop_loss` es el artificial; el del
+            # canal queda aca (lo lee `tct evaluar-stop`).
+            "sl_del_canal": del_canal.stop_loss,
+            "sin_lugar": sin_lugar,
             # Ticket y TP de cada posicion. `orders` tiene los tickets en orden,
             # pero si falla una del medio ya no se sabe cual persigue que TP; el
             # informe usa esto para decir TP1, TP2 o TP3 sin adivinar.
@@ -714,6 +816,9 @@ class Engine:
                     "ticket": (a["order"] or {}).get("ticket"),
                     "tp_indice": a["indice"],
                     "tp": a["tp"],
+                    # El SL que quedo en ESA posicion (con SL artificial y una
+                    # recotizacion en el medio, no todas tienen el mismo).
+                    "sl": a["sl"],
                 }
                 for a in aperturas
             ],
@@ -731,11 +836,13 @@ class Engine:
         # dato: las tres posiciones existen para MEDIR cuantas veces el precio
         # llega al TP2 y al TP3. Un 2 de 3 invisible ensucia justo eso: el TP3
         # figura como 'no llego' cuando en realidad nunca se mando.
-        if fallidas or event.warnings:
+        if fallidas or event.warnings or sin_lugar:
             await self._avisar(
-                f"{event.symbol}: entraron {len(aperturas)} de {len(objetivos)} "
+                f"{event.symbol}: entraron {len(aperturas)} de {len(objetivos) + len(sin_lugar)} "
                 "posicion(es).\n"
                 + "\n".join(f"  {f}" for f in fallidas)
+                + "".join(f"\n  TP{s['tp_indice']}: no hay lugar (MAX_OPEN_TRADES="
+                          f"{self.settings.max_open_trades})" for s in sin_lugar)
                 + (("\n" + "; ".join(event.warnings)) if event.warnings else ""),
                 problema=True,
             )
@@ -745,6 +852,7 @@ class Engine:
                 event, aperturas[0]["lot"], take_profits,
                 aperturas[0]["order_obj"], precio_mercado,
                 aperturas=aperturas, fallidas=fallidas,
+                sl_del_canal=del_canal.stop_loss,
             )
         )
         logger.info(
@@ -793,8 +901,16 @@ class Engine:
 
 
     async def _send_open(
-        self, event: SignalEvent, lot: float, take_profits: list[float]
+        self, event: SignalEvent, lot: float, take_profits: list[float],
+        recalcular_sl: Any = None,
     ) -> OrderResult | None:
+        """Manda la orden, y la reintenta si el broker pidio otro precio.
+
+        `recalcular_sl` (con SL artificial): el SL se mide desde el precio de
+        entrada, asi que con otro precio se vuelve a medir antes de reintentar.
+        El SL que se mando queda en `raw["sl_enviado"]`.
+        """
+        stop = event.stop_loss
         if not await self.broker.is_ready():
             return OrderResult(
                 False, "open", f"Broker '{self.broker.name}' no esta listo", symbol=event.symbol
@@ -808,7 +924,7 @@ class Engine:
                 order_type=event.order_type,
                 lot=lot,
                 entry=event.entry,
-                stop_loss=event.stop_loss,
+                stop_loss=stop,
                 take_profit=take_profits[0] if take_profits else None,
             )
 
@@ -832,9 +948,22 @@ class Engine:
                     symbol=event.symbol, lot=orden.lot,
                     raw={"retcode": orden.raw.get("retcode"), "recotizacion": True},
                 )
+            if recalcular_sl is not None:
+                nuevo, motivo = await recalcular_sl()
+                if motivo is not None:
+                    return OrderResult(
+                        False, "open", f"El precio se movio mientras se abria: {motivo}",
+                        symbol=event.symbol, lot=orden.lot,
+                        raw={"retcode": orden.raw.get("retcode"), "recotizacion": True,
+                             "sin_distancia": True, "sl_enviado": stop},
+                    )
+                if nuevo is not None:
+                    stop = nuevo
             logger.info("El broker pidio otro precio: reintento %s de %s con %s.",
                         intento, REINTENTOS_POR_PRECIO, precio)
             orden = await mandar()
+        if orden is not None:
+            orden.raw.setdefault("sl_enviado", stop)
         return orden
 
     # -- Gestion -----------------------------------------------------------
@@ -999,6 +1128,7 @@ class Engine:
         movidas = 0
         fallidas: list[str] = []
         descartadas: list[str] = []
+        no_aplicadas: list[dict[str, Any]] = []
         for position in targets:
             # "a breakeven" significa el precio de entrada de ESA posicion,
             # por eso se resuelve por posicion y no una sola vez. Y ese precio
@@ -1042,12 +1172,15 @@ class Engine:
             # canal opera solo oro y manda un MOVER SL detras de cada senal— y
             # le ALEJA el stop. Ver `stop_agranda_el_riesgo`, que tiene los
             # numeros medidos.
-            motivo = stop_agranda_el_riesgo(
+            motivo = _aleja_el_sl_artificial(self.settings, position, new_sl) or stop_agranda_el_riesgo(
                 position.side, position.stop_loss, new_sl, hay_varias=len(targets) > 1
             )
             if motivo is not None:
                 logger.error("No se movio el SL de %s: %s", position.symbol, motivo)
                 descartadas.append(f"{position.symbol}: {motivo}")
+                # Con su ticket, para que el detalle del repaso lo muestre.
+                no_aplicadas.append({"ticket": position.broker_ticket, "sl": new_sl,
+                                     "motivo": motivo})
                 continue
 
             order = await self.broker.modify_stop_loss(
@@ -1096,6 +1229,7 @@ class Engine:
         self.store.append_event("mover_sl", {
             "signal": event.to_dict(), "orders": results,
             "fallidas": fallidas, "descartadas": descartadas,
+            "no_aplicadas": no_aplicadas,
         })
         # El aviso dice breakeven tambien cuando el canal lo escribio como numero:
         # "SL movido a 4467" y "SL movido a breakeven" describen lo mismo, y el
@@ -1502,6 +1636,83 @@ class Engine:
             )
             return None
 
+    async def _bid_y_ask(self, symbol: str | None) -> tuple[float, float] | None:
+        """(bid, ask) ahora, o None. Nunca lanza, como `_precio_de_mercado`."""
+        if not symbol:
+            return None
+        try:
+            return await self.broker.quote(symbol)
+        except Exception:
+            logger.warning("No se pudo leer el bid y el ask de %s", symbol, exc_info=True)
+            return None
+
+    async def _sl_artificial(
+        self, event: SignalEvent, take_profits: list[float]
+    ) -> tuple[float | None, str | None, dict[str, Any]]:
+        """(SL artificial, motivo para no abrir, de donde salio), con el precio de ahora.
+
+        SL None y motivo None: no aplica (sin TP o sin precio), queda el del
+        canal. `event` es la senal como la mando el canal.
+
+        El SL va al ARTIFICIAL_SL_PCT % de lo que le falta al precio de entrada
+        para llegar al TP1, del otro lado: con 90 y el TP1 a 5 puntos, el SL
+        queda a 4.5. Casi 1 a 1 en la del TP1; las de los TPs siguientes llevan
+        el mismo SL y buscan mas. El precio de entrada es el de verdad -el ask
+        de un BUY, el bid de un SELL-, no el del mensaje: lo que cuenta es lo
+        que falta desde donde entra. En una pendiente, el precio de la orden.
+
+        - Nunca mas lejos que el SL del canal: si ese queda mas cerca, va ese.
+        - Si el precio ya llego al TP1 no hay distancia: no se abre.
+        - Si el SL quedaria del lado equivocado del precio (dentro del spread),
+          MT5 lo rechazaria: no se abre, con un motivo que se entiende.
+        - Sin TP no hay distancia: queda el SL del canal.
+        """
+        if not take_profits or event.side is None:
+            return None, None, {}
+        compra = event.side is Side.BUY
+        # El TP mas cercano, aunque el canal los mande en otro orden: es el que
+        # arriesga menos. (Si los manda de lejos a cerca, la posicion del "TP1"
+        # persigue el primero que escribio; ningun canal medido lo hace.)
+        tp1 = min(take_profits) if compra else max(take_profits)
+        cotizacion = (await self._bid_y_ask(event.symbol)
+                      if event.order_type is OrderType.MARKET else None)
+        if cotizacion is not None:
+            referencia = cotizacion[1] if compra else cotizacion[0]
+        else:
+            # Pendiente, o un broker sin cotizacion: el precio del mensaje.
+            referencia = event.entry
+        if referencia is None:
+            return None, None, {}
+
+        distancia = (tp1 - referencia) if compra else (referencia - tp1)
+        if distancia <= 0:
+            return None, (
+                f"El precio ({_precio(referencia)}) ya llego al TP1 ({_precio(tp1)}): no queda "
+                "distancia para el SL artificial (ARTIFICIAL_SL_PCT)"), {}
+        parte = self.settings.artificial_sl_pct / 100 * distancia
+        sl = referencia - parte if compra else referencia + parte
+        canal = event.stop_loss
+        if canal is not None and (canal > sl if compra else canal < sl):
+            sl = canal  # el del canal arriesga menos
+        sl = round(sl, 5)
+        if cotizacion is not None and (sl >= cotizacion[0] if compra else sl <= cotizacion[1]):
+            return None, (
+                f"El SL ({_precio(sl)}) quedaria del lado equivocado del precio "
+                f"({_precio(cotizacion[0])} / {_precio(cotizacion[1])}): el TP1 esta "
+                "demasiado cerca para el SL artificial (ARTIFICIAL_SL_PCT)"), {}
+
+        return sl, None, {
+            "signal_message_id": event.telegram_message_id,
+            "chat": event.telegram_chat_id,
+            "symbol": event.symbol,
+            "side": event.side.value,
+            "referencia": referencia,
+            "tp1": tp1,
+            "pct": self.settings.artificial_sl_pct,
+            "sl_del_canal": canal,
+            "sl": sl,
+        }
+
     async def _precio_para_abrir(self, event: SignalEvent) -> float | None:
         """El precio que necesita el control de apertura, si esta encendido.
 
@@ -1564,6 +1775,10 @@ class Engine:
             position = abiertas.get(trade_id)
             if position is None:
                 self._sl_pendientes.pop(trade_id, None)  # ya cerro
+                continue
+            if _aleja_el_sl_artificial(self.settings, position, nuevo) is not None:
+                # Entre medio otra orden lo acerco: reintentar este lo alejaria.
+                self._sl_pendientes.pop(trade_id, None)
                 continue
             order = await self.broker.modify_stop_loss(
                 ticket=position.broker_ticket, symbol=position.symbol, stop_loss=nuevo)
@@ -1771,13 +1986,30 @@ class Engine:
                        or p.side != (event.side.value if event.side else "")
                        for p in propias)):
             return None
-        a_corregir = [p for p in propias
-                      if p.stop_loss is None or abs(p.stop_loss - nuevo) > 1e-9]
-        if not a_corregir:
-            return None
         entrada = propias[0].entry_real or propias[0].entry
         del_lado_correcto = entrada is None or (
             nuevo < entrada if event.side is Side.BUY else nuevo > entrada)
+        if del_lado_correcto:
+            # La senal como el canal la deja escrita: si la repite, se la
+            # reconoce con este SL (`risk.evaluate_open`), se aplique o no.
+            for p in propias:
+                p.sl_del_canal = nuevo
+        alejan = [p for p in propias
+                  if p.stop_loss is not None and abs(p.stop_loss - nuevo) > 1e-9
+                  and _aleja_el_sl_artificial(self.settings, p, nuevo) is not None]
+        a_corregir = [p for p in propias
+                      if (p.stop_loss is None or abs(p.stop_loss - nuevo) > 1e-9)
+                      and p not in alejan]
+        if alejan and del_lado_correcto:
+            self.store.append_event("sl_correccion_ignorada", {
+                "signal": event.to_dict(),
+                "no_aplicadas": [{"ticket": p.broker_ticket, "sl": nuevo,
+                                  "motivo": _aleja_el_sl_artificial(self.settings, p, nuevo)}
+                                 for p in alejan]})
+        if not a_corregir:
+            if del_lado_correcto:
+                self.store.save_state()
+            return None
         if not del_lado_correcto:
             await self._avisar(
                 f"El canal corrigio el SL de {event.symbol} a {nuevo}, pero queda del lado "
@@ -1792,6 +2024,13 @@ class Engine:
                 ticket=position.broker_ticket, symbol=position.symbol, stop_loss=nuevo)
             if order.ok or order.raw.get("retcode") == 10025:
                 position.stop_loss = nuevo
+                # Un "mover SL" anterior que esperaba en la cola y queda MAS
+                # LEJOS que esta correccion: reintentarlo la pisaria (19/10).
+                # Uno mas cerca (un breakeven) sigue esperando.
+                en_cola = self._sl_pendientes.get(position.trade_id)
+                if en_cola is not None and (en_cola <= nuevo if position.side == "BUY"
+                                            else en_cola >= nuevo):
+                    self._sl_pendientes.pop(position.trade_id, None)
                 hechas.append(f"{position.symbol} {antes} -> {nuevo}")
             else:
                 fallidas.append(f"{position.symbol}: {order.reason}")
@@ -1847,7 +2086,8 @@ class Engine:
             self._sin_confirmar.remove(pendiente)
             position = self._nueva_posicion(
                 event, pendiente["trade_id"], order, order.lot or pendiente["lot"],
-                pendiente["take_profits"], pendiente["indice"], pendiente["objetivo"])
+                pendiente["take_profits"], pendiente["indice"], pendiente["objetivo"],
+                sl_del_canal=pendiente.get("sl_del_canal", _SIN_DATO))
             # Otra orden sin confirmar de OTRO grupo, mismo simbolo, lado y lote:
             # no hay forma de saber de cual es. Sin grupo la gestionan todos,
             # que es lo de antes, y se avisa abajo.
@@ -1884,7 +2124,12 @@ class Engine:
 
     def _nueva_posicion(self, event: SignalEvent, trade_id: str, order: OrderResult | None,
                         lot: float, take_profits: list[float], indice: int,
-                        objetivo: float | None) -> OpenPosition:
+                        objetivo: float | None,
+                        sl_del_canal: Any = _SIN_DATO) -> OpenPosition:
+        # El SL que quedo de verdad en la orden (recotizacion, redondeo de MT5).
+        event = _con_el_sl_enviado(event, order)
+        if sl_del_canal is _SIN_DATO:
+            sl_del_canal = event.stop_loss
         return OpenPosition(
             trade_id=trade_id,
             symbol=(event.symbol or "").upper(),
@@ -1908,6 +2153,11 @@ class Engine:
             tp_objetivo=objetivo,
             # De que grupo vino: la gestion de otro grupo no la toca.
             grupo=clave_de_grupo(event.telegram_chat_id),
+            # Con SL artificial, el que mando el canal: con eso se reconoce la
+            # misma senal repetida (`risk.evaluate_open`).
+            sl_del_canal=sl_del_canal,
+            sl_artificial=(self.settings.artificial_sl_pct > 0
+                           and sl_del_canal != event.stop_loss),
         )
 
     async def esperar_la_ia(self) -> None:
@@ -1976,6 +2226,7 @@ class Engine:
         precio_mercado: float | None = None,
         aperturas: list[dict[str, Any]] | None = None,
         fallidas: list[str] | None = None,
+        sl_del_canal: float | None = None,
     ) -> str:
         lines = [
             f"SENAL ACEPTADA  {event.side.value if event.side else '?'} {event.symbol}",
@@ -1986,7 +2237,12 @@ class Engine:
             # Al lado de la entrada del mensaje, para poder comparar de un
             # vistazo desde el telefono sin abrir MT5.
             f"Mercado : {precio_mercado if precio_mercado is not None else 'sin dato'}",
-            f"SL      : {event.stop_loss}",
+            f"SL      : {event.stop_loss}" + (
+                f"  (artificial, {self.settings.artificial_sl_pct:g}%; "
+                + (f"el canal decia {_precio(sl_del_canal)})" if sl_del_canal is not None
+                   else "el canal no mando SL)")
+                if self.settings.artificial_sl_pct > 0 and sl_del_canal != event.stop_loss
+                else ""),
             f"TPs     : {', '.join(str(tp) for tp in take_profits) or '-'}",
             f"Lote    : {lot}",
             f"Modo    : {self.settings.trading_mode}",

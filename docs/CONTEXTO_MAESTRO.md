@@ -5,8 +5,8 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-19 · v2.7.0 · 1390 tests · el último commit que describe
-es `99319ee`, más este mismo cambio
+Actualizado: 2026-10-20 · v2.7.0 · 1456 tests · el último commit que describe
+es `0c86b91`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
 
@@ -476,6 +476,39 @@ El 14/08 las dos tomaron un SL de 120 puntos (typo del canal) que, perdido,
 borraba todo. Los topes del usuario no bloquean nada. El bot no cambió; se le
 presentaron las opciones (dejarlo, probar (3) solo en la demo de FxPro, o medir
 antes con `.env.real` y una simulación más estricta).
+**Después (19/10, tarde): pidió otra cosa para la demo de FxPro** —"un stop loss
+artificial... al 90% de los pips que faltan para el primer tp" (casi 1 a 1) y "que
+abra simultaneamente todos [los TP] pero al 0.02"—, y verlo antes en el repaso con
+David, Sebastián, Genesis y TZ. Hecho (el bot no cambia hasta que lo pongan en el
+`.env`):
+- `ARTIFICIAL_SL_PCT` (0 = apagado). `Engine._sl_artificial`: SL = precio de entrada
+  real (ask de un BUY / bid de un SELL, `Broker.quote`; en pendientes el de la orden)
+  ∓ X% de la distancia al TP más cercano. Nunca más lejos que el del canal; si el
+  precio ya llegó al TP1 o el SL quedaría dentro del spread, no abre. Con
+  recotización se vuelve a medir desde el precio nuevo. Un "mover SL" o una
+  corrección del canal que lo **aleja** no se aplica (`_aleja_el_sl_artificial`),
+  tampoco un stop viejo en la cola; uno que lo acerca sí. MT5 redondea SL/TP a los
+  decimales del símbolo y la posición guarda el que quedó. `OpenPosition.sl_del_canal`
+  (persistido) reconoce la misma señal repetida; el evento "aceptada" lleva
+  `sl_del_canal` (lo usa `evaluar-stop`) y `sin_lugar` (los TP que MAX_OPEN_TRADES
+  dejó afuera, con aviso).
+- `POSITIONS_PER_SIGNAL=todas` (= 99, `config.POSICIONES_TODAS`): una por cada TP.
+  `tct cambiar` acepta las dos; `/estado` y el arranque dicen cómo opera.
+- Repaso: `--posiciones todas --sl-artificial 90` sin tocar el `.env`; cuenta señales
+  y posiciones, "POR TP" (con el TP y el SL de la apertura, `tp_inicial`/`sl_inicial`
+  en cada fila), `repaso.clasificar` (en su TP o su SL sin mover = ganada/perdida
+  aunque caiga en la franja del breakeven), los "mover SL" que no se aplicaron, y la
+  tabla de grupos con OPER = señales. Revisión: 3 revisores + 1 verificador, 23
+  puntos confirmados (el más grave: la señal repetida se abría dos veces), todos
+  corregidos; una segunda pasada encontró 8 más (con "todas", una recotización dejaba
+  las demás posiciones con el SL viejo; una corrección por edición no actualizaba
+  `sl_del_canal`; borraba un breakeven en la cola; `clasificar` cambiaba los números
+  de los grupos ya medidos, ahora solo con SL artificial), corregidos. 16 mutaciones,
+  las 16 cazadas. Límite conocido: si un canal manda los TP de lejos a cerca, la
+  posición del "TP1" persigue el primero escrito (el SL se mide al más cercano).
+Pedido: `tct repaso --env-file .env.segunda --dias 150 --lotes 0.02 --detalle
+--posiciones todas --sl-artificial 90 --chat=<los 4>`. Sin confirmar: "dos canales de
+twt ganaron otra vez" (no se sabe qué es "twt"; se le preguntó).
 
 **ESTADO AL 12/10.**
 
@@ -1733,7 +1766,7 @@ Los `.bat` de `scripts/` envuelven todo esto para no depender de la terminal.
 | **La IA avisa, no opera** | `risk.py` valida que un precio sea *coherente*, no que sea el *correcto*. Un 2345 leído donde decía 2355 pasa todos los controles. |
 | **Una instancia por cuenta = un proceso** | MT5 admite una cuenta por terminal y el paquete de Python una terminal por proceso: `login()` reemplaza, no agrega. Verificado contra la API. Cada instancia necesita su `.env`, su carpeta de datos, su sesion de Telethon y **su `MT5_PATH`**. Los nombres salen de `INSTANCE_NAMES`, que tiene que ser identico en todos los `.env`. |
 | **Equity y no balance** | Para el freno diario. El balance solo ve lo cerrado; con una posición abierta perdiendo, no se movería. |
-| **SL y TP como los manda el canal** (real, 08/10) | `tct evaluar-stop` con 15 operaciones: achicar el stop al 85/75/65% rinde +58.50/+17.45/+9.95 contra +92.65, porque cada TP que se corta pasa de ~+20 a ~-35. Se revisa solo con más datos. |
+| **SL y TP como los manda el canal** (real, 08/10; desde el 19/10 la demo de FxPro puede probar `ARTIFICIAL_SL_PCT` y `POSITIONS_PER_SIGNAL=todas`, ver §2) | `tct evaluar-stop` con 15 operaciones: achicar el stop al 85/75/65% rinde +58.50/+17.45/+9.95 contra +92.65, porque cada TP que se corta pasa de ~+20 a ~-35. Se revisa solo con más datos. |
 | **Lote por riesgo constante: 0.03 con 321.75 propios** (real, 12/10) | El equilibrio del canal es ~61% y con 22 operaciones el % real es muy incierto. El crédito de 750 no cubre pérdidas: el riesgo se calcula sobre el balance propio. Regla en "ESTADO ACTUAL". |
 | **La real sin control ni avisos por Telegram, sin 4º bot, topes 20/15/15** | Decisiones suyas del 28-29/09. No volver a proponer lo contrario. |
 

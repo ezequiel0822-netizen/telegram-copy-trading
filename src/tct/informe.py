@@ -413,6 +413,8 @@ def tickets_operados(eventos: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         senal = evento.get("signal") or {}
         objetivos = list(senal.get("take_profits") or [])
+        sl_de = {a.get("ticket"): a.get("sl") for a in evento.get("aperturas") or []
+                 if a.get("sl") is not None}
         for ticket, indice in _posiciones_del_evento(evento, objetivos):
             operadas.append({
                 "ts": evento.get("ts"),
@@ -420,7 +422,11 @@ def tickets_operados(eventos: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "symbol": senal.get("symbol"),
                 "side": senal.get("side"),
                 "entry": senal.get("entry"),
-                "stop_loss": senal.get("stop_loss"),
+                # El del CANAL: `evaluar-stop` mide contra ese. Con SL
+                # artificial, el que se puso queda en `sl_puesto` (19/10).
+                "stop_loss": (evento["sl_del_canal"] if "sl_del_canal" in evento
+                              else senal.get("stop_loss")),
+                "sl_puesto": sl_de.get(ticket, senal.get("stop_loss")),
                 "take_profits": objetivos,
                 "tp_indice": indice,
                 "tp_movido_a": tp_movido.get(ticket),

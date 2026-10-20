@@ -107,10 +107,16 @@ def evaluate_open(
     # Reenviada o re-posteada con otro numero de mensaje, pasaba el
     # deduplicado (que es por mensaje) y abria una segunda posicion: doble
     # exposicion en una sola senal, y los dos lugares de la real ocupados.
+    # Contra el SL que mando el canal: con SL artificial, o despues de un
+    # breakeven, el de la posicion es otro (19/10).
     for abierta in store.find_positions(symbol, grupo=grupo):
+        sl_de_la_senal = (abierta.sl_del_canal
+                          if getattr(abierta, "sl_del_canal", None) is not None
+                          or getattr(abierta, "sl_artificial", False)
+                          else abierta.stop_loss)
         if (abierta.side == (event.side.value if event.side else "")
                 and abierta.entry == event.entry
-                and abierta.stop_loss == event.stop_loss
+                and sl_de_la_senal == event.stop_loss
                 and list(abierta.take_profits or [])[:1] == list(event.take_profits)[:1]):
             reasons.append(
                 "Es la misma senal que ya esta abierta (mismo simbolo, lado, entrada, "

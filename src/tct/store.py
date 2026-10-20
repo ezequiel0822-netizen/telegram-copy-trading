@@ -98,6 +98,13 @@ class OpenPosition:
     # un grupo que se saco del .env (ver `Engine._grupo_de_las_de_antes`). Esas
     # las puede gestionar cualquier grupo, como siempre.
     grupo: str | None = None
+    # El SL que mando el canal. Con SL artificial (ARTIFICIAL_SL_PCT, 19/10)
+    # `stop_loss` es otro, y la misma senal repetida se reconoce con este.
+    # None en las de antes de este campo: se compara con `stop_loss`.
+    sl_del_canal: float | None = None
+    # True si `stop_loss` es el artificial: entonces `sl_del_canal` vale aunque
+    # sea None (el canal no mando SL), y no es "una de antes de este campo".
+    sl_artificial: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +124,8 @@ class OpenPosition:
             "tp_indice": self.tp_indice,
             "tp_objetivo": self.tp_objetivo,
             "grupo": self.grupo,
+            "sl_del_canal": self.sl_del_canal,
+            "sl_artificial": self.sl_artificial,
         }
 
     @classmethod
@@ -138,6 +147,8 @@ class OpenPosition:
             tp_indice=data.get("tp_indice"),
             tp_objetivo=data.get("tp_objetivo"),
             grupo=data.get("grupo"),
+            sl_del_canal=data.get("sl_del_canal"),
+            sl_artificial=bool(data.get("sl_artificial", False)),
         )
 
 

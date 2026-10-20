@@ -763,6 +763,29 @@ class MT5NativeBroker(Broker):
             return None
         return await asyncio.to_thread(self._market_price_sync, symbol)
 
+    async def quote(self, symbol: str) -> tuple[float, float] | None:
+        if not await self.is_ready():
+            return None
+        return await asyncio.to_thread(self._quote_sync, symbol)
+
+    def _quote_sync(self, symbol: str) -> tuple[float, float] | None:
+        """(bid, ask), con el mismo simbolo que la orden. None si falta un lado."""
+        try:
+            broker_symbol = self._resolver_contra_broker(symbol) or to_broker_symbol(
+                symbol, self.settings.mt5_broker_profile
+            )
+            if self._ensure_symbol(broker_symbol) is None:
+                return None
+            tick = self._mt5.symbol_info_tick(broker_symbol)
+        except Exception:
+            logger.warning("No se pudo leer la cotizacion de %s", symbol, exc_info=True)
+            return None
+        if tick is None:
+            return None
+        bid = float(getattr(tick, "bid", 0.0) or 0.0)
+        ask = float(getattr(tick, "ask", 0.0) or 0.0)
+        return (bid, ask) if bid > 0 and ask > 0 else None
+
     def _market_price_sync(self, symbol: str) -> float | None:
         """Precio medio del instrumento, o None si el broker no lo da.
 
@@ -907,10 +930,15 @@ class MT5NativeBroker(Broker):
             "comment": "tct-copy",
             "type_time": mt5.ORDER_TIME_GTC,
         }
+        # Redondeados a los decimales del instrumento: los del canal ya lo
+        # estan, pero un SL artificial (4189.337) no, y MT5 puede rechazarlo.
+        digitos = getattr(info, "digits", None)
         if stop_loss is not None:
-            request["sl"] = float(stop_loss)
+            request["sl"] = (round(float(stop_loss), digitos) if isinstance(digitos, int)
+                             else float(stop_loss))
         if take_profit is not None:
-            request["tp"] = float(take_profit)
+            request["tp"] = (round(float(take_profit), digitos) if isinstance(digitos, int)
+                             else float(take_profit))
 
         pendiente = action != mt5.TRADE_ACTION_DEAL
         # Lo que este bot ya tenia en el simbolo ANTES de mandar: si order_send
@@ -958,7 +986,9 @@ class MT5NativeBroker(Broker):
                     # dejaba al bot creyendo tener abierto mas de lo que hay.
                     lot=_volumen_confirmado(result, volume),
                     symbol=symbol,
-                    raw={"retcode": result.retcode, "comment": result.comment},
+                    raw={"retcode": result.retcode, "comment": result.comment,
+                         # El SL que quedo, redondeado a los decimales del simbolo.
+                         **({"sl_broker": request["sl"]} if "sl" in request else {})},
                 )
             if result.retcode in _RECOTIZACION and not pendiente:
                 # El precio se movio y el broker no ejecuto: no entro nada. NO

@@ -2467,12 +2467,56 @@ def cmd_repaso(args: argparse.Namespace) -> int:
     except ValueError:
         print(f"--lotes tiene que ser una lista de numeros, como 0.05,0.07,0.10 ({args.lotes})")
         return 1
+    # Otra forma de operar, sin tocar el .env (19/10): para ver que habria
+    # pasado ANTES de cambiarle algo a un bot.
+    settings, problema = _ajustes_a_probar(settings, getattr(args, "posiciones", None),
+                                           getattr(args, "sl_artificial", None))
+    if problema:
+        print(problema)
+        return 1
     horario = getattr(args, "horario", None) or "europa"
     with _consola_sin_seleccion(), _tambien_a_un_archivo("repaso"):
         if getattr(args, "chat", None) and len(settings.telegram_source_chats) > 1:
             return _repaso_de_cada_grupo(settings, args.dias, lotes, args.detalle, horario)
         return asyncio.run(_repaso_async(settings, args.dias, lotes, args.detalle,
                                          horario=horario))
+
+
+def _ajustes_a_probar(settings: Settings, posiciones: str | None,
+                      sl_artificial: str | None) -> tuple[Settings, str | None]:
+    """`--posiciones` y `--sl-artificial` del repaso, encima de los del .env.
+
+    Devuelve (ajustes, None) o (los mismos, el problema en palabras).
+    """
+    import dataclasses
+    import math
+
+    from tct.config import PALABRAS_DE_TODAS, POSICIONES_TODAS
+
+    cambios: dict = {}
+    if posiciones:
+        crudo = posiciones.strip().lower()
+        if crudo in PALABRAS_DE_TODAS:
+            cambios["positions_per_signal"] = POSICIONES_TODAS
+        else:
+            try:
+                cambios["positions_per_signal"] = int(crudo)
+            except ValueError:
+                cambios["positions_per_signal"] = 0
+            if cambios["positions_per_signal"] < 1:
+                return settings, (f"--posiciones es cuantas abre cada senal: un numero como 3, o "
+                                  f"todas (una por cada TP). Llego {posiciones!r}.")
+    if sl_artificial is not None and str(sl_artificial).strip():
+        try:
+            pct = float(str(sl_artificial).replace(",", "."))
+        except ValueError:
+            pct = -1.0
+        if not math.isfinite(pct) or not 0 <= pct <= 500:
+            return settings, (f"--sl-artificial es el SL al tanto % de la distancia al TP1: un "
+                              f"numero de 0 a 500, como 90 (0 = el SL del canal). "
+                              f"Llego {sl_artificial!r}.")
+        cambios["artificial_sl_pct"] = pct
+    return (dataclasses.replace(settings, **cambios) if cambios else settings), None
 
 
 def cmd_mensajes(args: argparse.Namespace) -> int:
@@ -2603,6 +2647,64 @@ def _repaso_de_cada_grupo(settings: Settings, dias: int, lotes: list[float],
     return 0
 
 
+def _numero_de_tp(fila: dict) -> int | None:
+    """Que TP de la senal perseguia esta posicion del repaso AL ABRIR (1 = el primero).
+
+    Con el TP de la apertura: un "mover TP" del canal lo cambia despues, y la
+    posicion del TP1 no pasa a ser la del TP2 por eso.
+    """
+    from tct.risk import usable_take_profits
+
+    senal = fila.get("senal")
+    tp = fila.get("tp_inicial", getattr(fila.get("posicion"), "tp", None))
+    if senal is None or tp is None:
+        return None
+    tps = usable_take_profits(senal)
+    return tps.index(tp) + 1 if tp in tps else None
+
+
+def _imprimir_por_tp(abiertas: list[dict], lote_abierto: float, lote: float,
+                     contratos: dict | None = None, contrato: float = 100.0,
+                     por_motivo: bool = False) -> None:
+    """Con una posicion por TP (19/10): cuanto dio la del TP1, la del TP2...
+
+    Es lo que dice si abrir los TP lejanos suma o resta: cada posicion lleva
+    el mismo SL, y la del TP8 gana mucho cuando llega y casi nunca llega. Con
+    el mismo criterio de ganada, perdida y breakeven que el resumen de arriba.
+    """
+    from tct.repaso import clasificar
+
+    por_numero: dict[int | None, list] = {}
+    for f in abiertas:
+        por_numero.setdefault(_numero_de_tp(f), []).append(f)
+    escala = lote / lote_abierto if lote_abierto else 1.0
+    print(f"  POR TP, a lote {lote:.2f} cada posicion:")
+    for numero in sorted(por_numero, key=lambda n: (n is None, n or 0)):
+        filas = por_numero[numero]
+        cerradas = [f for f in filas if f["posicion"].cerrada is not None]
+        signos = [clasificar(f, contratos or {}, contrato, por_motivo) for f in cerradas]
+        total = sum(f["posicion"].resultado for f in cerradas) * escala
+        abiertas_aun = len(filas) - len(cerradas)
+        empatadas = signos.count(0)
+        print(f"    TP{numero if numero else '?'}: {len(filas):3} posiciones, "
+              f"{signos.count(1):3} ganadas, {signos.count(-1):3} perdidas"
+              + (f", {empatadas} breakeven" if empatadas else "")
+              + (f", {abiertas_aun} abiertas" if abiertas_aun else "")
+              + f"   resultado {total:+9.2f}")
+    print()
+
+
+def _posiciones_del_repaso(settings: Settings) -> str:
+    """Cuantas posiciones abre cada senal en el repaso, sin lote: los montos van a --lotes."""
+    from tct.config import POSICIONES_TODAS
+
+    if settings.positions_per_signal == 1:
+        return "1 posicion (solo el TP mas cercano)"
+    if settings.positions_per_signal >= POSICIONES_TODAS:
+        return "una posicion por cada TP de la senal"
+    return f"hasta {settings.positions_per_signal} posiciones, una por TP"
+
+
 def _mensaje_y_lo_que_entendio(senal) -> list[str]:
     """Dos lineas para el detalle: el mensaje (recortado) y lo que leyo el bot."""
     if senal is None:
@@ -2663,8 +2765,10 @@ def _tabla_de_grupos(filas: list[tuple[str, dict]], lote_del_env: float,
         equilibrio = d.get("pct_equilibrio")
         margen = (d["pct_ganadas"] - equilibrio) if equilibrio is not None else None
         decididas = d["ganadas"] + d["perdidas"]
-        aviso = "  (pocas)" if decididas < 20 else ""
-        escribir(f"  {nombre:<26} {d['mensajes']:>5} {d['operadas']:>5} {d['no_abiertas']:>4}"
+        senales = d.get("senales_operadas", d["operadas"])
+        # Con varias posiciones por senal, lo que dice si son pocas son las SENALES.
+        aviso = "  (pocas)" if (senales if senales != d["operadas"] else decididas) < 20 else ""
+        escribir(f"  {nombre:<26} {d['mensajes']:>5} {senales:>5} {d['no_abiertas']:>4}"
               f" {d['pct_ganadas']:>7.0f}%"
               f" {(f'{equilibrio:.0f}%' if equilibrio is not None else '-'):>11}"
               f" {(f'{margen:+.0f}' if margen is not None else '-'):>7}"
@@ -2678,14 +2782,25 @@ def _tabla_de_grupos(filas: list[tuple[str, dict]], lote_del_env: float,
             escribir(f"  {nombre:<26} {d.get('mensajes', 0):>5}     0 {d.get('no_abiertas', 0):>4}"
                      "  el bot no entendio ninguna senal de este grupo")
         else:
-            escribir(f"  {nombre:<26} {d.get('mensajes', 0):>5} {d['operadas']:>5}"
+            escribir(f"  {nombre:<26} {d.get('mensajes', 0):>5}"
+                     f" {d.get('senales_operadas', d['operadas']):>5}"
                      f" {d.get('no_abiertas', 0):>4}  ninguna termino todavia")
     escribir()
     escribir("  GANADAS: % de operaciones ganadas. HACE FALTA: el % para no perder, con lo")
     escribir("  que gana y pierde en promedio ESE grupo. MARGEN: la diferencia (positivo es")
     escribir("  bueno). NO: senales que el bot no habria abierto (si son muchas, el bot no")
     escribir("  entiende como escribe ese grupo: revisarlo con --detalle antes de conectarlo).")
-    escribir("  '(pocas)': menos de 20 operaciones decididas, el % todavia no dice mucho.")
+    varias = any(d.get("senales_operadas", d.get("operadas")) != d.get("operadas")
+                 for _c, d in filas if d)
+    if varias:
+        escribir("  '(pocas)': menos de 20 senales operadas, el % todavia no dice mucho.")
+    else:
+        escribir("  '(pocas)': menos de 20 operaciones decididas, el % todavia no dice mucho.")
+    if varias:
+        escribir("  Con varias posiciones por senal: OPER cuenta senales; GANADAS, HACE FALTA y")
+        escribir("  RACHA cuentan posiciones, y el resultado es a ese lote CADA posicion. Cada grupo")
+        escribir("  se midio solo: en el bot comparten MAX_OPEN_TRADES, y con muchas posiciones")
+        escribir("  por senal ese tope puede dejar afuera algunas.")
     escribir("  Sin deslizamiento: en una cuenta real los stops pueden salir peor.")
     # La consola no deja copiar tanto texto de una vez (16/10): la tabla queda
     # tambien en un archivo, que se abre con el Bloc de notas.
@@ -2700,6 +2815,7 @@ def _tabla_de_grupos(filas: list[tuple[str, dict]], lote_del_env: float,
 _GESTION_DEL_REPASO = {
     "mover_sl": "movio el SL", "sl_corregido": "corrigio el SL", "mover_tp": "movio el TP",
     "cierre": "la cerro", "cierre_parcial": "cerro una parte",
+    "sl_correccion_ignorada": "corrigio el SL",
 }
 
 
@@ -2734,6 +2850,14 @@ def _gestion_por_ticket(eventos: list[dict], mensajes: list) -> dict:
             ok = "" if orden.get("ok", True) else " (NO se pudo)"
             lineas.setdefault(orden["ticket"], []).append(
                 f"        gestion : {hora} {que}{a}{ok}  <- {texto}")
+        # Los "mover SL" que no se aplicaron porque alejaban el stop (19/10).
+        for nada in evento.get("no_aplicadas") or []:
+            if nada.get("ticket") is None:
+                continue
+            verbo = "corrigio" if evento.get("kind") == "sl_correccion_ignorada" else "movio"
+            lineas.setdefault(nada["ticket"], []).append(
+                f"        gestion : {hora} NO {verbo} el SL a {precio(nada.get('sl'))} (lo alejaba)"
+                f"  <- {texto}")
     return lineas
 
 
@@ -2777,6 +2901,10 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
     print("  MetaTrader. No manda ninguna orden. Los bots pueden seguir andando.")
     print("\n  Telegram usa una sesion aparte, para no tocar la del bot. La")
     print("  PRIMERA vez te pide el telefono y el codigo que llega a la app.\n")
+    # Como opera el bot que se simula (19/10): `--posiciones` y `--sl-artificial`
+    # lo cambian sin tocar el .env.
+    print(f"  Por senal: {_posiciones_del_repaso(settings)}")
+    print(f"  SL       : {settings._describe_sl()}\n")
 
     from tct.telegram.reader import TelefonoInvalido
 
@@ -2833,23 +2961,31 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
             engine = Engine(ajustes, store, broker)
             filas = await repasar(engine, broker, mensajes, fin)
             gestion = _gestion_por_ticket(store.read_events(), mensajes)
-            # Con MetaTrader todavia conectado: recorre sus ticks.
-            tardias = simular_tardias(filas, precios, contratos, fin)
+            # Con MetaTrader todavia conectado: recorre sus ticks. Solo con
+            # una posicion y el SL del canal: es lo que simula (19/10).
+            tardias = (simular_tardias(filas, precios, contratos, fin)
+                       if settings.positions_per_signal == 1 and settings.artificial_sl_pct <= 0
+                       else [])
     finally:
         await mt5_broker.disconnect()
 
     contrato = next(iter(contratos.values()))
     r = resumir(filas, settings.default_lot, sorted({settings.default_lot, *lotes}), contrato,
-                contratos=contratos)
+                contratos=contratos, por_motivo=settings.artificial_sl_pct > 0)
 
     abiertas = [f for f in filas if f.get("posicion") is not None]
     rechazadas = [f for f in filas if f.get("rechazo") is not None]
+    # Con POSITIONS_PER_SIGNAL > 1 una senal abre varias posiciones (19/10).
+    senales_operadas = len({(f["fecha_ms"], id(f.get("senal"))) for f in abiertas})
+    varias = settings.positions_per_signal > 1
     if resumen is not None:
         resumen.update(r, mensajes=len(mensajes), operadas=len(abiertas),
+                       senales_operadas=senales_operadas,
                        no_abiertas=len(rechazadas), balance=balance,
                        titulo=mensajes[0][1].get("chat_titulo"))
     if detalle:
         print("  UNA POR UNA")
+        ultima = None
         for f in sorted(filas, key=lambda x: x["fecha_ms"]):
             senal = f.get("senal")
             hora = hora_local(datetime.fromtimestamp(f["fecha_ms"] / 1000, tz=timezone.utc)
@@ -2860,15 +2996,28 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
                 print(f"{cabeza} no se opero: {f['rechazo'][0]}"[:110])
             else:
                 pos = f["posicion"]
+                # Con varias por senal, cual TP persigue; con SL artificial, cual
+                # SL lleva (el mensaje de abajo dice el del canal).
+                if varias:
+                    numero = _numero_de_tp(f)
+                    cabeza += f" TP{numero if numero else '?'}"
+                if settings.artificial_sl_pct > 0:
+                    inicial = f.get("sl_inicial", pos.sl)
+                    cabeza += f" sl={precio(inicial)}" + (
+                        f"->{precio(pos.sl)}" if pos.sl != inicial else "")
                 if pos.cerrada is None:
                     print(f"{cabeza} sigue abierta")
                 else:
                     print(f"{cabeza} {pos.cerrada['motivo']:<6} {pos.resultado:+8.2f}"
                           + ("  (senal recuperada de una edicion)" if f.get("reconstruida") else ""))
             # Para ver si el bot lee bien un grupo nuevo, sin ir a buscar el
-            # mensaje a Telegram (16/10): que decia, y que entendio.
-            for linea in _mensaje_y_lo_que_entendio(senal):
-                print(linea)
+            # mensaje a Telegram (16/10): que decia, y que entendio. Una vez por
+            # senal, aunque haya abierto ocho posiciones.
+            clave = (f["fecha_ms"], id(senal))
+            if clave != ultima:
+                for linea in _mensaje_y_lo_que_entendio(senal):
+                    print(linea)
+            ultima = clave
             # Y que le hizo la gestion del canal, y cuando cerro (17/10): para
             # comparar con lo que paso en vivo y ver donde se separan.
             if f.get("posicion") is not None:
@@ -2883,10 +3032,27 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
         print()
 
     print("  " + "-" * 62)
-    print(f"  {len(abiertas)} senales operadas, {len(rechazadas)} que el bot no habria abierto")
+    if varias:
+        print(f"  {senales_operadas} senales operadas ({len(abiertas)} posiciones), "
+              f"{len(rechazadas)} que el bot no habria abierto")
+        print("  Ganadas, perdidas y racha cuentan POSICIONES: una senal de 8 TP son 8.")
+    else:
+        print(f"  {len(abiertas)} senales operadas, {len(rechazadas)} que el bot no habria abierto")
     print("  " + "-" * 62)
+    if not tardias and (settings.positions_per_signal > 1 or settings.artificial_sl_pct > 0):
+        from tct.repaso import _es_solo_tardia
+
+        if any(_es_solo_tardia(f.get("rechazo") or []) for f in rechazadas):
+            nota_tardias = ("  (Las que llegaron tarde no se simulan aca: el 'que habria pasado' es con"
+                            " una posicion\n   y el SL del canal.)")
+        else:
+            nota_tardias = ""
+    else:
+        nota_tardias = ""
     if not r["cerradas"]:
         print("  Ninguna termino todavia: no hay nada que medir.")
+        if nota_tardias:
+            print(nota_tardias)
         # Las tardias igual: si el canal manda todo tarde, es justo lo que hay que ver.
         _imprimir_tardias(tardias, sorted({settings.default_lot, *lotes}), detalle,
                           settings.default_lot)
@@ -2904,6 +3070,9 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
         print(f"  Lote {x['lote']:.2f}: resultado {x['total']:+9.2f}   "
               f"peor caida {-x['peor_caida']:9.2f}{caida_pct}")
     print()
+    if varias:
+        _imprimir_por_tp(abiertas, settings.default_lot, min({settings.default_lot, *lotes}),
+                         contratos, contrato, por_motivo=settings.artificial_sl_pct > 0)
     if r["abiertas"]:
         print(f"  {r['abiertas']} siguen abiertas (no cuentan).")
     if r["reconstruidas"]:
@@ -2914,6 +3083,8 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
         print(f"  {con_velas} horas sin ticks en MT5 se midieron con velas de 1 minuto")
         print("  (menos exacto: no se sabe si el stop o el TP llego primero).")
     print("  Sin comision ni swap, igual que la cuenta real hoy.")
+    if nota_tardias:
+        print(nota_tardias)
     _imprimir_tardias(tardias, sorted({settings.default_lot, *lotes}), detalle,
                       settings.default_lot)
     return 0
@@ -3718,6 +3889,12 @@ def build_parser() -> argparse.ArgumentParser:
     repaso.add_argument("--chat", default=None,
                         help="Otro grupo en vez del del .env: su numero (de 'tct chats') o "
                              "@nombre. Para medirlo antes de conectarlo")
+    repaso.add_argument("--posiciones", default=None,
+                        help="Cuantas posiciones abre cada senal, como POSITIONS_PER_SIGNAL: "
+                             "un numero, o todas (una por cada TP). Sin tocar el .env")
+    repaso.add_argument("--sl-artificial", dest="sl_artificial", default=None,
+                        help="El SL al tanto %% de la distancia al TP1, como ARTIFICIAL_SL_PCT "
+                             "(90 = casi 1 a 1; 0 = el del canal). Sin tocar el .env")
     repaso.add_argument("--horario", choices=["europa", "eeuu", "fijo"], default="europa",
                         help="Como cambia de hora el servidor de MT5: europa (UTC+3 en verano, "
                              "UTC+2 en invierno, como FxPro y Bullwaves), eeuu (con Nueva "

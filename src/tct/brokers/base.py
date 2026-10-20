@@ -204,6 +204,16 @@ class Broker(ABC):
         """
         return None
 
+    async def quote(self, symbol: str) -> tuple[float, float] | None:
+        """(bid, ask) del instrumento ahora, o None si no se puede leer.
+
+        Para lo que necesita el precio al que se entra de verdad, no el medio:
+        el SL artificial mide lo que le falta al ask de un BUY (o al bid de un
+        SELL) para llegar al TP1. Un broker que no lo sabe devuelve None, y el
+        que lo pidio usa otra referencia.
+        """
+        return None
+
     async def health(self) -> dict[str, Any]:
         """Info de diagnostico para el comando `status`. Nunca incluye secretos."""
         return {"broker": self.name, "ready": await self.is_ready()}

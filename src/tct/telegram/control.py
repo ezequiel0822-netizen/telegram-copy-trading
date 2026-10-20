@@ -307,6 +307,10 @@ class ControlTelegram:
             f"Abiertas  : {len(abiertas)}",
             f"Senales   : {self.store.signals_today()}/{self.settings.max_signals_per_day} hoy",
             f"Lote      : {self.settings.default_lot}",
+            # Cuantas abre cada senal y que SL llevan (19/10): para ver desde el
+            # telefono que la prueba de la demo esta puesta.
+            f"Por senal : {self.settings._describe_por_senal()}",
+            f"SL        : {self.settings._describe_sl()}",
             # Con LOT_PER_CHAT, el de cada grupo: "Lote 0.04" a secas hacia
             # creer que David tambien operaba 0.04.
             *self.settings._describe_lote_por_grupo(),

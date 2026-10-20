@@ -421,6 +421,9 @@ class BrokerDeRepaso(Broker):
         cot = self._cotizacion(symbol)
         return (cot[0] + cot[1]) / 2 if cot else None
 
+    async def quote(self, symbol: str) -> tuple[float, float] | None:
+        return self._cotizacion(symbol)
+
     async def open_order(self, *, symbol: str, side: Side, order_type: OrderType, lot: float,
                          entry: float | None, stop_loss: float | None,
                          take_profit: float | None) -> OrderResult:
@@ -535,8 +538,12 @@ async def repasar(engine: Any, broker: BrokerDeRepaso,
         senal = parse_signal(texto)
         nuevas = sorted(set(broker.posiciones) - antes)
         for ticket in nuevas:
-            filas.append({"ticket": ticket, "fecha_ms": t, "posicion": broker.posiciones[ticket],
-                          "senal": senal, "reconstruida": reconstruida})
+            pos = broker.posiciones[ticket]
+            # El TP y el SL CON LOS QUE ABRIO: la gestion del canal los mueve
+            # despues, y el "por TP" y el detalle hablan de la apertura (19/10).
+            filas.append({"ticket": ticket, "fecha_ms": t, "posicion": pos,
+                          "senal": senal, "reconstruida": reconstruida,
+                          "tp_inicial": pos.tp, "sl_inicial": pos.sl})
         # Una apertura que no abrio: por que (el filtro de distancia, sin SL...).
         if not nuevas and senal is not None and senal.event_type is EventType.OPEN:
             motivos = resultado.get("reasons") or [resultado.get("status", "?")]
@@ -575,9 +582,35 @@ def _umbral_de_breakeven(posicion: Any, contratos: dict[str, float], contrato: f
     return posicion.lote * por_lote * entrada * _MOVIMIENTO_DE_BREAKEVEN
 
 
+def clasificar(fila: dict[str, Any], contratos: dict[str, float], contrato: float = 100.0,
+               por_motivo: bool = False) -> int:
+    """1 ganada, -1 perdida, 0 breakeven.
+
+    Por como cerro, cuando lo dice claro: en su TP sin que nadie lo moviera es
+    ganada, en su SL sin que nadie lo moviera es perdida. Con un SL artificial
+    (19/10) una operacion que arriesga medio punto y gana medio punto es de
+    verdad, aunque caiga adentro de la franja del breakeven. Lo demas -el
+    canal la cerro, o le movio el stop o el TP- por la franja de siempre.
+
+    `por_motivo` solo con SL artificial: con el del canal, los numeros de los
+    grupos ya medidos se siguen contando como siempre.
+    """
+    pos = fila["posicion"]
+    motivo = (pos.cerrada or {}).get("motivo") if por_motivo else None
+    if motivo == "tp" and pos.resultado > 0 and fila.get("tp_inicial") is not None \
+            and pos.tp == fila["tp_inicial"]:
+        return 1
+    if motivo == "sl" and pos.resultado < 0 and fila.get("sl_inicial") is not None \
+            and pos.sl == fila["sl_inicial"]:
+        return -1
+    u = _umbral_de_breakeven(pos, contratos, contrato)
+    return 1 if pos.resultado > u else (-1 if pos.resultado < -u else 0)
+
+
 def resumir(filas: list[dict[str, Any]], lote: float, lotes: list[float],
             contrato: float = 100.0,
-            contratos: dict[str, float] | None = None) -> dict[str, Any]:
+            contratos: dict[str, float] | None = None,
+            por_motivo: bool = False) -> dict[str, Any]:
     """Ganadas, el punto de equilibrio, la peor racha y la peor caida, por lote."""
     cerradas = [f for f in filas if f.get("posicion") is not None
                 and f["posicion"].cerrada is not None]
@@ -587,16 +620,16 @@ def resumir(filas: list[dict[str, Any]], lote: float, lotes: list[float],
     rechazadas = [f for f in filas if f.get("rechazo") is not None]
 
     resultados = [f["posicion"].resultado for f in cerradas]
-    umbrales = [_umbral_de_breakeven(f["posicion"], contratos or {}, contrato) for f in cerradas]
-    ganadas = [r for r, u in zip(resultados, umbrales) if r > u]
-    perdidas = [r for r, u in zip(resultados, umbrales) if r < -u]
+    signos = [clasificar(f, contratos or {}, contrato, por_motivo) for f in cerradas]
+    ganadas = [r for r, s in zip(resultados, signos) if s > 0]
+    perdidas = [r for r, s in zip(resultados, signos) if s < 0]
 
     racha = peor_racha = 0
-    for r, u in zip(resultados, umbrales):
-        if r < -u:
+    for s in signos:
+        if s < 0:
             racha += 1
             peor_racha = max(peor_racha, racha)
-        elif r > u:
+        elif s > 0:
             racha = 0
 
     acumulado = pico = caida = 0.0
