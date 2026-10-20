@@ -509,6 +509,20 @@ David, Sebastián, Genesis y TZ. Hecho (el bot no cambia hasta que lo pongan en 
 Pedido: `tct repaso --env-file .env.segunda --dias 150 --lotes 0.02 --detalle
 --posiciones todas --sl-artificial 90 --chat=<los 4>`. Sin confirmar: "dos canales de
 twt ganaron otra vez" (no se sabe qué es "twt"; se le preguntó).
+**Resultado (`repaso_20261020_0059` + `repaso_grupos_20261020_0108`, FxPro, 150 días,
+0.02 por posición, todas + SL 90%):** TZ 29 señales/231 posiciones **+1262.34**, peor
+caída −373.50 (70% de 531); Genesis −11.98; Sebastián −214.82 (historia desde 27/07);
+David −298.12 (desde 15/07; incluye 10 de BTCUSD). Verificado por 2 agentes
+(`wf_93672b44-0e8`): números exactos, sin errores de lectura. Pero en TZ **5 de 29
+señales hicieron los 8 TP (+1561.88); las otras 24 suman −299.54**; sin las 4 mejores,
+−22. El SL artificial (media 4 puntos contra 18 del canal) frena la del TP1 en 15 de
+29 (con el del canal ganaba 27/29). **A igual tamaño (0.16 por señal) el bot de hoy
+habría dado +1335.68 con peor caída −372.80**: mismo resultado, otra forma (hoy: gana
+casi siempre poco, un stop de ~−317; nuevo: muchos stops de ~−64 y pocas corridas de
++300; su peor caída fue un tobogán 29/06→26/08). Fricción real que no mide: 156
+cierres por SL (contra 2), cada 0.1 punto de peor entrada −46; recorte realista −150 a
+−400. ~6% de probabilidad de total negativo (bootstrap). Se le presentó: aplicarlo
+solo a TZ (el ajuste es por bot, no por grupo), o hacerlo por grupo, o no activarlo.
 
 **ESTADO AL 12/10.**
 
