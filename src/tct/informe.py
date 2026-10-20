@@ -626,7 +626,9 @@ def evaluar_stop_corto(
     Con el stop al 75%, una BUY 4392 con SL 4382 tendria el stop en 4384.5. Si
     el precio bajo hasta ahi, se habria cerrado en ese stop sin importar como
     termino de verdad; si no, termina igual que termino. Se mide contra la
-    entrada y el SL del MENSAJE, que es como lo calcularia el bot.
+    entrada y el SL del MENSAJE. (El bot, con CHANNEL_SL_PCT, lo mide desde el
+    precio al que entra de verdad: con una entrada alejada del mensaje los dos
+    numeros difieren un poco.)
 
     Solo cuentan las que tienen todos los datos, en el total real tambien: si
     no, se compararian sumas de operaciones distintas.

@@ -248,6 +248,10 @@ class Settings:
     # busca 5 puntos arriesga 4.5: casi 1 a 1. Nunca mas lejos que el del canal
     # (si el del canal queda mas cerca, queda ese). 0 = apagado, el del canal.
     artificial_sl_pct: float = 0.0
+    # La otra forma (20/10, David en la demo): el SL al X% de la distancia del
+    # SL del canal. Entra en 4130 con el SL del canal en 4140 y 65 -> 4136.50.
+    # 0 = apagado. Un grupo no puede tener las dos (ver `_un_solo_sl`).
+    channel_sl_pct: float = 0.0
 
     # --- IA local opcional (Ollama) ---
     # Respaldo para mensajes que el parser de reglas no entiende. Nunca es el
@@ -287,6 +291,13 @@ class Settings:
     # `tct.grupos.clave_de_grupo` del id. El grupo que no esta aca usa
     # DEFAULT_LOT. Vacio = el comportamiento de siempre. Ver `lote_para`.
     lot_per_chat: dict[str, float] = field(default_factory=dict)
+    # Lo mismo para cuantas posiciones abre y que SL llevan (20/10: en la demo
+    # de FxPro, David al TP1 y TP2, TRADING ZONE y Sebastian todos los TP con
+    # el SL del canal, Genesis todos con el artificial). El grupo que no esta
+    # usa POSITIONS_PER_SIGNAL / ARTIFICIAL_SL_PCT. Ver `posiciones_para`.
+    positions_per_chat: dict[str, int] = field(default_factory=dict)
+    artificial_sl_per_chat: dict[str, float] = field(default_factory=dict)
+    channel_sl_per_chat: dict[str, float] = field(default_factory=dict)
     configured_mode: str = ""
 
     warnings: list[str] = field(default_factory=list)
@@ -294,6 +305,54 @@ class Settings:
     def lote_para(self, chat: Any) -> float:
         """El lote de una senal de este chat: el suyo, o DEFAULT_LOT."""
         return self.lot_per_chat.get(clave_de_grupo(chat) or "", self.default_lot)
+
+    def posiciones_para(self, chat: Any) -> int:
+        """Cuantas posiciones abre una senal de este chat (POSITIONS_PER_CHAT)."""
+        return self.positions_per_chat.get(clave_de_grupo(chat) or "", self.positions_per_signal)
+
+    def _sl_del_grupo(self, chat: Any) -> tuple[float, float]:
+        """(% del TP1, % del SL del canal) de este chat.
+
+        Un grupo que aparece en cualquiera de las dos listas por grupo define
+        su SL entero: lo que no puso es 0, aunque el general diga otra cosa
+        (un "<grupo>:0" apaga el SL artificial de ese grupo).
+        """
+        clave = clave_de_grupo(chat) or ""
+        if clave in self.artificial_sl_per_chat or clave in self.channel_sl_per_chat:
+            return (self.artificial_sl_per_chat.get(clave, 0.0),
+                    self.channel_sl_per_chat.get(clave, 0.0))
+        return self.artificial_sl_pct, self.channel_sl_pct
+
+    def sl_artificial_para(self, chat: Any) -> float:
+        """El % del SL artificial (del TP1) de este chat; 0 = no (ARTIFICIAL_SL_PER_CHAT)."""
+        return self._sl_del_grupo(chat)[0]
+
+    def sl_canal_para(self, chat: Any) -> float:
+        """El % del SL del canal de este chat; 0 = no (CHANNEL_SL_PER_CHAT)."""
+        return self._sl_del_grupo(chat)[1]
+
+    def tiene_sl_propio(self, chat: Any) -> bool:
+        """El bot le pone su propio SL a las senales de este chat (alguna de las dos formas)."""
+        return self.sl_artificial_para(chat) > 0 or self.sl_canal_para(chat) > 0
+
+    def texto_posiciones_para(self, chat: Any, lote: float | None = None) -> str:
+        """Cuantas abre una senal de este chat; con `lote`, cuanto suma por senal."""
+        cuantas = self.posiciones_para(chat)
+        if cuantas == 1:
+            return "1 posicion (solo el TP mas cercano)"
+        if cuantas >= POSICIONES_TODAS:
+            return "una posicion por cada TP de la senal" + (
+                f" (una de 8 TP = {round(lote * 8, 4)} de lote)" if lote else "")
+        return f"hasta {cuantas} posiciones, una por TP" + (
+            f" (= {round(lote * cuantas, 4)} de lote por senal)" if lote else "")
+
+    def texto_sl_para(self, chat: Any) -> str:
+        if self.sl_artificial_para(chat) > 0:
+            return (f"artificial, al {self.sl_artificial_para(chat):g}% de la distancia al TP1 "
+                    "(el del canal si queda mas cerca)")
+        if self.sl_canal_para(chat) > 0:
+            return f"artificial, al {self.sl_canal_para(chat):g}% de la distancia del SL del canal"
+        return "el del canal"
 
     # -- Ayudas de lectura -------------------------------------------------
 
@@ -332,14 +391,22 @@ class Settings:
         return f"{self.ollama_model} ({rol}, max {self.ollama_timeout_seconds}s)"
 
     def _describe_lote_por_grupo(self) -> list[str]:
-        """Una linea por grupo con su lote propio, solo si LOT_PER_CHAT esta puesto."""
-        if not self.lot_per_chat:
+        """Una linea por grupo con su lote, si hay algo por grupo (LOT_PER_CHAT, ...)."""
+        por_grupo = bool(self.positions_per_chat or self.artificial_sl_per_chat
+                         or self.channel_sl_per_chat)
+        if not self.lot_per_chat and not por_grupo:
             return []
         lineas = []
         for chat in self.telegram_source_chats:
             lote = self.lot_per_chat.get(clave_de_grupo(chat) or "")
+            extra = ""
+            if por_grupo:
+                # Como opera ESE grupo (20/10): con un modo por grupo, "Por
+                # senal" y "SL" de arriba son solo lo de los que no tienen el suyo.
+                extra = (f", {self.texto_posiciones_para(chat, lote if lote is not None else self.default_lot)}, "
+                         f"SL {self.texto_sl_para(chat)}")
             lineas.append(f"  lote de {chat}: {lote if lote is not None else self.default_lot}"
-                          + ("" if lote is not None else " (DEFAULT_LOT)"))
+                          + ("" if lote is not None else " (DEFAULT_LOT)") + extra)
         return lineas
 
     def _describe_por_senal(self) -> str:
@@ -363,18 +430,19 @@ class Settings:
                 f"{self.positions_per_signal} posiciones, una por TP "
                 f"= {total} de lote por senal"
             )
+        return f"{cuantas}, {self._tope_por_simbolo()}"
+
+    def _cuantas_por_senal(self) -> str:
+        return self._describe_por_senal().rsplit(", ", 1)[0]
+
+    def _tope_por_simbolo(self) -> str:
         if self.max_positions_per_symbol:
-            tope = f"max {self.max_positions_per_symbol} por instrumento"
-        else:
-            tope = "sin tope por instrumento"
-        return f"{cuantas}, {tope}"
+            return f"max {self.max_positions_per_symbol} por instrumento"
+        return "sin tope por instrumento"
 
     def _describe_sl(self) -> str:
         """De donde sale el SL de cada operacion: el del canal o el artificial."""
-        if self.artificial_sl_pct <= 0:
-            return "el del canal"
-        return (f"artificial, al {self.artificial_sl_pct:g}% de la distancia al TP1 "
-                "(el del canal si queda mas cerca)")
+        return self.texto_sl_para(None)
 
     def _describe_distancia(self) -> str:
         """Como se muestra el control contra el precio real al arrancar.
@@ -427,9 +495,15 @@ class Settings:
             f"Simbolos        : {', '.join(sorted(self.allowed_symbols))}",
             f"Max abiertas    : {self.max_open_trades}",
             f"Max senales/dia : {self.max_signals_per_day}",
-            f"Por senal       : {self._describe_por_senal()}",
+            f"Por senal       : "
+            + (f"el de cada grupo (arriba), {self._tope_por_simbolo()}; sin el suyo: "
+               f"{self._cuantas_por_senal()}" if self.positions_per_chat
+               else self._describe_por_senal()),
             f"Exige SL / TP   : {self.require_stop_loss} / {self.require_take_profit}",
-            f"SL              : {self._describe_sl()}",
+            f"SL              : "
+            + ("el de cada grupo (arriba); sin el suyo: "
+               if self.artificial_sl_per_chat or self.channel_sl_per_chat else "")
+            + self._describe_sl(),
             f"Dist. al mercado: {self._describe_distancia()}",
             f"Tope perdida dia: "
             + (f"{self.max_daily_loss_pct}%" if self.max_daily_loss_pct else "sin tope"),
@@ -621,6 +695,14 @@ def load_settings(env_file: str | Path | None = None,
         artificial_sl_pct=_sl_artificial(env),
         breakeven_uses_real_entry=env.bool("BREAKEVEN_USES_REAL_ENTRY", True),
         lot_per_chat=_lote_por_grupo(env.list("LOT_PER_CHAT"), source_chats, max_lot),
+        positions_per_chat=_por_grupo("POSITIONS_PER_CHAT", env.list("POSITIONS_PER_CHAT"),
+                                      source_chats, _leer_posiciones),
+        artificial_sl_per_chat=_por_grupo("ARTIFICIAL_SL_PER_CHAT",
+                                          env.list("ARTIFICIAL_SL_PER_CHAT"),
+                                          source_chats, _leer_pct_sl),
+        channel_sl_pct=_sl_del_canal(env),
+        channel_sl_per_chat=_por_grupo("CHANNEL_SL_PER_CHAT", env.list("CHANNEL_SL_PER_CHAT"),
+                                       source_chats, _leer_pct_canal),
         allow_live_trading=allow_live,
         enable_ocr=env.bool("ENABLE_OCR", False),
         dry_run=env.bool("DRY_RUN", False),
@@ -647,6 +729,7 @@ def load_settings(env_file: str | Path | None = None,
     )
 
     _validate_mode_requirements(settings)
+    _un_solo_sl(settings)
     warnings.extend(_avisos_de_varias_instancias(settings))
     return settings
 
@@ -704,6 +787,103 @@ def _sl_artificial(env: _Env) -> float:
             "ARTIFICIAL_SL_PCT tiene que ser un numero de 0 a 500: 0 es el SL del canal, 90 "
             f"es el SL al 90% de la distancia al TP1. Llego {env.str('ARTIFICIAL_SL_PCT')!r}.")
     return pct
+
+
+def _sl_del_canal(env: _Env) -> float:
+    """CHANNEL_SL_PCT: 0 (apagado) o el % de la distancia del SL del canal, hasta 100."""
+    pct = env.float("CHANNEL_SL_PCT", 0.0)
+    if not math.isfinite(pct) or not 0 <= pct <= 100:
+        raise ConfigError(
+            "CHANNEL_SL_PCT tiene que ser un numero de 0 a 100: 65 es el SL al 65% de la "
+            f"distancia del SL del canal, 0 lo apaga. Llego {env.str('CHANNEL_SL_PCT')!r}.")
+    return pct
+
+
+def _leer_pct_canal(texto: str, chat: str) -> float:
+    try:
+        pct = float(texto)
+    except ValueError:
+        pct = -1.0
+    if not math.isfinite(pct) or not 0 <= pct <= 100:
+        raise ConfigError(
+            f"CHANNEL_SL_PER_CHAT: lo de {chat} tiene que ser un numero de 0 a 100, como 65 "
+            f"(el SL al 65% de la distancia del SL del canal). Llego '{texto}' (con punto, no coma).")
+    return pct
+
+
+def _un_solo_sl(settings: Settings) -> None:
+    """Un grupo con las dos formas de SL artificial a la vez no arranca.
+
+    Al 90% del TP1 y al 65% del SL del canal dan dos numeros distintos; elegir
+    uno en silencio seria decidir el riesgo por el usuario.
+    """
+    chats = list(settings.telegram_source_chats) or [None]
+    for chat in [*chats, None]:
+        tp1, canal = settings._sl_del_grupo(chat)
+        if tp1 > 0 and canal > 0:
+            donde = f"el grupo {chat}" if chat else "el bot"
+            raise ConfigError(
+                f"{donde} tiene las dos formas de SL artificial: al {tp1:g}% del TP1 "
+                f"(ARTIFICIAL_SL_...) y al {canal:g}% del SL del canal (CHANNEL_SL_...). "
+                "Deja una sola.")
+
+
+def _leer_posiciones(texto: str, chat: str) -> int:
+    if texto.lower() in PALABRAS_DE_TODAS:
+        return POSICIONES_TODAS
+    try:
+        cuantas = int(texto)
+    except ValueError:
+        cuantas = 0
+    if cuantas < 1:
+        raise ConfigError(
+            f"POSITIONS_PER_CHAT: lo de {chat} tiene que ser cuantas posiciones abre, un "
+            f"numero como 2, o todas (una por cada TP). Llego '{texto}'.")
+    return cuantas
+
+
+def _leer_pct_sl(texto: str, chat: str) -> float:
+    try:
+        pct = float(texto)
+    except ValueError:
+        pct = -1.0
+    if not math.isfinite(pct) or not 0 <= pct <= 500:
+        raise ConfigError(
+            f"ARTIFICIAL_SL_PER_CHAT: lo de {chat} tiene que ser un numero de 0 a 500, como 90 "
+            f"(el SL al 90% de la distancia al TP1; 0 = el del canal). Llego '{texto}'"
+            " (con punto, no coma).")
+    return pct
+
+
+def _por_grupo(nombre: str, items: list[str], source_chats: list[str], leer) -> dict:
+    """<numero del grupo>:<valor>, separados por comas -> {clave: valor}.
+
+    Las mismas exigencias que LOT_PER_CHAT: el numero del grupo (no un
+    @nombre), que este en TELEGRAM_SOURCE_CHATS y que no se repita. Un grupo
+    mal copiado usaria el valor de todos sin que nadie lo note.
+    """
+    fuentes = {clave_de_grupo(c) for c in source_chats}
+    valores: dict = {}
+    for item in items:
+        chat, separador, texto = item.rpartition(":")
+        chat = chat.strip()
+        if not separador or not chat:
+            raise ConfigError(
+                f"{nombre}: '{item}' tiene que ser <numero del grupo>:<valor>, "
+                "por ejemplo -1004363872187:2")
+        clave = clave_de_grupo(chat)
+        if not (clave or "").isdigit():
+            raise ConfigError(
+                f"{nombre}: '{chat}' tiene que ser el NUMERO del grupo (el que muestra "
+                "'tct chats', como -1004363872187), no un @nombre")
+        if clave not in fuentes:
+            raise ConfigError(
+                f"{nombre}: el grupo {chat} no esta en TELEGRAM_SOURCE_CHATS. "
+                "Revisa que el numero sea el mismo en las dos lineas.")
+        if clave in valores:
+            raise ConfigError(f"{nombre}: el grupo {chat} aparece dos veces")
+        valores[clave] = leer(texto.strip(), chat)
+    return valores
 
 
 def _lote_por_grupo(items: list[str], source_chats: list[str],

@@ -376,7 +376,7 @@ def test_el_aviso_dice_que_el_sl_es_artificial(tmp_path, caplog):
     with caplog.at_level(logging.INFO, logger="tct"):
         send(engine, COMPRA)
 
-    assert "(artificial, 90%; el canal decia 4400)" in caplog.text
+    assert "(artificial, al 90% de la distancia al TP1; el canal decia 4400)" in caplog.text
 
 
 def test_un_stop_viejo_en_la_cola_que_lo_alejaria_no_se_reintenta(tmp_path):

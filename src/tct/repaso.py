@@ -543,12 +543,16 @@ async def repasar(engine: Any, broker: BrokerDeRepaso,
             # despues, y el "por TP" y el detalle hablan de la apertura (19/10).
             filas.append({"ticket": ticket, "fecha_ms": t, "posicion": pos,
                           "senal": senal, "reconstruida": reconstruida,
-                          "tp_inicial": pos.tp, "sl_inicial": pos.sl})
+                          "tp_inicial": pos.tp, "sl_inicial": pos.sl,
+                          # De que grupo (20/10): con varios en una corrida, cada
+                          # uno con su lote y su forma de operar.
+                          "chat": meta.get("chat_id"), "titulo": meta.get("chat_titulo")})
         # Una apertura que no abrio: por que (el filtro de distancia, sin SL...).
         if not nuevas and senal is not None and senal.event_type is EventType.OPEN:
             motivos = resultado.get("reasons") or [resultado.get("status", "?")]
             filas.append({"ticket": None, "fecha_ms": t, "senal": senal,
-                          "rechazo": motivos, "reconstruida": reconstruida})
+                          "rechazo": motivos, "reconstruida": reconstruida,
+                          "chat": meta.get("chat_id"), "titulo": meta.get("chat_titulo")})
 
     await _llegar_a(engine, broker, fin_ms)
     return filas
@@ -596,6 +600,11 @@ def clasificar(fila: dict[str, Any], contratos: dict[str, float], contrato: floa
     grupos ya medidos se siguen contando como siempre.
     """
     pos = fila["posicion"]
+    # Con SL artificial en ESA posicion (abrio con otro SL que el del canal):
+    # sirve tambien cuando cada grupo opera distinto (20/10).
+    senal = fila.get("senal")
+    if not por_motivo and senal is not None and fila.get("sl_inicial") is not None:
+        por_motivo = fila["sl_inicial"] != senal.stop_loss
     motivo = (pos.cerrada or {}).get("motivo") if por_motivo else None
     if motivo == "tp" and pos.resultado > 0 and fila.get("tp_inicial") is not None \
             and pos.tp == fila["tp_inicial"]:

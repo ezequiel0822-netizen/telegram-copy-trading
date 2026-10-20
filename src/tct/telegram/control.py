@@ -309,8 +309,14 @@ class ControlTelegram:
             f"Lote      : {self.settings.default_lot}",
             # Cuantas abre cada senal y que SL llevan (19/10): para ver desde el
             # telefono que la prueba de la demo esta puesta.
-            f"Por senal : {self.settings._describe_por_senal()}",
-            f"SL        : {self.settings._describe_sl()}",
+            f"Por senal : "
+            + (f"el de cada grupo (abajo), {self.settings._tope_por_simbolo()}; sin el suyo: "
+               f"{self.settings._cuantas_por_senal()}" if self.settings.positions_per_chat
+               else self.settings._describe_por_senal()),
+            f"SL        : "
+            + ("el de cada grupo (abajo); sin el suyo: "
+               if self.settings.artificial_sl_per_chat or self.settings.channel_sl_per_chat
+               else "") + self.settings._describe_sl(),
             # Con LOT_PER_CHAT, el de cada grupo: "Lote 0.04" a secas hacia
             # creer que David tambien operaba 0.04.
             *self.settings._describe_lote_por_grupo(),

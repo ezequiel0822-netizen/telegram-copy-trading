@@ -5,7 +5,7 @@ nuevo, leé esto entero antes de tocar código. Está escrito para que puedas
 seguir sin repetir el trabajo ni volver a caer en las trampas que ya costaron
 caras.
 
-Actualizado: 2026-10-20 · v2.7.0 · 1456 tests · el último commit que describe
+Actualizado: 2026-10-20 · v2.7.0 · 1487 tests · el último commit que describe
 es `0c86b91`, más este mismo cambio
 
 **LO NUEVO DEL 16/10 — leer esto primero, después el estado del 12/10.**
@@ -523,6 +523,32 @@ casi siempre poco, un stop de ~−317; nuevo: muchos stops de ~−64 y pocas cor
 cierres por SL (contra 2), cada 0.1 punto de peor entrada −46; recorte realista −150 a
 −400. ~6% de probabilidad de total negativo (bootstrap). Se le presentó: aplicarlo
 solo a TZ (el ajuste es por bot, no por grupo), o hacerlo por grupo, o no activarlo.
+**Eligió (20/10), para la demo de FxPro, cada grupo distinto** — David "al segundo tp
+en 0.02" = dos posiciones (TP1 y TP2) de 0.02, y "el SL de david ponlo al 65% de el que el
+manda" (entra 4130, SL del canal 4140 → 4136.50); TRADING ZONE todos los TP a **0.04 con el
+SL del canal** (se le avisó: 8 × 0.04 = 0.32 por señal, ~−576 por señal perdida, sin
+simular); Genesis todos los TP a 0.03 con el SL artificial 90%; Sebastián todos los TP a
+0.03 con el SL del canal. Hecho: `POSITIONS_PER_CHAT`, `ARTIFICIAL_SL_PER_CHAT` y
+`CHANNEL_SL_PER_CHAT` (como `LOT_PER_CHAT`; `Settings.posiciones_para` /
+`sl_artificial_para` / `sl_canal_para` / `tiene_sl_propio`), y la segunda forma de SL
+artificial, `CHANNEL_SL_PCT` (al X% de la distancia del SL del canal desde el precio real
+de entrada; un grupo no puede tener las dos, `_un_solo_sl`). El arranque y `/estado` dicen
+grupo por grupo cuántas abre y qué SL lleva; el repaso simula lo del `.env` (encabezado
+por grupo, `clasificar` por fila). El comando (probado contra la plantilla con
+`cambiar_variables`): `tct cambiar --env-file .env.segunda
+TELEGRAM_SOURCE_CHATS=<los 4> DEFAULT_LOT=0.03 MAX_LOT=0.04 LOT_PER_CHAT=<David>:0.02,
+<Sebastián>:0.03,<TZ>:0.04,<Genesis>:0.03 POSITIONS_PER_SIGNAL=1 POSITIONS_PER_CHAT=
+<David>:2,<Sebastián>:todas,<TZ>:todas,<Genesis>:todas ARTIFICIAL_SL_PCT=0
+ARTIFICIAL_SL_PER_CHAT=<Genesis>:90 CHANNEL_SL_PER_CHAT=<David>:65 MAX_OPEN_TRADES=100
+MAX_POSITIONS_PER_SYMBOL=30`; se le sugirió correr el repaso (lee el `.env`) antes de
+reiniciar el bot. La real (Bullwaves, David 0.03, 1 posición, SL del canal) no cambia
+(lo confirmó: "el 65% por mientras solo es a la cuenta demo de fxpro"). Revisión (2 revisores +
+1 verificador, `wf_8d607423-36e`): 11 puntos, corregidos — la corrección del canal por edición
+también va al 65% (`_al_pct_del_canal`), la marca `sl_artificial` de la posición protege aunque
+quede sin grupo, un `<grupo>:0` apaga el SL artificial de ese grupo, las líneas por grupo dicen
+cuánto suma una señal (TZ 8 × 0.04 = 0.32), el repaso con varios grupos da "Como está puesto
+(cada grupo a su lote)" y cada fila dice de qué grupo es, y `--chat @nombre` con modo por grupo
+se rechaza. 10 mutaciones, las 10 cazadas.
 
 **ESTADO AL 12/10.**
 

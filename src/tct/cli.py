@@ -39,6 +39,7 @@ from tct.config import (
     Settings,
     load_settings,
 )
+from tct.grupos import clave_de_grupo
 
 
 def setup_logging(settings: Settings | None = None, verbose: bool = False) -> None:
@@ -2467,6 +2468,17 @@ def cmd_repaso(args: argparse.Namespace) -> int:
     except ValueError:
         print(f"--lotes tiene que ser una lista de numeros, como 0.05,0.07,0.10 ({args.lotes})")
         return 1
+    # Con un modo por grupo, el grupo tiene que ir con su numero: con @nombre
+    # no se sabe cual es, y el encabezado diria una cosa y el motor haria otra.
+    if (getattr(args, "chat", None)
+            and (settings.positions_per_chat or settings.artificial_sl_per_chat
+                 or settings.channel_sl_per_chat)
+            and any(not (clave_de_grupo(c) or "").isdigit()
+                    for c in settings.telegram_source_chats)):
+        print("Con POSITIONS_PER_CHAT, ARTIFICIAL_SL_PER_CHAT o CHANNEL_SL_PER_CHAT en el .env,")
+        print("--chat va con el NUMERO de cada grupo (el que muestra 'tct chats --repaso'),")
+        print("no con @nombre.")
+        return 1
     # Otra forma de operar, sin tocar el .env (19/10): para ver que habria
     # pasado ANTES de cambiarle algo a un bot.
     settings, problema = _ajustes_a_probar(settings, getattr(args, "posiciones", None),
@@ -2495,6 +2507,7 @@ def _ajustes_a_probar(settings: Settings, posiciones: str | None,
 
     cambios: dict = {}
     if posiciones:
+        cambios["positions_per_chat"] = {}  # el flag vale para todos los grupos
         crudo = posiciones.strip().lower()
         if crudo in PALABRAS_DE_TODAS:
             cambios["positions_per_signal"] = POSICIONES_TODAS
@@ -2516,6 +2529,8 @@ def _ajustes_a_probar(settings: Settings, posiciones: str | None,
                               f"numero de 0 a 500, como 90 (0 = el SL del canal). "
                               f"Llego {sl_artificial!r}.")
         cambios["artificial_sl_pct"] = pct
+        # Para todos los grupos, y sin la otra forma de SL.
+        cambios.update(artificial_sl_per_chat={}, channel_sl_pct=0.0, channel_sl_per_chat={})
     return (dataclasses.replace(settings, **cambios) if cambios else settings), None
 
 
@@ -2694,15 +2709,56 @@ def _imprimir_por_tp(abiertas: list[dict], lote_abierto: float, lote: float,
     print()
 
 
-def _posiciones_del_repaso(settings: Settings) -> str:
-    """Cuantas posiciones abre cada senal en el repaso, sin lote: los montos van a --lotes."""
-    from tct.config import POSICIONES_TODAS
+def _nombre_corto(titulo: str | None, chat) -> str:
+    """El grupo en pocas letras, para el detalle con varios grupos."""
+    import unicodedata
 
-    if settings.positions_per_signal == 1:
-        return "1 posicion (solo el TP mas cercano)"
-    if settings.positions_per_signal >= POSICIONES_TODAS:
-        return "una posicion por cada TP de la senal"
-    return f"hasta {settings.positions_per_signal} posiciones, una por TP"
+    crudo = unicodedata.normalize("NFKD", titulo or "")
+    limpio = " ".join("".join(c for c in crudo if c.isascii()).split())
+    return (limpio or str(chat or "?"))[:16]
+
+
+def _imprimir_como_esta_puesto(filas: list, settings: Settings, balance: float) -> None:
+    """Con varios grupos, cada uno a SU lote (LOT_PER_CHAT): lo que daria la cuenta.
+
+    El repaso abre todo a DEFAULT_LOT; cada posicion se pasa al lote de su
+    grupo. Las de arriba ("Lote X") ponen a todos los grupos al mismo lote.
+    """
+    cerradas = sorted((f for f in filas if f.get("posicion") is not None
+                       and f["posicion"].cerrada is not None),
+                      key=lambda f: f["posicion"].cerrada["cerrada_ms"])
+    acumulado = pico = caida = 0.0
+    for f in cerradas:
+        acumulado += f["posicion"].resultado * settings.lote_para(f.get("chat")) / settings.default_lot
+        pico = max(pico, acumulado)
+        caida = max(caida, pico - acumulado)
+    pct = f"  ({caida / balance * 100:.0f}% de {balance:.0f})" if balance else ""
+    print(f"  Como esta puesto (cada grupo a su lote): resultado {acumulado:+9.2f}   "
+          f"peor caida {-caida:9.2f}{pct}")
+
+
+def _modo_del_repaso(settings: Settings) -> list[str]:
+    """Como opera el bot que se simula, sin lote (los montos van a --lotes).
+
+    Con un modo por grupo (POSITIONS_PER_CHAT, ARTIFICIAL_SL_PER_CHAT,
+    CHANNEL_SL_PER_CHAT) y varios grupos en la misma corrida, uno por linea.
+    """
+    chats = list(settings.telegram_source_chats) or [None]
+    modos = {(settings.texto_posiciones_para(c), settings.texto_sl_para(c)) for c in chats}
+    if len(modos) == 1:
+        posiciones, sl = next(iter(modos))
+        return [f"  Por senal: {posiciones}", f"  SL       : {sl}"]
+    return ["  Cada grupo opera distinto:"] + [
+        f"    {c}: {settings.texto_posiciones_para(c)}; SL {settings.texto_sl_para(c)}"
+        for c in chats]
+
+
+def _hay_varias_posiciones(settings: Settings) -> bool:
+    return any(settings.posiciones_para(c) > 1 for c in settings.telegram_source_chats or [None])
+
+
+def _hay_sl_propio(settings: Settings) -> bool:
+    return any(settings.tiene_sl_propio(c) for c in settings.telegram_source_chats or [None])
 
 
 def _mensaje_y_lo_que_entendio(senal) -> list[str]:
@@ -2903,8 +2959,9 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
     print("  PRIMERA vez te pide el telefono y el codigo que llega a la app.\n")
     # Como opera el bot que se simula (19/10): `--posiciones` y `--sl-artificial`
     # lo cambian sin tocar el .env.
-    print(f"  Por senal: {_posiciones_del_repaso(settings)}")
-    print(f"  SL       : {settings._describe_sl()}\n")
+    for linea in _modo_del_repaso(settings):
+        print(linea)
+    print()
 
     from tct.telegram.reader import TelefonoInvalido
 
@@ -2964,20 +3021,25 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
             # Con MetaTrader todavia conectado: recorre sus ticks. Solo con
             # una posicion y el SL del canal: es lo que simula (19/10).
             tardias = (simular_tardias(filas, precios, contratos, fin)
-                       if settings.positions_per_signal == 1 and settings.artificial_sl_pct <= 0
+                       if not _hay_varias_posiciones(settings) and not _hay_sl_propio(settings)
                        else [])
     finally:
         await mt5_broker.disconnect()
 
     contrato = next(iter(contratos.values()))
-    r = resumir(filas, settings.default_lot, sorted({settings.default_lot, *lotes}), contrato,
-                contratos=contratos, por_motivo=settings.artificial_sl_pct > 0)
+    # Con un solo grupo, tambien a su lote (LOT_PER_CHAT). Con varios, cada
+    # "Lote X" pone a TODOS a ese lote; lo de cada uno a su lote va aparte.
+    varios_grupos = len({clave_de_grupo(c) for c in settings.telegram_source_chats}) > 1
+    lotes_a_ver = sorted({settings.default_lot, *lotes, *(
+        [settings.lote_para(settings.telegram_source_chats[0])]
+        if settings.telegram_source_chats and not varios_grupos else [])})
+    r = resumir(filas, settings.default_lot, lotes_a_ver, contrato, contratos=contratos)
 
     abiertas = [f for f in filas if f.get("posicion") is not None]
     rechazadas = [f for f in filas if f.get("rechazo") is not None]
     # Con POSITIONS_PER_SIGNAL > 1 una senal abre varias posiciones (19/10).
     senales_operadas = len({(f["fecha_ms"], id(f.get("senal"))) for f in abiertas})
-    varias = settings.positions_per_signal > 1
+    varias = _hay_varias_posiciones(settings)
     if resumen is not None:
         resumen.update(r, mensajes=len(mensajes), operadas=len(abiertas),
                        senales_operadas=senales_operadas,
@@ -2992,6 +3054,8 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
                               .isoformat())
             cabeza = (f"    {hora}  {(senal.side.value if senal and senal.side else ''):<4} "
                       f"entrada={precio(senal.entry if senal else None):<8}")
+            if varios_grupos:
+                cabeza += f" [{_nombre_corto(f.get('titulo'), f.get('chat'))}]"
             if f.get("rechazo"):
                 print(f"{cabeza} no se opero: {f['rechazo'][0]}"[:110])
             else:
@@ -3001,7 +3065,7 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
                 if varias:
                     numero = _numero_de_tp(f)
                     cabeza += f" TP{numero if numero else '?'}"
-                if settings.artificial_sl_pct > 0:
+                if _hay_sl_propio(settings):
                     inicial = f.get("sl_inicial", pos.sl)
                     cabeza += f" sl={precio(inicial)}" + (
                         f"->{precio(pos.sl)}" if pos.sl != inicial else "")
@@ -3039,7 +3103,7 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
     else:
         print(f"  {len(abiertas)} senales operadas, {len(rechazadas)} que el bot no habria abierto")
     print("  " + "-" * 62)
-    if not tardias and (settings.positions_per_signal > 1 or settings.artificial_sl_pct > 0):
+    if not tardias and (_hay_varias_posiciones(settings) or _hay_sl_propio(settings)):
         from tct.repaso import _es_solo_tardia
 
         if any(_es_solo_tardia(f.get("rechazo") or []) for f in rechazadas):
@@ -3069,10 +3133,12 @@ async def _repaso_async(settings: Settings, dias: int, lotes: list[float], detal
         caida_pct = f"  ({x['peor_caida'] / balance * 100:.0f}% de {balance:.0f})" if balance else ""
         print(f"  Lote {x['lote']:.2f}: resultado {x['total']:+9.2f}   "
               f"peor caida {-x['peor_caida']:9.2f}{caida_pct}")
+    if varios_grupos and settings.lot_per_chat:
+        _imprimir_como_esta_puesto(filas, settings, balance)
     print()
     if varias:
         _imprimir_por_tp(abiertas, settings.default_lot, min({settings.default_lot, *lotes}),
-                         contratos, contrato, por_motivo=settings.artificial_sl_pct > 0)
+                         contratos, contrato)
     if r["abiertas"]:
         print(f"  {r['abiertas']} siguen abiertas (no cuentan).")
     if r["reconstruidas"]:

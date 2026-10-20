@@ -848,6 +848,8 @@ Todo en el `.env`, y todo editable:
 | `MAX_SPREAD_FROM_ENTRY_PCT` | Cuánto puede alejarse la entrada del mensaje del precio **real** del instrumento, en órdenes a mercado. Ataja símbolos mal leídos y mensajes viejos. |
 | `MAX_PENDING_DISTANCE_PCT` | Lo mismo para órdenes pendientes, que se ponen lejos del mercado a propósito y necesitan más aire. |
 | `POSITIONS_PER_SIGNAL` | Cuántas operaciones abre **una** señal: un número, o `todas` (una por cada TP). Ver abajo. |
+| `CHANNEL_SL_PCT` | SL al X% de la distancia del SL **del canal** (`65`: entra en 4130 con el SL en 4140 → 4136.50). `0` = apagado. |
+| `POSITIONS_PER_CHAT`, `ARTIFICIAL_SL_PER_CHAT`, `CHANNEL_SL_PER_CHAT` | Lo mismo, **por grupo**, como `LOT_PER_CHAT`: `<número del grupo>:<valor>,...`. El grupo que no está usa el general. |
 | `ARTIFICIAL_SL_PCT` | SL artificial: al X% de la distancia que le falta al precio para llegar al TP1 (`90` = casi 1 a 1). Nunca más lejos que el del canal; un "mover SL" que lo aleja no se aplica. `0` = el SL del canal. Medirlo antes: `tct repaso --sl-artificial 90`. |
 | `MAX_POSITIONS_PER_SYMBOL` | Cuántas puede haber abiertas a la vez en el mismo instrumento. `0` = sin tope. |
 | `BREAKEVEN_USES_REAL_ENTRY` | Dónde poner el stop cuando el grupo manda "mover a breakeven". **Dejalo en true.** |

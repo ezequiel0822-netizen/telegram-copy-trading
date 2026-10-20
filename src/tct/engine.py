@@ -103,6 +103,11 @@ def _entrada_efectiva(position, usar_precio_real: bool) -> float | None:
     return position.entry
 
 
+def _corto(texto: str) -> str:
+    """'artificial, al 90% de la distancia al TP1 (el del canal...)' sin el parentesis."""
+    return texto.split(" (")[0]
+
+
 def _precio(valor: float | None) -> str:
     """Precio legible: 4438.5 y no 4438.500000000001."""
     if valor is None:
@@ -128,6 +133,19 @@ def _con_el_sl_enviado(event: SignalEvent, order: OrderResult | None) -> SignalE
     return dataclasses.replace(event, stop_loss=sl)
 
 
+def _al_pct_del_canal(settings: Settings, position, sl_del_canal: float) -> float:
+    """El SL de esta posicion si el canal pone el suyo en `sl_del_canal`.
+
+    Con CHANNEL_SL_PCT en su grupo, el X% de la distancia desde la entrada de
+    verdad; si no, el del canal tal cual.
+    """
+    pct = settings.sl_canal_para(getattr(position, "grupo", None))
+    entrada = getattr(position, "entry_real", None) or getattr(position, "entry", None)
+    if pct <= 0 or entrada is None:
+        return sl_del_canal
+    return round(entrada + (sl_del_canal - entrada) * pct / 100, 5)
+
+
 def _aleja_el_sl_artificial(settings: Settings, position, nuevo: float | None) -> str | None:
     """Con SL artificial, por que este SL nuevo no se aplica, o None.
 
@@ -136,7 +154,13 @@ def _aleja_el_sl_artificial(settings: Settings, position, nuevo: float | None) -
     breakeven; uno que lo ALEJA volveria a poner el riesgo del canal, que es
     justo lo que el SL artificial vino a cambiar.
     """
-    if settings.artificial_sl_pct <= 0 or nuevo is None or position.stop_loss is None:
+    # El modo de su grupo, o la marca de la posicion: una que abrio con SL
+    # artificial y quedo sin grupo (confirmada tarde y ambigua, o de un grupo
+    # que se saco del .env) lo sigue teniendo. Las adoptadas al arrancar no
+    # traen la marca.
+    if (not (settings.tiene_sl_propio(getattr(position, "grupo", None))
+             or getattr(position, "sl_artificial", False))
+            or nuevo is None or position.stop_loss is None):
         return None
     lado = (position.side or "").upper()
     aleja = nuevo < position.stop_loss if lado == "BUY" else (
@@ -144,7 +168,7 @@ def _aleja_el_sl_artificial(settings: Settings, position, nuevo: float | None) -
     if not aleja:
         return None
     return (f"{_precio(nuevo)} aleja el stop (estaba en {_precio(position.stop_loss)}): con el "
-            "SL artificial (ARTIFICIAL_SL_PCT) el riesgo de cada operacion no se agranda")
+            "SL artificial el riesgo de cada operacion no se agranda")
 
 
 def _destino_del_stop(position, event: SignalEvent, usar_precio_real: bool) -> float | None:
@@ -577,7 +601,8 @@ class Engine:
         # El del canal se guarda: es el que reconoce una senal repetida, y el
         # tope del SL artificial (nunca mas lejos que el del canal).
         del_canal = event
-        if self.settings.artificial_sl_pct > 0:
+        sl_propio = self.settings.tiene_sl_propio(event.telegram_chat_id)
+        if sl_propio:
             sl, motivo, datos = await self._sl_artificial(event, take_profits)
             if sl is not None:
                 event = dataclasses.replace(event, stop_loss=sl)
@@ -602,17 +627,18 @@ class Engine:
         # partir, asi que cada una lleva DEFAULT_LOT entero y la senal pasa a
         # valer el triple. Eso es una decision de riesgo, no un detalle: por eso
         # vive en POSITIONS_PER_SIGNAL, arranca en 1, y se imprime al arrancar.
-        objetivos = self._objetivos_de_apertura(take_profits)
+        cuantas = self.settings.posiciones_para(event.telegram_chat_id)
+        objetivos = self._objetivos_de_apertura(take_profits, cuantas)
         # Las que MAX_OPEN_TRADES dejo afuera (no las que POSITIONS_PER_SIGNAL no
         # pidio): con "todas", una senal de 8 TP no entra entera si hay pocos
         # lugares, y una que entra a medias tiene que decirlo (19/10).
-        pedidas = min(max(1, self.settings.positions_per_signal), len(take_profits) or 1)
+        pedidas = min(max(1, cuantas), len(take_profits) or 1)
         sin_lugar = [
             {"tp_indice": i, "tp": tp}
             for i, tp in enumerate(take_profits[len(objetivos):pedidas], start=len(objetivos) + 1)
         ]
         recalcular = None
-        if self.settings.artificial_sl_pct > 0:
+        if sl_propio:
             async def recalcular():
                 sl, motivo, datos = await self._sl_artificial(del_canal, take_profits)
                 if sl is not None:
@@ -683,7 +709,7 @@ class Engine:
                 fallidas.append(f"{etiqueta}: {order.reason}")
                 ordenes_fallidas.append(order.to_dict())
                 fallidas.extend(
-                    f"TP{i}: no se mando, el precio ya habia llegado al TP1"
+                    f"TP{i}: no se mando, por lo mismo que el TP{indice}"
                     for i in range(indice + 1, len(objetivos) + 1))
                 logger.error("No se abrio %s (%s): %s", event.symbol, etiqueta, order.reason)
                 break
@@ -872,7 +898,8 @@ class Engine:
             "signal": event.to_dict(),
         }
 
-    def _objetivos_de_apertura(self, take_profits: list[float]) -> list[float | None]:
+    def _objetivos_de_apertura(self, take_profits: list[float],
+                               cuantas: int | None = None) -> list[float | None]:
         """Que take profit lleva cada posicion que va a abrir esta senal.
 
         Devuelve una lista: un elemento por posicion. Con POSITIONS_PER_SIGNAL=1
@@ -890,8 +917,9 @@ class Engine:
         if not take_profits:
             return [None]
 
-        cuantas = max(1, getattr(self.settings, "positions_per_signal", 1))
-        cuantas = min(cuantas, len(take_profits))
+        if cuantas is None:
+            cuantas = getattr(self.settings, "positions_per_signal", 1)
+        cuantas = min(max(1, cuantas), len(take_profits))
 
         libres = self.settings.max_open_trades - len(self.store.open_positions())
         if libres > 0:
@@ -1667,13 +1695,19 @@ class Engine:
           MT5 lo rechazaria: no se abre, con un motivo que se entiende.
         - Sin TP no hay distancia: queda el SL del canal.
         """
-        if not take_profits or event.side is None:
+        pct_tp1 = self.settings.sl_artificial_para(event.telegram_chat_id)
+        pct_canal = self.settings.sl_canal_para(event.telegram_chat_id)
+        canal = event.stop_loss
+        if event.side is None or (pct_tp1 <= 0 and pct_canal <= 0):
+            return None, None, {}
+        # Al % del TP1 hace falta un TP; al % del SL del canal, que el canal mande SL.
+        if (pct_tp1 > 0 and not take_profits) or (pct_tp1 <= 0 and canal is None):
             return None, None, {}
         compra = event.side is Side.BUY
         # El TP mas cercano, aunque el canal los mande en otro orden: es el que
         # arriesga menos. (Si los manda de lejos a cerca, la posicion del "TP1"
         # persigue el primero que escribio; ningun canal medido lo hace.)
-        tp1 = min(take_profits) if compra else max(take_profits)
+        tp1 = (min(take_profits) if compra else max(take_profits)) if take_profits else None
         cotizacion = (await self._bid_y_ask(event.symbol)
                       if event.order_type is OrderType.MARKET else None)
         if cotizacion is not None:
@@ -1684,22 +1718,34 @@ class Engine:
         if referencia is None:
             return None, None, {}
 
-        distancia = (tp1 - referencia) if compra else (referencia - tp1)
-        if distancia <= 0:
-            return None, (
-                f"El precio ({_precio(referencia)}) ya llego al TP1 ({_precio(tp1)}): no queda "
-                "distancia para el SL artificial (ARTIFICIAL_SL_PCT)"), {}
-        parte = self.settings.artificial_sl_pct / 100 * distancia
+        if pct_tp1 > 0:
+            # Al X% de lo que le falta para llegar al TP1 (ARTIFICIAL_SL_PCT).
+            pct, modo = pct_tp1, "tp1"
+            distancia = (tp1 - referencia) if compra else (referencia - tp1)
+            if distancia <= 0:
+                return None, (
+                    f"El precio ({_precio(referencia)}) ya llego al TP1 ({_precio(tp1)}): no "
+                    "queda distancia para el SL artificial (ARTIFICIAL_SL_PCT)"), {}
+            cerca = "el TP1 esta demasiado cerca para el SL artificial (ARTIFICIAL_SL_PCT)"
+        else:
+            # Al X% de la distancia del SL del canal (CHANNEL_SL_PCT, 20/10):
+            # entra en 4130 con el SL del canal en 4140 y 65 -> 4136.50.
+            pct, modo = pct_canal, "canal"
+            distancia = (referencia - canal) if compra else (canal - referencia)
+            if distancia <= 0:
+                return None, (
+                    f"El precio ({_precio(referencia)}) ya paso el SL del canal "
+                    f"({_precio(canal)}): no hay SL que achicar (CHANNEL_SL_PCT)"), {}
+            cerca = "el SL del canal esta demasiado cerca para achicarlo (CHANNEL_SL_PCT)"
+        parte = pct / 100 * distancia
         sl = referencia - parte if compra else referencia + parte
-        canal = event.stop_loss
         if canal is not None and (canal > sl if compra else canal < sl):
             sl = canal  # el del canal arriesga menos
         sl = round(sl, 5)
         if cotizacion is not None and (sl >= cotizacion[0] if compra else sl <= cotizacion[1]):
             return None, (
                 f"El SL ({_precio(sl)}) quedaria del lado equivocado del precio "
-                f"({_precio(cotizacion[0])} / {_precio(cotizacion[1])}): el TP1 esta "
-                "demasiado cerca para el SL artificial (ARTIFICIAL_SL_PCT)"), {}
+                f"({_precio(cotizacion[0])} / {_precio(cotizacion[1])}): {cerca}"), {}
 
         return sl, None, {
             "signal_message_id": event.telegram_message_id,
@@ -1708,7 +1754,8 @@ class Engine:
             "side": event.side.value,
             "referencia": referencia,
             "tp1": tp1,
-            "pct": self.settings.artificial_sl_pct,
+            "modo": modo,
+            "pct": pct,
             "sl_del_canal": canal,
             "sl": sl,
         }
@@ -1994,18 +2041,23 @@ class Engine:
             # reconoce con este SL (`risk.evaluate_open`), se aplique o no.
             for p in propias:
                 p.sl_del_canal = nuevo
+        # Con CHANNEL_SL_PCT (20/10) el SL de ese grupo es el X% del del canal:
+        # la correccion tambien. Entro en 4130 y el canal pasa de 4140 a 4135
+        # con 65 -> 4133.25, no 4135.
+        objetivo = {p.trade_id: _al_pct_del_canal(self.settings, p, nuevo) for p in propias}
         alejan = [p for p in propias
-                  if p.stop_loss is not None and abs(p.stop_loss - nuevo) > 1e-9
-                  and _aleja_el_sl_artificial(self.settings, p, nuevo) is not None]
+                  if p.stop_loss is not None and abs(p.stop_loss - objetivo[p.trade_id]) > 1e-9
+                  and _aleja_el_sl_artificial(self.settings, p, objetivo[p.trade_id]) is not None]
         a_corregir = [p for p in propias
-                      if (p.stop_loss is None or abs(p.stop_loss - nuevo) > 1e-9)
+                      if (p.stop_loss is None or abs(p.stop_loss - objetivo[p.trade_id]) > 1e-9)
                       and p not in alejan]
         if alejan and del_lado_correcto:
             self.store.append_event("sl_correccion_ignorada", {
                 "signal": event.to_dict(),
-                "no_aplicadas": [{"ticket": p.broker_ticket, "sl": nuevo,
-                                  "motivo": _aleja_el_sl_artificial(self.settings, p, nuevo)}
-                                 for p in alejan]})
+                "no_aplicadas": [
+                    {"ticket": p.broker_ticket, "sl": objetivo[p.trade_id],
+                     "motivo": _aleja_el_sl_artificial(self.settings, p, objetivo[p.trade_id])}
+                    for p in alejan]})
         if not a_corregir:
             if del_lado_correcto:
                 self.store.save_state()
@@ -2020,18 +2072,19 @@ class Engine:
         hechas, fallidas = [], []
         for position in a_corregir:
             antes = position.stop_loss
+            destino = objetivo[position.trade_id]
             order = await self.broker.modify_stop_loss(
-                ticket=position.broker_ticket, symbol=position.symbol, stop_loss=nuevo)
+                ticket=position.broker_ticket, symbol=position.symbol, stop_loss=destino)
             if order.ok or order.raw.get("retcode") == 10025:
-                position.stop_loss = nuevo
+                position.stop_loss = destino
                 # Un "mover SL" anterior que esperaba en la cola y queda MAS
                 # LEJOS que esta correccion: reintentarlo la pisaria (19/10).
                 # Uno mas cerca (un breakeven) sigue esperando.
                 en_cola = self._sl_pendientes.get(position.trade_id)
-                if en_cola is not None and (en_cola <= nuevo if position.side == "BUY"
-                                            else en_cola >= nuevo):
+                if en_cola is not None and (en_cola <= destino if position.side == "BUY"
+                                            else en_cola >= destino):
                     self._sl_pendientes.pop(position.trade_id, None)
-                hechas.append(f"{position.symbol} {antes} -> {nuevo}")
+                hechas.append(f"{position.symbol} {antes} -> {_precio(destino)}")
             else:
                 fallidas.append(f"{position.symbol}: {order.reason}")
         self.store.append_event("sl_corregido", {
@@ -2156,7 +2209,7 @@ class Engine:
             # Con SL artificial, el que mando el canal: con eso se reconoce la
             # misma senal repetida (`risk.evaluate_open`).
             sl_del_canal=sl_del_canal,
-            sl_artificial=(self.settings.artificial_sl_pct > 0
+            sl_artificial=(self.settings.tiene_sl_propio(event.telegram_chat_id)
                            and sl_del_canal != event.stop_loss),
         )
 
@@ -2238,10 +2291,11 @@ class Engine:
             # vistazo desde el telefono sin abrir MT5.
             f"Mercado : {precio_mercado if precio_mercado is not None else 'sin dato'}",
             f"SL      : {event.stop_loss}" + (
-                f"  (artificial, {self.settings.artificial_sl_pct:g}%; "
+                f"  ({_corto(self.settings.texto_sl_para(event.telegram_chat_id))}; "
                 + (f"el canal decia {_precio(sl_del_canal)})" if sl_del_canal is not None
                    else "el canal no mando SL)")
-                if self.settings.artificial_sl_pct > 0 and sl_del_canal != event.stop_loss
+                if self.settings.tiene_sl_propio(event.telegram_chat_id)
+                and sl_del_canal != event.stop_loss
                 else ""),
             f"TPs     : {', '.join(str(tp) for tp in take_profits) or '-'}",
             f"Lote    : {lot}",
