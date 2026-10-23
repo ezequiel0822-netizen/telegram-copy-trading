@@ -558,6 +558,15 @@ saldo mínimo partiendo de 531 fue 507.53 solo porque junio-julio ganaron antes 
 0.03, SL 90%) −17.97, caída −625.50. TZ al mismo tamaño (0.16 por señal): TP1 + SL del canal
 +1335.68 / −372.80; todas + SL 90% +1262.34 / −373.50; todas + SL del canal +1376.22 / −971.20.
 Se le presentaron esos números (la decisión es suya).
+**Primeros 3 días en vivo con esa configuración (informe FxPro 19/10 19:27–22/10 19:27):**
+neto **+185.70** (bruto +204.94; **comisión y swap −19.24** en 66 posiciones, ~0.29 cada una: la
+demo de FxPro cobra comisión y el repaso no la cuenta). TZ +311.20 (21/10 06:07 SELL 4145, 8 de 8
+TP, +549.72; 20/10 23:03 SELL 4121.5, TP1 +7.72 y TP2-TP4 al SL del canal −246.24, y entraron 4
+posiciones, no 8: margen o cupo, sin confirmar); Sebastián +88.05 (7 señales de 3); David +5.30
+(21/10 06:25: TP1 +14.88, TP2 −9.58 con el SL al 65%; la del 20/10 05:25 que la real cobró, +15.45,
+no aparece en la demo: ¿bot apagado al reconfigurar?); Genesis −218.85 (plata −203.70 en 3 señales
+de 5 posiciones casi todas al SL artificial, euro −15.15 en breakeven). Real (David 0.03) mismas 72
+h: +35.19 (2 de 2 TP1). La TZ del 22/10 00:28 llegó con el precio ya pasado el TP2 (rechazada).
 
 **ESTADO AL 12/10.**
 
